@@ -3,9 +3,6 @@
 //! Every setting is declared once in [`SETTINGS`]. The registry produces the
 //! default file, validation, the settings overlay rows and the save path.
 
-// Temporary: the dashboard (next step) is the first user of load/set.
-#![allow(dead_code)]
-
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
