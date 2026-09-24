@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
 use std::io::{LineWriter, Write};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -90,6 +90,8 @@ pub fn key_action(key: &KeyEvent, overlay: Overlay, exit_on_any_key: bool) -> Ac
     }
 }
 
+const TOAST_FOR: Duration = Duration::from_secs(2);
+
 pub struct AppState {
     pub config: Config,
     pub config_status: ConfigStatus,
@@ -102,6 +104,8 @@ pub struct AppState {
     pub log: VecDeque<LogLine>,
     pub paused: bool,
     pub dirty: bool,
+    /// A short message at the bottom and the moment it disappears.
+    pub toast: Option<(String, Instant)>,
     log_sink: Option<LineWriter<File>>,
 }
 
@@ -124,6 +128,7 @@ impl AppState {
             log: VecDeque::new(),
             paused: false,
             dirty: true,
+            toast: None,
             log_sink: None,
         };
         state.open_log_file();
@@ -161,6 +166,11 @@ impl AppState {
         if self.overlay == Overlay::Log {
             self.dirty = true;
         }
+    }
+
+    pub fn show_toast(&mut self, text: &str) {
+        self.toast = Some((text.to_string(), Instant::now() + TOAST_FOR));
+        self.dirty = true;
     }
 
     pub fn theme_name(&self) -> &'static str {

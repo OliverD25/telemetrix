@@ -11,6 +11,8 @@ mod format;
 mod metrics;
 mod plugins;
 mod term;
+mod themes;
+mod ui;
 
 use std::process::ExitCode;
 
@@ -31,6 +33,12 @@ fn main() -> ExitCode {
         }
         Command::Version => {
             println!("telemetrix {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Command::Themes => {
+            for theme in themes::all() {
+                println!("{}", theme.name());
+            }
             ExitCode::SUCCESS
         }
         Command::Config(cmd) => commands::config_cmd::run(cmd, &cli.flags),

@@ -9,6 +9,7 @@ telemetrix (TermSaver): terminal screensaver and live system telemetry dashboard
 Usage:
   telemetrix [flags]                      dashboard
   telemetrix snapshot [--json] [--plugins]  read the metrics once and print them
+  telemetrix themes                       list theme names
   telemetrix config init [--force]        write the default settings file
   telemetrix config path                  print where the settings file is
   telemetrix config check [--json]        list every problem in the settings file
@@ -51,6 +52,7 @@ pub enum ConfigCmd {
 pub enum Command {
     Tui,
     Snapshot { json: bool, plugins: bool },
+    Themes,
     Config(ConfigCmd),
     Help,
     Version,
@@ -138,6 +140,7 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
     let words: Vec<&str> = words.iter().map(String::as_str).collect();
     let cmd = match words.as_slice() {
         [] => Command::Tui,
+        ["themes"] => Command::Themes,
         ["snapshot"] => Command::Snapshot {
             json: sw.json,
             plugins: sw.plugins,

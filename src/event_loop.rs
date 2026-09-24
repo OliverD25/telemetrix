@@ -3,11 +3,8 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime};
 
-use ratatui::Frame;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
-use ratatui::layout::{Constraint, Layout, Size};
-use ratatui::style::{Color, Style};
-use ratatui::widgets::Paragraph;
+use ratatui::layout::Size;
 
 use crate::app::{self, Action, AppState, Overlay};
 use crate::cli::Flags;
@@ -15,6 +12,8 @@ use crate::config::{self, Config, ConfigStatus, LoadOutcome, THEME_NAMES, Value}
 use crate::event::{AppEvent, WorkerCmd};
 use crate::metrics::worker::{self, MetricsCmd, MetricsIntervals};
 use crate::term::TerminalGuard;
+use crate::themes::{self, Theme};
+use crate::ui;
 
 pub const HOUSEKEEPING: Duration = Duration::from_secs(2);
 /// `poll` does not wake when a worker sends on the channel, so the wait is
@@ -31,12 +30,6 @@ pub fn next_deadline(
     frame_due.map_or(deadline, |f| deadline.min(f))
 }
 
-/// `None` = static theme: redraw only when something changed.
-pub fn frame_interval(theme: &str, cfg: &Config, paused: bool) -> Option<Duration> {
-    (theme == "matrix" && !paused)
-        .then(|| Duration::from_secs_f64(1.0 / f64::from(cfg.general.fps.max(1))))
-}
-
 struct Loop {
     state: AppState,
     flags: Flags,
@@ -45,6 +38,7 @@ struct Loop {
     last_size: Size,
     quit: bool,
     metrics: mpsc::Sender<MetricsCmd>,
+    themes: Vec<Box<dyn Theme>>,
 }
 
 pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags) -> io::Result<()> {
@@ -71,6 +65,7 @@ pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags) -> io::Result<()> {
         last_size: guard.terminal.size()?,
         quit: false,
         metrics,
+        themes: themes::all(),
     };
     let result = event_loop(&mut lp, &mut guard, &rx);
     let _ = lp.metrics.send(WorkerCmd::Stop);
@@ -87,10 +82,17 @@ fn event_loop(
     let mut next_frame = start;
     loop {
         let now = Instant::now();
-        let interval = frame_interval(lp.state.theme_name(), &lp.state.config, lp.state.paused);
+        let interval = lp.frame_interval();
         let frame_due = interval.is_some_and(|_| now >= next_frame);
         if lp.state.dirty || frame_due {
-            guard.terminal.draw(|f| draw(f, &lp.state))?;
+            let theme = lp.themes[lp.state.theme_idx].as_mut();
+            let state = &lp.state;
+            guard.terminal.draw(|f| {
+                if frame_due {
+                    theme.tick(f.area(), &state.config);
+                }
+                ui::draw(f, state, theme);
+            })?;
             lp.state.dirty = false;
             if let Some(iv) = interval {
                 next_frame = (next_frame + iv).max(now);
@@ -119,6 +121,15 @@ fn event_loop(
             lp.state.apply(ev);
         }
         let now = Instant::now();
+        if lp
+            .state
+            .toast
+            .as_ref()
+            .is_some_and(|(_, until)| now >= *until)
+        {
+            lp.state.toast = None;
+            lp.state.dirty = true;
+        }
         if now >= next_house {
             lp.housekeeping(guard.terminal.size()?);
             next_house = now + HOUSEKEEPING;
@@ -134,6 +145,14 @@ fn mtime(path: &Path) -> Option<SystemTime> {
 }
 
 impl Loop {
+    /// `None` = static theme or paused: redraw only when something changed.
+    fn frame_interval(&self) -> Option<Duration> {
+        if self.state.paused {
+            return None;
+        }
+        self.themes[self.state.theme_idx].frame_interval(&self.state.config)
+    }
+
     fn act(&mut self, action: Action) {
         let s = &mut self.state;
         match action {
@@ -147,7 +166,10 @@ impl Loop {
                 s.paused = !s.paused;
                 s.dirty = true;
             }
-            Action::Reload => s.log("reload requested"),
+            Action::Reload => {
+                s.log("reload requested");
+                s.show_toast("reload requested");
+            }
             Action::Nothing => {}
         }
     }
@@ -237,28 +259,6 @@ fn looks_different(old: &Config, new: &Config) -> bool {
         || old.theme_minimalist != new.theme_minimalist
 }
 
-fn draw(frame: &mut Frame, state: &AppState) {
-    let banner = state.banner();
-    let [top, body] = Layout::vertical([
-        Constraint::Length(u16::from(banner.is_some())),
-        Constraint::Fill(1),
-    ])
-    .areas(frame.area());
-    if let Some(text) = banner {
-        let style = Style::new().bg(Color::Rgb(135, 20, 20)).fg(Color::White);
-        frame.render_widget(Paragraph::new(format!(" {text}")).style(style), top);
-    }
-    let text = if state.snapshot.is_some() {
-        ""
-    } else {
-        "telemetrix — waiting for metrics"
-    };
-    let [middle] = Layout::vertical([Constraint::Length(1)])
-        .flex(ratatui::layout::Flex::Center)
-        .areas(body);
-    frame.render_widget(Paragraph::new(text).centered(), middle);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,7 +267,7 @@ mod tests {
     fn static_theme_wakes_for_housekeeping_and_drain_only() {
         let now = Instant::now();
         let cfg = Config::default();
-        assert_eq!(frame_interval("minimalist", &cfg, false), None);
+        assert_eq!(themes::minimalist::Minimalist.frame_interval(&cfg), None);
         let house = now + HOUSEKEEPING;
         assert_eq!(next_deadline(now, None, house), now + DRAIN);
         let soon = now + Duration::from_millis(100);
@@ -279,13 +279,10 @@ mod tests {
         let now = Instant::now();
         let mut cfg = Config::default();
         cfg.general.fps = 20;
-        let iv = frame_interval("matrix", &cfg, false).expect("matrix is animated");
+        let iv = themes::matrix::Matrix::with_seed(1)
+            .frame_interval(&cfg)
+            .expect("matrix is animated");
         assert_eq!(iv, Duration::from_millis(50));
-        assert_eq!(
-            frame_interval("matrix", &cfg, true),
-            None,
-            "paused means static"
-        );
         assert_eq!(
             next_deadline(now, Some(now + iv), now + HOUSEKEEPING),
             now + iv
