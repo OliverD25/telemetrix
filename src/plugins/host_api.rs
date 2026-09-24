@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::rc::Rc;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use mlua::{Lua, LuaSerdeExt, Table, Value};
@@ -16,41 +16,45 @@ const USER_AGENT: &str = concat!("telemetrix/", env!("CARGO_PKG_VERSION"));
 
 pub type LogFn = Rc<dyn Fn(&str)>;
 
-/// The HTTP client is created on the first request and dropped after a minute
-/// without one, so plugins that never use the network cost no memory for it.
+/// One HTTP client for all plugin threads, so the TLS root store and the
+/// connection pool exist once. It is created on the first request and dropped
+/// after a minute without one, so offline plugins cost no memory for it.
+static SHARED_AGENT: Mutex<Option<(Agent, Instant)>> = Mutex::new(None);
+
+fn shared_agent() -> Agent {
+    let mut slot = SHARED_AGENT.lock().unwrap_or_else(|e| e.into_inner());
+    let (agent, last_used) = slot.get_or_insert_with(|| {
+        let agent = Agent::config_builder()
+            .http_status_as_error(false)
+            .max_idle_connections(2)
+            .input_buffer_size(16 * 1024)
+            .output_buffer_size(4 * 1024)
+            .user_agent(USER_AGENT)
+            .build()
+            .into();
+        (agent, Instant::now())
+    });
+    *last_used = Instant::now();
+    agent.clone()
+}
+
+/// A plugin's HTTP settings; the client itself is shared.
 pub struct Http {
-    agent: Option<Agent>,
-    last_used: Instant,
     pub timeout: Duration,
 }
 
 impl Http {
     pub fn new(timeout: Duration) -> Self {
-        Self {
-            agent: None,
-            last_used: Instant::now(),
-            timeout,
-        }
-    }
-
-    fn agent(&mut self) -> &Agent {
-        self.last_used = Instant::now();
-        self.agent.get_or_insert_with(|| {
-            Agent::config_builder()
-                .timeout_global(Some(self.timeout))
-                .http_status_as_error(false)
-                .max_idle_connections(1)
-                .input_buffer_size(16 * 1024)
-                .output_buffer_size(4 * 1024)
-                .user_agent(USER_AGENT)
-                .build()
-                .into()
-        })
+        Self { timeout }
     }
 
     pub fn drop_if_idle(&mut self) {
-        if self.agent.is_some() && self.last_used.elapsed() >= AGENT_IDLE {
-            self.agent = None;
+        let mut slot = SHARED_AGENT.lock().unwrap_or_else(|e| e.into_inner());
+        if slot
+            .as_ref()
+            .is_some_and(|(_, used)| used.elapsed() >= AGENT_IDLE)
+        {
+            *slot = None;
         }
     }
 }
@@ -86,11 +90,9 @@ fn http_get(
     url: &str,
     timeout: Option<f64>,
 ) -> Result<(String, u16), String> {
-    let mut http = http.borrow_mut();
-    let wanted = timeout.map_or(http.timeout, Duration::from_secs_f64);
+    let wanted = timeout.map_or(http.borrow().timeout, Duration::from_secs_f64);
     let limit = cap(wanted, deadline);
-    let mut response = http
-        .agent()
+    let mut response = shared_agent()
         .get(url)
         .config()
         .timeout_global(Some(limit))
