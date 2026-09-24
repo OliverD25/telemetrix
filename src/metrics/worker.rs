@@ -16,7 +16,9 @@ use crate::event::{AppEvent, WorkerCmd};
 const CPU_PRIME: Duration = Duration::from_millis(250);
 /// The sensor probe child normally answers in well under a second.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
-const PREFERRED_SENSORS: [&str; 4] = ["coretemp", "k10temp", "Tctl", "Package id 0"];
+/// In order of preference: the whole CPU package (Intel), the control
+/// temperature (AMD), then any Intel or AMD CPU sensor.
+const PREFERRED_SENSORS: [&str; 4] = ["Package id 0", "Tctl", "coretemp", "k10temp"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MetricsIntervals {
@@ -172,9 +174,9 @@ pub fn pick_cpu_temp<'a>(sensors: impl Iterator<Item = (&'a str, Option<f32>)>) 
     let readings: Vec<(&str, f32)> = sensors
         .filter_map(|(label, t)| t.filter(|t| t.is_finite()).map(|t| (label, t)))
         .collect();
-    let preferred = readings
+    let preferred = PREFERRED_SENSORS
         .iter()
-        .find(|(label, _)| PREFERRED_SENSORS.iter().any(|p| label.contains(p)));
+        .find_map(|p| readings.iter().find(|(label, _)| label.contains(p)));
     if let Some((_, t)) = preferred {
         return Some(*t);
     }
@@ -197,31 +199,122 @@ pub struct RawDisk {
     pub available: u64,
 }
 
-/// Drops pseudo disks with no size and repeated mount points, and moves
-/// Linux network file systems to the Network card.
+/// Mount points that are never a user's disk: WSL internals and snap
+/// packages (each snap is a read-only image mounted under /snap).
+const IGNORED_MOUNT_PREFIXES: [&str; 6] = [
+    "/usr/lib/wsl",
+    "/usr/lib/modules",
+    "/mnt/wslg",
+    "/mnt/wsl",
+    "/init",
+    "/snap",
+];
+/// File systems of package images, never a user's disk.
+const IGNORED_FS: [&str; 2] = ["squashfs", "fuse.snapfuse"];
+/// How WSL mounts the Windows drives of its host.
+const WSL_HOST_FS: [&str; 2] = ["9p", "drvfs"];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DiskClass {
+    Local { label: Option<String> },
+    Network,
+    Ignore,
+}
+
+fn under(mount: &str, prefix: &str) -> bool {
+    mount == prefix
+        || mount
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// `/proc/mounts` writes a space as `\040` and a backslash as `\134`.
+pub fn unescape_octal(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let code = bytes.get(i + 1..i + 4).and_then(|d| {
+            let d = std::str::from_utf8(d).ok()?;
+            d.bytes()
+                .all(|b| (b'0'..=b'7').contains(&b))
+                .then(|| u8::from_str_radix(d, 8).ok())?
+        });
+        match (bytes[i], code) {
+            (b'\\', Some(c)) => {
+                out.push(c);
+                i += 4;
+            }
+            (b, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Where a mount belongs. On Windows every disk sysinfo reports is local
+/// and its name is the volume label.
+pub fn classify(mount: &str, file_system: &str, source: &str) -> DiskClass {
+    let fs = file_system.to_ascii_lowercase();
+    if cfg!(windows) {
+        return DiskClass::Local {
+            label: (!source.is_empty()).then(|| source.to_string()),
+        };
+    }
+    if IGNORED_FS.contains(&fs.as_str()) || IGNORED_MOUNT_PREFIXES.iter().any(|p| under(mount, p)) {
+        return DiskClass::Ignore;
+    }
+    // WSL mounts the host's drive C: at /mnt/c with the 9p file system: that
+    // is a local disk of the host, not a network share.
+    let letter = mount
+        .strip_prefix("/mnt/")
+        .filter(|l| l.len() == 1 && l.bytes().all(|b| b.is_ascii_alphabetic()));
+    let source_letter = source.get(..2).filter(|s| s.ends_with(':'));
+    if WSL_HOST_FS.contains(&fs.as_str())
+        && let (Some(l), Some(s)) = (letter, source_letter)
+        && l.eq_ignore_ascii_case(&s[..1])
+    {
+        return DiskClass::Local {
+            label: Some(s.to_ascii_uppercase()),
+        };
+    }
+    if LINUX_NETWORK_FS.contains(&fs.as_str()) {
+        DiskClass::Network
+    } else {
+        DiskClass::Local { label: None }
+    }
+}
+
+/// Drops pseudo disks with no size, repeated mount points and system
+/// mounts, and moves network file systems to the Network card.
 pub fn split_disks(disks: impl Iterator<Item = RawDisk>) -> (Vec<DiskMetric>, Vec<NetDrive>) {
     let mut seen = BTreeSet::new();
     let (mut local, mut network) = (Vec::new(), Vec::new());
     for d in disks.filter(|d| d.total > 0 && seen.insert(d.mount.clone())) {
-        let fs = d.file_system.to_ascii_lowercase();
-        if LINUX_NETWORK_FS.contains(&fs.as_str()) {
-            let (server, share) = split_remote(&d.name);
-            network.push(NetDrive {
-                mount: d.mount,
-                server,
-                share,
-                label: None,
-                online: true,
-                total_bytes: d.total,
-                free_bytes: d.available,
-            });
-        } else {
-            local.push(DiskMetric {
-                label: (cfg!(windows) && !d.name.is_empty()).then_some(d.name),
-                mount: d.mount,
+        let mount = unescape_octal(&d.mount);
+        let source = unescape_octal(&d.name);
+        match classify(&mount, &d.file_system, &source) {
+            DiskClass::Ignore => {}
+            DiskClass::Network => {
+                let (server, share) = split_remote(&source);
+                network.push(NetDrive {
+                    mount,
+                    server,
+                    share,
+                    label: None,
+                    online: true,
+                    total_bytes: d.total,
+                    free_bytes: d.available,
+                });
+            }
+            DiskClass::Local { label } => local.push(DiskMetric {
+                label,
+                mount,
                 used_bytes: d.total.saturating_sub(d.available),
                 total_bytes: d.total,
-            });
+            }),
         }
     }
     (local, network)
@@ -284,6 +377,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn octal_escapes_decode() {
+        assert_eq!(unescape_octal(r"C:\134"), r"C:\");
+        assert_eq!(unescape_octal(r"/mnt/my\040disk"), "/mnt/my disk");
+        assert_eq!(unescape_octal(r"plain\9"), r"plain\9");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn linux_mounts_are_classified() {
+        let local = |label: Option<&str>| DiskClass::Local {
+            label: label.map(Into::into),
+        };
+        // WSL internals and snap images are dropped.
+        for (mount, fs, source) in [
+            ("/usr/lib/wsl/drivers", "9p", "drivers"),
+            ("/usr/lib/wsl/lib", "overlay", "none"),
+            ("/usr/lib/modules/6.18-WSL2", "overlay", "none"),
+            ("/mnt/wslg/distro", "ext4", "/dev/sdd"),
+            ("/mnt/wslg", "tmpfs", "none"),
+            ("/init", "rootfs", "rootfs"),
+            ("/snap", "ext4", "/dev/sdd"),
+            ("/snap/code/265", "fuse.snapfuse", "snapfuse"),
+            ("/media/x", "squashfs", "/dev/loop3"),
+        ] {
+            assert_eq!(classify(mount, fs, source), DiskClass::Ignore, "{mount}");
+        }
+        // The host's Windows drives are local disks, labelled with their letter.
+        assert_eq!(classify("/mnt/c", "9p", r"C:\"), local(Some("C:")));
+        assert_eq!(classify("/mnt/e", "drvfs", r"E:\"), local(Some("E:")));
+        // Real disks stay local; "/mnt/wslgames" is not under "/mnt/wslg".
+        assert_eq!(classify("/", "ext4", "/dev/sdd"), local(None));
+        assert_eq!(classify("/mnt/wslgames", "ext4", "/dev/sde1"), local(None));
+        assert_eq!(classify("/home", "btrfs", "/dev/nvme0n1p2"), local(None));
+        // Network file systems go to the Network card, 9p included when it is
+        // not a WSL host drive.
+        assert_eq!(
+            classify("/mnt/nas", "nfs4", "nas:/export"),
+            DiskClass::Network
+        );
+        assert_eq!(
+            classify("/mnt/share", "cifs", "//nas/media"),
+            DiskClass::Network
+        );
+        assert_eq!(classify("/srv/vm", "9p", "hostshare"), DiskClass::Network);
+        assert_eq!(classify("/mnt/x", "9p", "hostshare"), DiskClass::Network);
+    }
+
+    #[test]
     fn temperature_prefers_package_sensors() {
         let sensors = [
             ("acpitz", Some(90.0)),
@@ -293,6 +434,47 @@ mod tests {
         assert_eq!(pick_cpu_temp(sensors.into_iter()), Some(52.0));
         let k10 = [("nvme Composite", Some(40.0)), ("k10temp Tctl", Some(61.5))];
         assert_eq!(pick_cpu_temp(k10.into_iter()), Some(61.5));
+    }
+
+    #[test]
+    fn linux_hwmon_lists_pick_the_package_sensor() {
+        // Labels as sysinfo reports them on Linux: "<hwmon name> <label>".
+        let intel = [
+            ("acpitz temp1", Some(27.8)),
+            ("coretemp Core 0", Some(51.0)),
+            ("coretemp Core 1", Some(58.0)),
+            ("coretemp Package id 0", Some(56.0)),
+            ("nvme Composite WDC", Some(38.9)),
+        ];
+        assert_eq!(pick_cpu_temp(intel.into_iter()), Some(56.0));
+        let amd = [
+            ("amdgpu edge", Some(45.0)),
+            ("k10temp Tccd1", Some(48.5)),
+            ("k10temp Tctl", Some(61.2)),
+        ];
+        assert_eq!(
+            pick_cpu_temp(amd.into_iter()),
+            Some(61.2),
+            "Tctl wins over a die sensor"
+        );
+        let cores_only = [
+            ("coretemp Core 0", Some(51.0)),
+            ("coretemp Core 1", Some(58.0)),
+        ];
+        assert_eq!(
+            pick_cpu_temp(cores_only.into_iter()),
+            Some(51.0),
+            "first coretemp sensor"
+        );
+        let no_value = [
+            ("coretemp Package id 0", None),
+            ("k10temp Tctl", Some(f32::NAN)),
+        ];
+        assert_eq!(
+            pick_cpu_temp(no_value.into_iter()),
+            None,
+            "missing and NaN readings are skipped"
+        );
     }
 
     #[test]
@@ -317,26 +499,47 @@ mod tests {
             total,
             available,
         };
+        let (a, b) = if cfg!(windows) {
+            (r"C:\", r"D:\")
+        } else {
+            ("/", "/data")
+        };
         let list = vec![
-            raw("C:\\", "System Disk", "NTFS", 100, 30),
+            raw(
+                a,
+                if cfg!(windows) {
+                    "System Disk"
+                } else {
+                    "/dev/sda1"
+                },
+                "ext4",
+                100,
+                30,
+            ),
             raw("/proc", "proc", "proc", 0, 0),
-            raw("C:\\", "System Disk", "NTFS", 100, 30),
-            raw("D:\\", "", "NTFS", 50, 60),
-            raw("/mnt/nas", "nas:/export", "nfs4", 1000, 400),
+            raw(a, "again", "ext4", 100, 30),
+            raw(b, "", "ext4", 50, 60),
         ];
-        let (disks, network) = split_disks(list.into_iter());
-        assert_eq!(network.len(), 1, "nfs goes to the Network card");
-        assert_eq!(network[0].server.as_deref(), Some("nas"));
-        assert_eq!(network[0].free_bytes, 400);
-        if cfg!(windows) {
-            assert_eq!(disks[0].title(), "System Disk (C:)");
-            assert_eq!(disks[1].title(), "D:\\", "no label: the mount point");
-        }
+        let (disks, _) = split_disks(list.into_iter());
         assert_eq!(disks.len(), 2);
         assert_eq!(disks[0].used_bytes, 70);
         assert_eq!(
             disks[1].used_bytes, 0,
             "available above total must not underflow"
         );
+        if cfg!(windows) {
+            assert_eq!(disks[0].title(), "System Disk (C:)");
+            assert_eq!(disks[1].title(), r"D:\", "no label: the mount point");
+        } else {
+            let nfs = vec![raw("/mnt/nas", "nas:/export", "nfs4", 1000, 400)];
+            let (disks, network) = split_disks(nfs.into_iter());
+            assert!(disks.is_empty());
+            assert_eq!(network[0].server.as_deref(), Some("nas"));
+            assert_eq!(network[0].free_bytes, 400);
+            let wsl = vec![raw("/mnt/c", r"C:\134", "9p", 1000, 400)];
+            let (disks, network) = split_disks(wsl.into_iter());
+            assert!(network.is_empty());
+            assert_eq!(disks[0].title(), "C: (/mnt/c)");
+        }
     }
 }

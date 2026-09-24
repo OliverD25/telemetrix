@@ -80,6 +80,7 @@ pub fn split_remote(remote: &str) -> (Option<String>, Option<String>) {
 /// Server and share from a Windows device path of a mapped drive:
 /// `\Device\LanmanRedirector\;M:0000000000012345\server\share` or
 /// `\Device\Mup\;LanmanRedirector\;M:000…\server\share`.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn split_device_path(path: &str) -> (Option<String>, Option<String>) {
     let parts: Vec<&str> = path.split('\\').collect();
     let Some(at) = parts
