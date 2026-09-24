@@ -91,6 +91,26 @@ Both themes lay the cards out in three columns on wide terminals, two on
 medium ones and one on narrow ones. Below 40 by 10 cells the screen only says
 "terminal too small".
 
+### Disks and network drives
+
+The Disks card shows each local drive with its label, as Explorer does:
+"System Disk (C:)". Long names are cut with "…" so the numbers stay
+visible.
+
+Mapped network drives get their own Network card under Disks. On Windows
+they are asked on a separate thread every `disks.network_interval_s`
+seconds; a drive that does not answer within `disks.network_timeout_s` is
+shown as `offline` in red, and a stuck drive never slows the rest of the
+dashboard. Drives on the same server with the same size and free space
+(several shares of one NAS volume) share one row, for example
+`nas  M: P: R: W: X:`; set `disks.group_network = false` to list them
+one by one. Explorer "network locations" without a drive letter are not
+shown. `disks.hide` hides letters or mount points in both cards.
+
+On Linux, mounts of type nfs, nfs4, cifs, smb3, smbfs, fuse.sshfs and 9p go
+to the Network card. A hung network mount can still delay the disk
+readings there; protecting against that is planned after v0.1.
+
 **Roadmap:** the original brief lists eight more themes. They are planned for
 later versions.
 
@@ -147,6 +167,11 @@ no longer matches the program.
 | `thresholds.cpu_warn_pct` | `80` | 1..100 | yes | highlight CPU above this, 1..100 |
 | `thresholds.temp_warn_c` | `75` | 1..150 | yes | highlight temperature above this |
 | `thresholds.disk_warn_pct` | `90` | 1..100 | yes | highlight disks fuller than this |
+| `disks.show_network` | `true` | true \| false | yes | show mapped network drives in their own card |
+| `disks.network_interval_s` | `60` | 10..3600 | yes | how often network drives are asked, 10..3600 |
+| `disks.network_timeout_s` | `5` | 1..30 | yes | a drive that takes longer is shown offline, 1..30 |
+| `disks.group_network` | `true` | true \| false | yes | one row for drives on the same server and volume |
+| `disks.hide` | `[]` | list of texts | no, edit the file | letters or mount points to hide, like ["X:", "/boot"] |
 | `plugins.enabled` | `true` | true \| false | yes | false = run no plugins at all |
 | `plugins.default_interval_s` | `60` | 5..86400 | yes | used when a plugin sets no interval, 5..86400 |
 | `plugins.http_timeout_s` | `10` | 1..60 | yes | per request, 1..60 |

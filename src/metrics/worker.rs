@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use sysinfo::{Components, DiskRefreshKind, Disks, MemoryRefreshKind, System};
 
 use super::cpu::{self, CpuMeter};
+use super::network::{LINUX_NETWORK_FS, NetDrive, split_remote};
 use super::{DiskMetric, SystemSnapshot};
 use crate::config::Config;
 use crate::event::{AppEvent, WorkerCmd};
@@ -100,13 +101,14 @@ impl Sampler {
 
     pub fn snapshot(&self) -> SystemSnapshot {
         let sensors = self.components.iter().map(|c| (c.label(), c.temperature()));
-        let disks = self.disks.iter().map(|d| {
-            (
-                d.mount_point().to_string_lossy().into_owned(),
-                d.total_space(),
-                d.available_space(),
-            )
+        let disks = self.disks.iter().map(|d| RawDisk {
+            mount: d.mount_point().to_string_lossy().into_owned(),
+            name: d.name().to_string_lossy().into_owned(),
+            file_system: d.file_system().to_string_lossy().into_owned(),
+            total: d.total_space(),
+            available: d.available_space(),
         });
+        let (disks, network) = split_disks(disks);
         SystemSnapshot {
             cpu_usage: self.cpu.usage(),
             cpu_temp: pick_cpu_temp(sensors),
@@ -114,8 +116,9 @@ impl Sampler {
             ram_total_bytes: self.sys.total_memory(),
             swap_used_bytes: self.sys.used_swap(),
             swap_total_bytes: self.sys.total_swap(),
-            disks: real_disks(disks),
+            disks,
             gpus: Vec::new(),
+            network,
         }
     }
 }
@@ -185,17 +188,43 @@ pub fn pick_cpu_temp<'a>(sensors: impl Iterator<Item = (&'a str, Option<f32>)>) 
         .reduce(f32::max)
 }
 
-/// Drops pseudo disks with no size and repeated mount points.
-pub fn real_disks(disks: impl Iterator<Item = (String, u64, u64)>) -> Vec<DiskMetric> {
+pub struct RawDisk {
+    pub mount: String,
+    /// The volume label on Windows, the device on Linux.
+    pub name: String,
+    pub file_system: String,
+    pub total: u64,
+    pub available: u64,
+}
+
+/// Drops pseudo disks with no size and repeated mount points, and moves
+/// Linux network file systems to the Network card.
+pub fn split_disks(disks: impl Iterator<Item = RawDisk>) -> (Vec<DiskMetric>, Vec<NetDrive>) {
     let mut seen = BTreeSet::new();
-    disks
-        .filter(|(mount, total, _)| *total > 0 && seen.insert(mount.clone()))
-        .map(|(mount, total, available)| DiskMetric {
-            mount,
-            used_bytes: total.saturating_sub(available),
-            total_bytes: total,
-        })
-        .collect()
+    let (mut local, mut network) = (Vec::new(), Vec::new());
+    for d in disks.filter(|d| d.total > 0 && seen.insert(d.mount.clone())) {
+        let fs = d.file_system.to_ascii_lowercase();
+        if LINUX_NETWORK_FS.contains(&fs.as_str()) {
+            let (server, share) = split_remote(&d.name);
+            network.push(NetDrive {
+                mount: d.mount,
+                server,
+                share,
+                label: None,
+                online: true,
+                total_bytes: d.total,
+                free_bytes: d.available,
+            });
+        } else {
+            local.push(DiskMetric {
+                label: (cfg!(windows) && !d.name.is_empty()).then_some(d.name),
+                mount: d.mount,
+                used_bytes: d.total.saturating_sub(d.available),
+                total_bytes: d.total,
+            });
+        }
+    }
+    (local, network)
 }
 
 pub type MetricsCmd = WorkerCmd<MetricsIntervals>;
@@ -281,13 +310,28 @@ mod tests {
 
     #[test]
     fn disks_drop_empty_and_duplicate_mounts() {
-        let raw = vec![
-            ("C:\\".to_string(), 100, 30),
-            ("/proc".to_string(), 0, 0),
-            ("C:\\".to_string(), 100, 30),
-            ("D:\\".to_string(), 50, 60),
+        let raw = |mount: &str, name: &str, fs: &str, total, available| RawDisk {
+            mount: mount.into(),
+            name: name.into(),
+            file_system: fs.into(),
+            total,
+            available,
+        };
+        let list = vec![
+            raw("C:\\", "System Disk", "NTFS", 100, 30),
+            raw("/proc", "proc", "proc", 0, 0),
+            raw("C:\\", "System Disk", "NTFS", 100, 30),
+            raw("D:\\", "", "NTFS", 50, 60),
+            raw("/mnt/nas", "nas:/export", "nfs4", 1000, 400),
         ];
-        let disks = real_disks(raw.into_iter());
+        let (disks, network) = split_disks(list.into_iter());
+        assert_eq!(network.len(), 1, "nfs goes to the Network card");
+        assert_eq!(network[0].server.as_deref(), Some("nas"));
+        assert_eq!(network[0].free_bytes, 400);
+        if cfg!(windows) {
+            assert_eq!(disks[0].title(), "System Disk (C:)");
+            assert_eq!(disks[1].title(), "D:\\", "no label: the mount point");
+        }
         assert_eq!(disks.len(), 2);
         assert_eq!(disks[0].used_bytes, 70);
         assert_eq!(

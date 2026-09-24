@@ -11,6 +11,7 @@ use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
 
 use crate::app::AppState;
 use crate::format;
+use crate::metrics::network;
 use crate::metrics::{self, SystemSnapshot};
 use crate::plugins::{PluginCard, PluginStatus};
 
@@ -134,7 +135,9 @@ pub fn draw_columns(frame: &mut Frame, body: Rect, state: &AppState, pal: &Palet
             .iter()
             .flat_map(|g| match g {
                 Group::System => system_cards(state, pal, w),
-                Group::Disks => vec![disk_card(state, pal, w)],
+                Group::Disks => std::iter::once(disk_card(state, pal, w))
+                    .chain(network_card(state, pal, w))
+                    .collect(),
                 Group::Plugins => plugin_cards(state, pal, w),
             })
             .collect();
@@ -183,14 +186,28 @@ pub fn kv(
     pal: &Palette,
     value_color: Color,
 ) -> Line<'static> {
+    let label = fit(label, width.saturating_sub(value.chars().count() + 1));
     let pad = width
         .saturating_sub(label.chars().count() + value.chars().count())
         .max(1);
     Line::from(vec![
-        Span::styled(label.to_string(), fg(pal.label)),
+        Span::styled(label, fg(pal.label)),
         Span::raw(" ".repeat(pad)),
         Span::styled(value, fg(value_color)),
     ])
+}
+
+/// Cuts `text` to `max` characters with "…", so values are never pushed out.
+pub fn fit(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut out: String = text.chars().take(max - 1).collect();
+    out.push('…');
+    out
 }
 
 /// A block-glyph gauge with the percentage at the right end.
@@ -291,10 +308,11 @@ fn disk_card(state: &AppState, pal: &Palette, w: usize) -> Card {
         .as_ref()
         .map_or(&[][..], |s: &SystemSnapshot| &s.disks);
     let mut lines = Vec::new();
-    for d in disks {
+    let hide = &state.config.disks.hide;
+    for d in disks.iter().filter(|d| !network::is_hidden(&d.mount, hide)) {
         let pct = metrics::pct(d.used_bytes, d.total_bytes);
         lines.push(kv(
-            &d.mount,
+            &d.title(),
             used_of(d.used_bytes, d.total_bytes, state),
             w,
             pal,
@@ -311,6 +329,44 @@ fn disk_card(state: &AppState, pal: &Palette, w: usize) -> Card {
         lines.push(Line::styled("no disks found", fg(pal.label)));
     }
     Card::new("Disks", lines)
+}
+
+/// The Network card, drawn like Disks; `None` when there is nothing to show.
+fn network_card(state: &AppState, pal: &Palette, w: usize) -> Option<Card> {
+    let cfg = &state.config.disks;
+    if !cfg.show_network {
+        return None;
+    }
+    let Some(drives) = &state.network else {
+        let checking = Line::styled("checking…", fg(pal.label));
+        return Some(Card::new("Network", vec![checking]));
+    };
+    let rows = network::rows(drives, cfg.group_network, &cfg.hide);
+    if rows.is_empty() {
+        return None;
+    }
+    let mut lines = Vec::new();
+    for r in rows {
+        if r.online {
+            let pct = metrics::pct(r.used_bytes, r.total_bytes);
+            lines.push(kv(
+                &r.title,
+                used_of(r.used_bytes, r.total_bytes, state),
+                w,
+                pal,
+                pal.value,
+            ));
+            lines.push(bar(
+                pct,
+                w,
+                pal,
+                pct > state.config.thresholds.disk_warn_pct,
+            ));
+        } else {
+            lines.push(kv(&r.title, "offline".into(), w, pal, WARN));
+        }
+    }
+    Some(Card::new("Network", lines))
 }
 
 fn plugin_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
@@ -369,4 +425,28 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
         out.push(cur);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_titles_are_cut_so_the_value_stays_visible() {
+        assert_eq!(fit("System Disk (C:)", 20), "System Disk (C:)");
+        assert_eq!(fit("SSD 1 Media (D:)", 12), "SSD 1 Progr…");
+        assert_eq!(fit("abc", 0), "");
+        let pal = minimalist_palette();
+        let line = kv(
+            "SSD 1 Media (D:)",
+            "554.3 GiB / 1.8 TiB".into(),
+            30,
+            &pal,
+            pal.value,
+        );
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text.chars().count(), 30);
+        assert!(text.ends_with("554.3 GiB / 1.8 TiB"), "{text}");
+        assert!(text.starts_with("SSD 1 Pro…"), "{text}");
+    }
 }

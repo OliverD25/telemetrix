@@ -9,6 +9,7 @@ use crate::config::{Config, ConfigStatus, THEME_NAMES};
 use crate::event::AppEvent;
 use crate::format;
 use crate::metrics::SystemSnapshot;
+use crate::metrics::network::NetDrive;
 use crate::plugins::{PluginCard, PluginData, PluginStatus};
 use crate::selfmem::{self, MB, SelfMemory};
 
@@ -152,6 +153,8 @@ pub struct AppState {
     plugins_over_budget: BTreeSet<String>,
     /// While the theme picker is open: the theme that Esc goes back to.
     pub picker_original: usize,
+    /// Network drives; `None` until the first answer ("checking...").
+    pub network: Option<Vec<NetDrive>>,
     log_sink: Option<LineWriter<File>>,
 }
 
@@ -182,6 +185,7 @@ impl AppState {
             over_budget: false,
             plugins_over_budget: BTreeSet::new(),
             picker_original: theme_idx,
+            network: None,
             log_sink: None,
         };
         state.open_log_file();
@@ -245,6 +249,9 @@ impl AppState {
                 let cap = self.config.metrics.history_len.max(1);
                 push_capped(&mut self.cpu_history, snapshot.cpu_usage, cap);
                 push_capped(&mut self.ram_history, snapshot.ram_pct(), cap);
+                if !cfg!(windows) {
+                    self.network = Some(snapshot.network.clone());
+                }
                 self.snapshot = Some(snapshot);
             }
             AppEvent::Plugin(data) => {
@@ -258,6 +265,7 @@ impl AppState {
                 self.plugins_over_budget.remove(&id);
             }
             AppEvent::Log(text) => self.log(&text),
+            AppEvent::Network(drives) => self.network = Some(drives),
         }
         self.dirty = true;
     }

@@ -165,6 +165,7 @@ mod tests {
             ram_total_bytes: 4 << 30,
             disks: vec![DiskMetric {
                 mount: "C:\\".into(),
+                label: None,
                 used_bytes: 10,
                 total_bytes: 100,
             }],
@@ -212,6 +213,54 @@ mod tests {
             assert!(t.contains("CPU") && t.contains("telemetrix"), "{theme}");
             assert!(!t.contains(TOO_SMALL));
         }
+    }
+
+    #[test]
+    fn network_card_shows_grouped_single_and_offline_rows() {
+        use crate::metrics::network::NetDrive;
+        let nas = |letter: &str, share: &str, online: bool, total: u64, free: u64| NetDrive {
+            mount: letter.into(),
+            server: Some("nas".into()),
+            share: Some(share.into()),
+            label: None,
+            online,
+            total_bytes: total,
+            free_bytes: free,
+        };
+        let tb = 1u64 << 40;
+        let mut s = state("minimalist");
+        s.network = Some(vec![
+            nas("M:", "music", true, 5 * tb, 2 * tb),
+            nas("P:", "photos", true, 5 * tb, 2 * tb),
+            nas("Y:", "Archive", true, 24 * tb, 8 * tb),
+            nas("Z:", "old_share", false, 0, 0),
+        ]);
+        let buf = render(&s, 120, 40);
+        let t = text(&buf);
+        assert!(t.contains(" Network "), "card title");
+        assert!(t.contains("nas  M: P:"), "grouped row");
+        assert!(t.contains("Archive (Y:)"), "single row");
+        assert!(t.contains("old_share (Z:)"), "offline row");
+        let offline_red = buf
+            .content()
+            .iter()
+            .zip(buf.content().iter().skip(1))
+            .any(|(a, b)| a.symbol() == "o" && b.symbol() == "f" && a.fg == WARN);
+        assert!(offline_red, "offline is drawn in the warning colour");
+
+        s.config.disks.show_network = false;
+        assert!(
+            !text(&render(&s, 120, 40)).contains(" Network "),
+            "hidden when turned off"
+        );
+        s.config.disks.show_network = true;
+        s.network = None;
+        assert!(text(&render(&s, 120, 40)).contains("checking…"));
+        s.network = Some(Vec::new());
+        assert!(
+            !text(&render(&s, 120, 40)).contains(" Network "),
+            "hidden without drives"
+        );
     }
 
     #[test]

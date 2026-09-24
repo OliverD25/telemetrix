@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use crate::cli::Flags;
 use crate::config::{self, Config};
 use crate::format;
+use crate::metrics::network::{self, NetRow};
 use crate::metrics::{self, SystemSnapshot, worker};
 
 fn round1(v: f32) -> f64 {
@@ -18,6 +19,7 @@ fn used_total(used: u64, total: u64) -> Value {
 
 pub fn to_json(
     s: &SystemSnapshot,
+    network: &[NetRow],
     host: &str,
     timestamp: &str,
     plugins: Option<Vec<Value>>,
@@ -25,7 +27,28 @@ pub fn to_json(
     let disks: Vec<Value> = s
         .disks
         .iter()
-        .map(|d| json!({ "mount": d.mount, "used_bytes": d.used_bytes, "total_bytes": d.total_bytes }))
+        .map(|d| {
+            json!({
+                "mount": d.mount,
+                "label": d.label,
+                "kind": "local",
+                "used_bytes": d.used_bytes,
+                "total_bytes": d.total_bytes,
+            })
+        })
+        .collect();
+    let network: Vec<Value> = network
+        .iter()
+        .map(|r| {
+            json!({
+                "title": r.title,
+                "server": r.server,
+                "letters": r.letters,
+                "online": r.online,
+                "used_bytes": r.used_bytes,
+                "total_bytes": r.total_bytes,
+            })
+        })
         .collect();
     let gpus: Vec<Value> = s
         .gpus
@@ -44,6 +67,7 @@ pub fn to_json(
             "disks": disks,
             "gpus": gpus,
         },
+        "network": network,
     });
     if let Some(plugins) = plugins {
         doc["plugins"] = Value::Array(plugins);
@@ -56,7 +80,13 @@ pub fn to_json(
     doc
 }
 
-pub fn to_text(s: &SystemSnapshot, host: &str, timestamp: &str, cfg: &Config) -> String {
+pub fn to_text(
+    s: &SystemSnapshot,
+    network: &[NetRow],
+    host: &str,
+    timestamp: &str,
+    cfg: &Config,
+) -> String {
     let unit = cfg.units.bytes;
     let used_of = |used, total| {
         format!(
@@ -87,9 +117,17 @@ pub fn to_text(s: &SystemSnapshot, host: &str, timestamp: &str, cfg: &Config) ->
     ];
     for d in &s.disks {
         rows.push((
-            format!("disk {}", d.mount),
+            format!("disk {}", d.title()),
             used_of(d.used_bytes, d.total_bytes),
         ));
+    }
+    for r in network {
+        let value = if r.online {
+            used_of(r.used_bytes, r.total_bytes)
+        } else {
+            "offline".to_string()
+        };
+        rows.push((format!("network {}", r.title), value));
     }
     let width = rows
         .iter()
@@ -108,13 +146,25 @@ pub fn host_name() -> String {
 pub fn run(json: bool, with_plugins: bool, flags: &Flags) -> ExitCode {
     let (_, cfg, _) = config::load_effective(flags);
     let snapshot = worker::read_once();
+    let d = &cfg.disks;
+    let drives = if !d.show_network {
+        Vec::new()
+    } else if cfg!(windows) {
+        network::query_once(std::time::Duration::from_secs(d.network_timeout_s))
+    } else {
+        snapshot.network.clone()
+    };
+    let network = network::rows(&drives, d.group_network, &[]);
     let host = host_name();
     let timestamp = format::utc_timestamp(SystemTime::now());
     if json {
         let plugins = with_plugins.then(|| super::plugin_cmd::run_all_once(&cfg));
-        println!("{:#}", to_json(&snapshot, &host, &timestamp, plugins));
+        println!(
+            "{:#}",
+            to_json(&snapshot, &network, &host, &timestamp, plugins)
+        );
     } else {
-        print!("{}", to_text(&snapshot, &host, &timestamp, &cfg));
+        print!("{}", to_text(&snapshot, &network, &host, &timestamp, &cfg));
     }
     ExitCode::SUCCESS
 }
@@ -131,30 +181,34 @@ mod tests {
             ram_total_bytes: 10,
             disks: vec![DiskMetric {
                 mount: "C:\\".into(),
+                label: Some("System Disk".into()),
                 used_bytes: 1,
                 total_bytes: 2,
             }],
             ..SystemSnapshot::default()
         };
-        let doc = to_json(&s, "PC", "2026-09-25T20:00:00Z", None);
+        let doc = to_json(&s, &[], "PC", "2026-09-25T20:00:00Z", None);
         assert_eq!(doc["schema"], 1);
         assert_eq!(doc["system"]["cpu_usage_pct"], 12.3);
         assert!(doc["system"]["cpu_temp_c"].is_null());
         assert_eq!(doc["system"]["disks"][0]["mount"], "C:\\");
+        assert_eq!(doc["system"]["disks"][0]["label"], "System Disk");
+        assert_eq!(doc["system"]["disks"][0]["kind"], "local");
+        assert_eq!(doc["network"], json!([]));
         assert_eq!(doc["system"]["gpus"], json!([]));
         assert!(doc.get("plugins").is_none());
         if cfg!(windows) {
             assert!(doc["self"]["working_set_bytes"].as_u64().unwrap_or(0) > 0);
             assert!(doc["self"]["private_bytes"].as_u64().unwrap_or(0) > 0);
         }
-        let doc = to_json(&s, "PC", "t", Some(Vec::new()));
+        let doc = to_json(&s, &[], "PC", "t", Some(Vec::new()));
         assert_eq!(doc["plugins"], json!([]));
     }
 
     #[test]
     fn text_is_aligned() {
         let s = SystemSnapshot::default();
-        let text = to_text(&s, "PC", "t", &Config::default());
+        let text = to_text(&s, &[], "PC", "t", &Config::default());
         assert!(text.contains("host      PC\n"));
         assert!(text.contains("cpu temp  not available\n"));
     }

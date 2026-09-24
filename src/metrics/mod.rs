@@ -1,5 +1,8 @@
 pub mod cpu;
+pub mod network;
 pub mod worker;
+
+use network::NetDrive;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SystemSnapshot {
@@ -12,11 +15,15 @@ pub struct SystemSnapshot {
     pub disks: Vec<DiskMetric>,
     /// Always empty in v0.1; GPU metrics are planned for v0.2.
     pub gpus: Vec<GpuMetric>,
+    /// Network mounts on Linux; Windows has its own network-drive thread.
+    pub network: Vec<NetDrive>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DiskMetric {
     pub mount: String,
+    /// The volume label on Windows ("System Disk"); `None` on Linux.
+    pub label: Option<String>,
     pub used_bytes: u64,
     pub total_bytes: u64,
 }
@@ -25,6 +32,16 @@ pub struct DiskMetric {
 pub struct GpuMetric {
     pub name: String,
     pub usage_pct: Option<f32>,
+}
+
+impl DiskMetric {
+    /// `System Disk (C:)`, or the mount point when there is no label.
+    pub fn title(&self) -> String {
+        match &self.label {
+            Some(label) => format!("{label} ({})", network::normalize_mount(&self.mount)),
+            None => self.mount.clone(),
+        }
+    }
 }
 
 impl SystemSnapshot {

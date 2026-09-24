@@ -10,6 +10,7 @@ use crate::app::{self, Action, AppState, Overlay};
 use crate::cli::Flags;
 use crate::config::{self, Config, ConfigStatus, LoadOutcome, THEME_NAMES, Value};
 use crate::event::{AppEvent, WorkerCmd};
+use crate::metrics::network::{self, NetworkCmd, NetworkSettings};
 use crate::metrics::worker::{self, MetricsCmd, MetricsIntervals};
 use crate::plugins::PluginStatus;
 use crate::plugins::manager::{self, Manager};
@@ -48,12 +49,14 @@ struct Loop {
     themes: Vec<Box<dyn Theme>>,
     plugins: Manager,
     last_rescan: Instant,
+    network: mpsc::Sender<NetworkCmd>,
 }
 
 pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags) -> io::Result<()> {
     let path = config::resolve_path(flags.config.as_deref());
     let (tx, rx) = mpsc::channel::<AppEvent>();
     let plugins = Manager::new(&cfg, tx.clone());
+    let network = network::spawn(NetworkSettings::from_config(&cfg), tx.clone());
     let (metrics, _metrics_thread) = worker::spawn(MetricsIntervals::from_config(&cfg), tx);
     let mut state = AppState::new(cfg, status);
     state.log(&format!(
@@ -78,10 +81,12 @@ pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags) -> io::Result<()> {
         themes: themes::all(),
         plugins,
         last_rescan: Instant::now(),
+        network,
     };
     lp.rescan_plugins(false);
     let result = event_loop(&mut lp, &mut guard, &rx);
     let _ = lp.metrics.send(WorkerCmd::Stop);
+    let _ = lp.network.send(WorkerCmd::Stop);
     lp.plugins.stop_all();
     result
 }
@@ -385,6 +390,10 @@ impl Loop {
         if MetricsIntervals::from_config(&old) != intervals {
             let _ = self.metrics.send(WorkerCmd::Reconfigure(intervals));
         }
+        let net = NetworkSettings::from_config(new);
+        if NetworkSettings::from_config(&old) != net {
+            let _ = self.network.send(WorkerCmd::Reconfigure(net));
+        }
         if old.plugins != new.plugins
             || old.plugin_cfg != new.plugin_cfg
             || old.general.plugins_dir != new.general.plugins_dir
@@ -407,6 +416,7 @@ fn looks_different(old: &Config, new: &Config) -> bool {
         || old.thresholds != new.thresholds
         || old.theme_matrix != new.theme_matrix
         || old.theme_minimalist != new.theme_minimalist
+        || old.disks != new.disks
 }
 
 #[cfg(test)]
@@ -429,6 +439,7 @@ mod tests {
                 themes: themes::all(),
                 plugins: Manager::new(&quiet, mpsc::channel().0),
                 last_rescan: Instant::now(),
+                network: mpsc::channel().0,
             }
         }
     }

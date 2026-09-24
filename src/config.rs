@@ -24,7 +24,7 @@ const DEFAULT_BUDGET_MB: i64 = 13;
 /// The core (no plugins) must stay under this (decision 30, fixed).
 pub const CORE_BUDGET_MB: u64 = 10;
 
-// Str and StrList have no registry key yet; plugin settings may use them later.
+// Str has no registry key yet; plugin settings may use it later.
 #[allow(dead_code)]
 pub enum Kind {
     Enum(&'static [&'static str]),
@@ -253,6 +253,41 @@ pub static SETTINGS: &[Setting] = &[
         "highlight disks fuller than this",
     ),
     setting(
+        "disks.show_network",
+        Kind::Bool,
+        Value::Bool(true),
+        true,
+        "show mapped network drives in their own card",
+    ),
+    setting(
+        "disks.network_interval_s",
+        int(10, 3600),
+        Value::Int(60),
+        true,
+        "how often network drives are asked, 10..3600",
+    ),
+    setting(
+        "disks.network_timeout_s",
+        int(1, 30),
+        Value::Int(5),
+        true,
+        "a drive that takes longer is shown offline, 1..30",
+    ),
+    setting(
+        "disks.group_network",
+        Kind::Bool,
+        Value::Bool(true),
+        true,
+        "one row for drives on the same server and volume",
+    ),
+    setting(
+        "disks.hide",
+        Kind::StrList,
+        Value::List(Vec::new()),
+        false,
+        "letters or mount points to hide, like [\"X:\", \"/boot\"]",
+    ),
+    setting(
         "plugins.enabled",
         Kind::Bool,
         Value::Bool(true),
@@ -427,6 +462,15 @@ pub struct Memory {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct Disks {
+    pub show_network: bool,
+    pub network_interval_s: u64,
+    pub network_timeout_s: u64,
+    pub group_network: bool,
+    pub hide: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Plugins {
     pub enabled: bool,
     pub default_interval_s: u64,
@@ -476,6 +520,7 @@ pub struct Config {
     pub units: Units,
     pub metrics: Metrics,
     pub thresholds: Thresholds,
+    pub disks: Disks,
     pub plugins: Plugins,
     pub memory: Memory,
     pub theme_matrix: ThemeMatrix,
@@ -504,6 +549,13 @@ impl Default for Config {
                 temps_interval_ms: 0,
                 disks_interval_ms: 0,
                 history_len: 0,
+            },
+            disks: Disks {
+                show_network: false,
+                network_interval_s: 0,
+                network_timeout_s: 0,
+                group_network: false,
+                hide: Vec::new(),
             },
             thresholds: Thresholds {
                 cpu_warn_pct: 0.0,
@@ -580,6 +632,11 @@ impl Config {
             "thresholds.cpu_warn_pct" => Value::Int(self.thresholds.cpu_warn_pct as i64),
             "thresholds.temp_warn_c" => Value::Int(self.thresholds.temp_warn_c as i64),
             "thresholds.disk_warn_pct" => Value::Int(self.thresholds.disk_warn_pct as i64),
+            "disks.show_network" => Value::Bool(self.disks.show_network),
+            "disks.network_interval_s" => Value::Int(self.disks.network_interval_s as i64),
+            "disks.network_timeout_s" => Value::Int(self.disks.network_timeout_s as i64),
+            "disks.group_network" => Value::Bool(self.disks.group_network),
+            "disks.hide" => Value::List(self.disks.hide.clone()),
             "plugins.enabled" => Value::Bool(p.enabled),
             "plugins.default_interval_s" => Value::Int(p.default_interval_s as i64),
             "plugins.http_timeout_s" => Value::Int(p.http_timeout_s as i64),
@@ -634,6 +691,16 @@ impl Config {
             "thresholds.cpu_warn_pct" => self.thresholds.cpu_warn_pct = v.as_f64() as f32,
             "thresholds.temp_warn_c" => self.thresholds.temp_warn_c = v.as_f64() as f32,
             "thresholds.disk_warn_pct" => self.thresholds.disk_warn_pct = v.as_f64() as f32,
+            "disks.show_network" => self.disks.show_network = v.as_bool(),
+            "disks.network_interval_s" => self.disks.network_interval_s = clamp_u64(v),
+            "disks.network_timeout_s" => self.disks.network_timeout_s = clamp_u64(v),
+            "disks.group_network" => self.disks.group_network = v.as_bool(),
+            "disks.hide" => {
+                self.disks.hide = match v {
+                    Value::List(items) => items.clone(),
+                    _ => Vec::new(),
+                }
+            }
             "plugins.enabled" => p.enabled = v.as_bool(),
             "plugins.default_interval_s" => p.default_interval_s = clamp_u64(v),
             "plugins.http_timeout_s" => p.http_timeout_s = clamp_u64(v),
@@ -1214,6 +1281,30 @@ mod tests {
         assert!(
             readme.contains(&reference_markdown()),
             "README.md is out of date: paste the output of `telemetrix config reference`"
+        );
+    }
+
+    #[test]
+    fn disks_section_parses_and_rejects_bad_values() {
+        let text =
+            "[disks]\nshow_network = false\nnetwork_timeout_s = 99\nhide = [\"X:\", \"/boot\"]\n";
+        let parsed = parse_text(text).unwrap();
+        let d = &parsed.config.disks;
+        assert!(!d.show_network);
+        assert_eq!(
+            d.network_timeout_s, 5,
+            "out of range falls back to the default"
+        );
+        assert_eq!(d.hide, ["X:", "/boot"]);
+        assert_eq!(parsed.problems.len(), 1);
+        let bad = parse_text("[disks]\nhide = \"X:\"\n").unwrap();
+        assert!(bad.config.disks.hide.is_empty());
+        assert!(bad.problems[0].message.contains("is not a list"));
+        let default = Config::default().disks;
+        assert!(default.show_network && default.group_network);
+        assert_eq!(
+            (default.network_interval_s, default.network_timeout_s),
+            (60, 5)
         );
     }
 

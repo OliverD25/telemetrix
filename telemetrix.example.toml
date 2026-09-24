@@ -27,6 +27,13 @@ cpu_warn_pct = 80           # highlight CPU above this, 1..100
 temp_warn_c = 75            # highlight temperature above this
 disk_warn_pct = 90          # highlight disks fuller than this
 
+[disks]
+show_network = true         # show mapped network drives in their own card
+network_interval_s = 60     # how often network drives are asked, 10..3600
+network_timeout_s = 5       # a drive that takes longer is shown offline, 1..30
+group_network = true        # one row for drives on the same server and volume
+hide = []                   # letters or mount points to hide, like ["X:", "/boot"]
+
 [plugins]
 enabled = true              # false = run no plugins at all
 default_interval_s = 60     # used when a plugin sets no interval, 5..86400
