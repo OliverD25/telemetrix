@@ -1,18 +1,20 @@
 use std::collections::BTreeSet;
+use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use sysinfo::{
-    Components, CpuRefreshKind, DiskRefreshKind, Disks, MemoryRefreshKind, RefreshKind, System,
-};
+use sysinfo::{Components, DiskRefreshKind, Disks, MemoryRefreshKind, System};
 
+use super::cpu::{self, CpuMeter};
 use super::{DiskMetric, SystemSnapshot};
 use crate::config::Config;
 use crate::event::{AppEvent, WorkerCmd};
 
-/// sysinfo needs two CPU refreshes at least 200 ms apart for a real value.
+/// CPU usage needs two readings at least 200 ms apart for a real value.
 const CPU_PRIME: Duration = Duration::from_millis(250);
+/// The sensor probe child normally answers in well under a second.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const PREFERRED_SENSORS: [&str; 4] = ["coretemp", "k10temp", "Tctl", "Package id 0"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,7 +48,10 @@ fn disk_kind() -> DiskRefreshKind {
 
 pub struct Sampler {
     sys: System,
+    cpu: CpuMeter,
     components: Components,
+    /// False when no sensor reported a temperature at start (most Windows PCs).
+    temps: bool,
     disks: Disks,
 }
 
@@ -54,17 +59,25 @@ impl Sampler {
     /// Creates the sampler and takes the first real CPU sample (about 250 ms).
     pub fn new() -> Self {
         let mut sys = System::new_with_specifics(
-            RefreshKind::nothing()
-                .with_cpu(CpuRefreshKind::nothing().with_cpu_usage())
-                .with_memory(MemoryRefreshKind::nothing().with_ram().with_swap()),
+            cpu::refresh_kind().with_memory(MemoryRefreshKind::nothing().with_ram().with_swap()),
         );
-        sys.refresh_cpu_usage();
+        let mut cpu = CpuMeter::new();
+        cpu.refresh(&mut sys);
         thread::sleep(CPU_PRIME);
-        sys.refresh_cpu_usage();
+        cpu.refresh(&mut sys);
         sys.refresh_memory();
+        let components = if sensors_worth_loading() {
+            Components::new_with_refreshed_list()
+        } else {
+            Components::new()
+        };
+        let temps = components.iter().any(|c| c.temperature().is_some());
         Self {
             sys,
-            components: Components::new_with_refreshed_list(),
+            cpu,
+            // An empty list is dropped, so later refreshes cost nothing.
+            components: if temps { components } else { Components::new() },
+            temps,
             disks: Disks::new_with_refreshed_list_specifics(disk_kind()),
         }
     }
@@ -72,12 +85,12 @@ impl Sampler {
     /// Refreshes the sources whose index (cpu, memory, temps, disks) is set.
     fn refresh(&mut self, due: [bool; 4]) {
         if due[0] {
-            self.sys.refresh_cpu_usage();
+            self.cpu.refresh(&mut self.sys);
         }
         if due[1] {
             self.sys.refresh_memory();
         }
-        if due[2] {
+        if due[2] && self.temps {
             self.components.refresh(true);
         }
         if due[3] {
@@ -95,7 +108,7 @@ impl Sampler {
             )
         });
         SystemSnapshot {
-            cpu_usage: self.sys.global_cpu_usage(),
+            cpu_usage: self.cpu.usage(),
             cpu_temp: pick_cpu_temp(sensors),
             ram_used_bytes: self.sys.used_memory(),
             ram_total_bytes: self.sys.total_memory(),
@@ -103,6 +116,46 @@ impl Sampler {
             swap_total_bytes: self.sys.total_swap(),
             disks: real_disks(disks),
             gpus: Vec::new(),
+        }
+    }
+}
+
+/// True when a sensor reports a temperature; the `probe-temps` command.
+pub fn any_temperature() -> bool {
+    Components::new_with_refreshed_list()
+        .iter()
+        .any(|c| c.temperature().is_some())
+}
+
+/// On Windows sysinfo reads sensors through WMI, which loads about 3.7 MB of
+/// COM code that stays for the life of the process, while most PCs report no
+/// sensor at all. A short child process asks first, so the dashboard loads WMI
+/// only when it will get a temperature from it.
+fn sensors_worth_loading() -> bool {
+    if !cfg!(windows) {
+        return true;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let child = Command::new(exe)
+        .arg("probe-temps")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    let Ok(mut child) = child else {
+        return false;
+    };
+    let end = Instant::now() + PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if Instant::now() < end => thread::sleep(Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                return false;
+            }
         }
     }
 }

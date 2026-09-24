@@ -59,8 +59,13 @@ pub enum PluginCmd {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Tui,
-    Snapshot { json: bool, plugins: bool },
+    Snapshot {
+        json: bool,
+        plugins: bool,
+    },
     Themes,
+    /// Hidden: exits 0 when a temperature sensor answers (used by the metrics thread).
+    ProbeTemps,
     Config(ConfigCmd),
     Plugin(PluginCmd),
     Help,
@@ -150,6 +155,7 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
     let cmd = match words.as_slice() {
         [] => Command::Tui,
         ["themes"] => Command::Themes,
+        ["probe-temps"] => Command::ProbeTemps,
         ["plugin", "check", file] => Command::Plugin(PluginCmd::Check {
             file: PathBuf::from(file),
             json: sw.json,
@@ -209,6 +215,11 @@ mod tests {
             Command::Config(ConfigCmd::Init { force: true })
         );
         assert_eq!(cli.flags.config, Some(PathBuf::from("x.toml")));
+        assert_eq!(run(&["probe-temps"]).unwrap().command, Command::ProbeTemps);
+        assert!(
+            !HELP.contains("probe-temps"),
+            "internal command stays out of --help"
+        );
     }
 
     #[test]

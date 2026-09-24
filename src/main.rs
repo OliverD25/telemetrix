@@ -32,6 +32,13 @@ fn main() -> ExitCode {
             println!("telemetrix {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
+        Command::ProbeTemps => {
+            if metrics::worker::any_temperature() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
         Command::Themes => {
             for theme in themes::all() {
                 println!("{}", theme.name());

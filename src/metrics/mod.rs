@@ -1,3 +1,4 @@
+pub mod cpu;
 pub mod worker;
 
 #[derive(Clone, Debug, Default, PartialEq)]
