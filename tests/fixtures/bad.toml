@@ -1,0 +1,24 @@
+# Fixture for the lenient loader: four bad keys, the rest are good.
+schema = 1
+
+[general]
+theme = "minimalist"
+fps = 500                   # bad: out of range 1..60
+exit_on_any_key = true
+colour = "red"              # bad: unknown key
+
+[units]
+temperature = "kelvin"      # bad: not one of celsius | fahrenheit
+
+[metrics]
+cpu_interval_ms = 2000
+history_len = "lots"        # bad: text where a number is expected
+
+[theme.matrix]
+color = "#00ff88"
+
+[plugin.weather]
+label = "Lviv"
+
+[plugin.crypto]
+enabled = false

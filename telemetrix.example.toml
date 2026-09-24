@@ -1,0 +1,63 @@
+# telemetrix settings. Every key is optional; a missing key uses the default shown here.
+# Unknown keys are ignored with a warning. A wrong value falls back to its default.
+# The running app picks up changes within 2 seconds after you save this file.
+schema = 1                  # format version of this file, do not change
+
+[general]
+theme = "matrix"            # minimalist | matrix
+fps = 15                    # frames per second for animated themes, 1..60
+exit_on_any_key = false     # true = screensaver mode: any key quits
+plugins_dir = "plugins"     # relative to the executable, or an absolute path
+log_file = ""               # "" = off, otherwise a file path
+log_lines = 200             # lines kept for the l overlay, 50..2000
+
+[units]
+temperature = "celsius"     # celsius | fahrenheit
+bytes = "binary"            # binary = GiB, decimal = GB
+
+[metrics]
+cpu_interval_ms = 1000      # 200..60000
+memory_interval_ms = 1000   # 200..60000
+temps_interval_ms = 5000    # 1000..60000
+disks_interval_ms = 30000   # 1000..600000
+history_len = 240           # samples kept for sparklines, 10..3600
+
+[thresholds]
+cpu_warn_pct = 80           # highlight CPU above this, 1..100
+temp_warn_c = 75            # highlight temperature above this
+disk_warn_pct = 90          # highlight disks fuller than this
+
+[plugins]
+enabled = true              # false = run no plugins at all
+default_interval_s = 60     # used when a plugin sets no interval, 5..86400
+http_timeout_s = 10         # per request, 1..60
+call_timeout_s = 5          # Lua time limit per update(), 1..60
+memory_limit_mb = 8         # per plugin, 1..64
+rescan_interval_s = 60      # 0 = rescan only on the r key
+max_plugins = 16            # at most this many plugins run, 1..64
+
+[theme.matrix]
+density = 0.5               # 0.0..1.0
+speed = 1.0                 # 0.1..5.0
+color = "green"             # green | amber | cyan | white | #rrggbb
+
+[theme.minimalist]
+show_sparklines = true      # history graphs under CPU and RAM
+
+# Per-plugin sections. `enabled` and `interval` are reserved; every other key
+# reaches the plugin as telemetrix.settings.<key>.
+[plugin.weather]
+enabled = true
+interval = 600
+lat = 50.45
+lon = 30.52
+label = "Kyiv"
+
+[plugin.crypto]
+interval = 120
+coins = ["bitcoin", "ethereum", "solana"]
+
+[plugin.network_ping]
+interval = 30
+host = "1.1.1.1"
+port = 443
