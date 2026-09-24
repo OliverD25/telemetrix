@@ -143,7 +143,7 @@ impl Plugin {
         let card = CardUpdate::from_value(result.map_err(|e| short(&e))?)?;
         Ok(PluginData {
             id: self.id().to_string(),
-            title: self.title().to_string(),
+            title: card.title.unwrap_or_else(|| self.title().to_string()),
             metrics: card.metrics,
             error: None,
         })
@@ -342,6 +342,23 @@ mod tests {
             "{data:?}"
         );
         assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn default_plugins_load_and_the_offline_ones_run() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins");
+        let s = RunnerSettings::from_config(&Config::default());
+        for name in ["clock", "uptime", "network_ping", "crypto", "weather"] {
+            let path = dir.join(format!("{name}.lua"));
+            let p = Plugin::load(&path, &s, Arc::new(AtomicBool::new(false)), quiet())
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(p.id(), name);
+        }
+        for name in ["clock", "uptime"] {
+            let data = run_once(&dir.join(format!("{name}.lua")), &s, quiet());
+            assert_eq!(data.error, None, "{name}");
+            assert_eq!(data.metrics.len(), 2, "{name}");
+        }
     }
 
     #[test]

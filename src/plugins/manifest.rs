@@ -41,8 +41,10 @@ impl PluginManifest {
     }
 }
 
-/// What `update()` returns: `{ metrics = { { label = "...", value = ... }, ... } }`.
+/// What `update()` returns: `{ title?, metrics = { { label = "...", value = ... }, ... } }`.
+/// `title` lets a card name depend on settings, like "Weather · Kyiv".
 pub struct CardUpdate {
+    pub title: Option<String>,
     pub metrics: Vec<MetricItem>,
 }
 
@@ -65,6 +67,11 @@ impl CardUpdate {
             Value::Table(list) => list,
             _ => return Err("update() must return { metrics = { ... } }".into()),
         };
+        let title = match t.get::<Value>("title").map_err(|e| e.to_string())? {
+            Value::Nil => None,
+            Value::String(s) => Some(s.to_string_lossy()),
+            _ => return Err("title must be a string".into()),
+        };
         let mut metrics = Vec::new();
         for (i, item) in list.sequence_values::<Value>().enumerate() {
             let Ok(Value::Table(item)) = item else {
@@ -77,7 +84,7 @@ impl CardUpdate {
                 _ => return Err(format!("metrics[{}] needs a label and a value", i + 1)),
             }
         }
-        Ok(Self { metrics })
+        Ok(Self { title, metrics })
     }
 }
 
@@ -126,6 +133,15 @@ mod tests {
         let card = CardUpdate::from_value(v).unwrap();
         assert_eq!(card.metrics[0].value, "1.5");
         assert_eq!(card.metrics[1].label, "b");
+        assert_eq!(card.title, None);
+        let v: Value = lua
+            .load("return { title = 'T', metrics = {} }")
+            .eval()
+            .unwrap();
+        assert_eq!(
+            CardUpdate::from_value(v).unwrap().title.as_deref(),
+            Some("T")
+        );
         let v: Value = lua
             .load("return { metrics = { { label = 'a' } } }")
             .eval()
