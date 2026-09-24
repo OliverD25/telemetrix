@@ -53,6 +53,7 @@ struct Loop {
 }
 
 pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags) -> io::Result<()> {
+    crate::term::install_signal_handling();
     let path = config::resolve_path(flags.config.as_deref());
     let (tx, rx) = mpsc::channel::<AppEvent>();
     let plugins = Manager::new(&cfg, tx.clone());
@@ -134,7 +135,7 @@ fn event_loop(
                 Err(_) => return Ok(()),
             }
         }
-        if lp.quit {
+        if lp.quit || crate::term::stop_requested() {
             return Ok(());
         }
         while let Ok(ev) = rx.try_recv() {

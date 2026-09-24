@@ -1023,6 +1023,7 @@ name = "telemetrix"
 version = "0.1.0"
 dependencies = [
  "lexopt",
+ "libc",
  "mlua",
  "ratatui",
  "serde",
