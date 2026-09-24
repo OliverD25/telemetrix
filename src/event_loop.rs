@@ -11,6 +11,8 @@ use crate::cli::Flags;
 use crate::config::{self, Config, ConfigStatus, LoadOutcome, THEME_NAMES, Value};
 use crate::event::{AppEvent, WorkerCmd};
 use crate::metrics::worker::{self, MetricsCmd, MetricsIntervals};
+use crate::plugins::PluginStatus;
+use crate::plugins::manager::Manager;
 use crate::term::TerminalGuard;
 use crate::themes::{self, Theme};
 use crate::ui;
@@ -39,11 +41,14 @@ struct Loop {
     quit: bool,
     metrics: mpsc::Sender<MetricsCmd>,
     themes: Vec<Box<dyn Theme>>,
+    plugins: Manager,
+    last_rescan: Instant,
 }
 
 pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags) -> io::Result<()> {
     let path = config::resolve_path(flags.config.as_deref());
     let (tx, rx) = mpsc::channel::<AppEvent>();
+    let plugins = Manager::new(&cfg, tx.clone());
     let (metrics, _metrics_thread) = worker::spawn(MetricsIntervals::from_config(&cfg), tx);
     let mut state = AppState::new(cfg, status);
     state.log(&format!(
@@ -66,9 +71,13 @@ pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags) -> io::Result<()> {
         quit: false,
         metrics,
         themes: themes::all(),
+        plugins,
+        last_rescan: Instant::now(),
     };
+    lp.rescan_plugins(false);
     let result = event_loop(&mut lp, &mut guard, &rx);
     let _ = lp.metrics.send(WorkerCmd::Stop);
+    lp.plugins.stop_all();
     result
 }
 
@@ -166,10 +175,7 @@ impl Loop {
                 s.paused = !s.paused;
                 s.dirty = true;
             }
-            Action::Reload => {
-                s.log("reload requested");
-                s.show_toast("reload requested");
-            }
+            Action::Reload => self.rescan_plugins(true),
             Action::Nothing => {}
         }
     }
@@ -187,11 +193,48 @@ impl Loop {
         }
     }
 
+    fn rescan_plugins(&mut self, announce: bool) {
+        self.last_rescan = Instant::now();
+        let report = self.plugins.rescan();
+        let errors = self
+            .state
+            .plugins
+            .values()
+            .filter(|c| matches!(c.status, PluginStatus::Error(_)))
+            .count();
+        let msg = format!(
+            "plugins rescanned ({} running, {errors} with errors, {} started, {} stopped) in {}",
+            report.running,
+            report.started,
+            report.stopped,
+            self.plugins.dir().display()
+        );
+        self.state.log(&msg);
+        if announce {
+            let short = format!(
+                "plugins rescanned ({} running, {errors} with errors)",
+                report.running
+            );
+            self.state.show_toast(&short);
+        }
+    }
+
     fn housekeeping(&mut self, size: Size) {
         let current = mtime(&self.path);
         if current != self.last_mtime {
             self.last_mtime = current;
             self.reload();
+        }
+        let every = self.state.config.plugins.rescan_interval_s;
+        if every > 0 && self.last_rescan.elapsed() >= Duration::from_secs(every) {
+            self.last_rescan = Instant::now();
+            let report = self.plugins.rescan();
+            if report.started + report.stopped > 0 {
+                self.state.log(&format!(
+                    "plugins: {} started, {} stopped",
+                    report.started, report.stopped
+                ));
+            }
         }
         if size != self.last_size {
             self.last_size = size;
@@ -243,7 +286,13 @@ impl Loop {
         if MetricsIntervals::from_config(&old) != intervals {
             let _ = self.metrics.send(WorkerCmd::Reconfigure(intervals));
         }
-        if old.general.log_file != new.general.log_file {
+        if old.plugins != new.plugins
+            || old.plugin_cfg != new.plugin_cfg
+            || old.general.plugins_dir != new.general.plugins_dir
+        {
+            self.plugins.reconfigure(new);
+        }
+        if old.general.log_file != self.state.config.general.log_file {
             self.state.open_log_file();
         }
         self.state.log("config reloaded");

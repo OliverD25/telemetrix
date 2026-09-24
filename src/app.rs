@@ -194,13 +194,26 @@ impl AppState {
                 push_capped(&mut self.ram_history, snapshot.ram_pct(), cap);
                 self.snapshot = Some(snapshot);
             }
-            AppEvent::Plugin(data) => {
-                let card = PluginCard {
-                    data,
-                    status: PluginStatus::Ok,
-                };
-                self.plugins.insert(card.data.id.clone(), card);
-            }
+            AppEvent::Plugin(mut data) => match data.error.take() {
+                // A failed update keeps the last good metrics, shown as stale.
+                Some(err) => match self.plugins.get_mut(&data.id) {
+                    Some(card) => card.status = PluginStatus::Error(err),
+                    None => {
+                        let card = PluginCard {
+                            data,
+                            status: PluginStatus::Error(err),
+                        };
+                        self.plugins.insert(card.data.id.clone(), card);
+                    }
+                },
+                None => {
+                    let card = PluginCard {
+                        data,
+                        status: PluginStatus::Ok,
+                    };
+                    self.plugins.insert(card.data.id.clone(), card);
+                }
+            },
             AppEvent::PluginRemoved(id) => {
                 self.plugins.remove(&id);
             }
@@ -310,6 +323,30 @@ mod tests {
             (last.level, last.text.as_str()),
             (Level::Error, "plugin x failed")
         );
+    }
+
+    #[test]
+    fn plugin_error_keeps_the_last_good_metrics() {
+        use crate::plugins::{MetricItem, PluginData};
+        let mut state = AppState::new(Config::default(), ConfigStatus::Ok);
+        let good = PluginData {
+            id: "w".into(),
+            title: "W".into(),
+            metrics: vec![MetricItem {
+                label: "t".into(),
+                value: "1".into(),
+            }],
+            error: None,
+        };
+        state.apply(AppEvent::Plugin(good));
+        let mut bad = crate::plugins::runner::error_data("w", "W", "http timeout".into());
+        bad.error = Some("http timeout".into());
+        state.apply(AppEvent::Plugin(bad));
+        let card = &state.plugins["w"];
+        assert_eq!(card.status, PluginStatus::Error("http timeout".into()));
+        assert_eq!(card.data.metrics.len(), 1);
+        state.apply(AppEvent::PluginRemoved("w".into()));
+        assert!(state.plugins.is_empty());
     }
 
     #[test]

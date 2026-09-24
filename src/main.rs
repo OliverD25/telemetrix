@@ -42,6 +42,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Config(cmd) => commands::config_cmd::run(cmd, &cli.flags),
+        Command::Plugin(cmd) => commands::plugin_cmd::run(cmd, &cli.flags),
         Command::Snapshot { json, plugins } => commands::snapshot::run(json, plugins, &cli.flags),
         Command::Tui => dashboard(&cli.flags),
     }

@@ -9,6 +9,8 @@ telemetrix (TermSaver): terminal screensaver and live system telemetry dashboard
 Usage:
   telemetrix [flags]                      dashboard
   telemetrix snapshot [--json] [--plugins]  read the metrics once and print them
+  telemetrix plugin check <file> [--json] load a plugin, run update() once, print the card
+  telemetrix plugin list                  list the plugins that would run
   telemetrix themes                       list theme names
   telemetrix config init [--force]        write the default settings file
   telemetrix config path                  print where the settings file is
@@ -49,11 +51,18 @@ pub enum ConfigCmd {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum PluginCmd {
+    Check { file: PathBuf, json: bool },
+    List,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Tui,
     Snapshot { json: bool, plugins: bool },
     Themes,
     Config(ConfigCmd),
+    Plugin(PluginCmd),
     Help,
     Version,
 }
@@ -141,6 +150,11 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
     let cmd = match words.as_slice() {
         [] => Command::Tui,
         ["themes"] => Command::Themes,
+        ["plugin", "check", file] => Command::Plugin(PluginCmd::Check {
+            file: PathBuf::from(file),
+            json: sw.json,
+        }),
+        ["plugin", "list"] => Command::Plugin(PluginCmd::List),
         ["snapshot"] => Command::Snapshot {
             json: sw.json,
             plugins: sw.plugins,
@@ -153,7 +167,9 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
     };
     let takes_json = matches!(
         cmd,
-        Command::Config(ConfigCmd::Check { .. }) | Command::Snapshot { .. }
+        Command::Config(ConfigCmd::Check { .. })
+            | Command::Snapshot { .. }
+            | Command::Plugin(PluginCmd::Check { .. })
     );
     if sw.plugins && !matches!(cmd, Command::Snapshot { .. }) {
         return Err("--plugins only applies to snapshot".into());
@@ -201,6 +217,7 @@ mod tests {
         assert!(run(&["--fps", "0"]).is_err());
         assert!(run(&["config", "show", "--json"]).is_err());
         assert!(run(&["frobnicate"]).is_err());
+        assert!(run(&["plugin", "check"]).is_err());
         assert!(run(&["--bogus"]).is_err());
     }
 }

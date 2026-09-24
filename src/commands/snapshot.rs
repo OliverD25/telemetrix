@@ -106,7 +106,7 @@ pub fn run(json: bool, with_plugins: bool, flags: &Flags) -> ExitCode {
     let host = host_name();
     let timestamp = format::utc_timestamp(SystemTime::now());
     if json {
-        let plugins = with_plugins.then(Vec::new);
+        let plugins = with_plugins.then(|| super::plugin_cmd::run_all_once(&cfg));
         println!("{:#}", to_json(&snapshot, &host, &timestamp, plugins));
     } else {
         print!("{}", to_text(&snapshot, &host, &timestamp, &cfg));
