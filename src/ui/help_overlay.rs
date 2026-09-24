@@ -8,7 +8,7 @@ use crate::themes::common::fg;
 
 const KEYS: [(&str, &str); 10] = [
     ("q  Esc  Ctrl+C", "quit (Esc closes an open overlay first)"),
-    ("t / T", "next / previous theme"),
+    ("t", "themes: Up/Down preview, Enter saves, Esc cancels"),
     ("space", "pause the animation"),
     ("s", "settings (changes are saved at once)"),
     ("Shift + Left/Right", "settings: ten steps at once"),

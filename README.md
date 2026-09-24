@@ -34,7 +34,7 @@ telemetrix --exit-on-any-key      # screensaver mode: any key quits
 | Key | What it does |
 |---|---|
 | `q`, `Esc`, `Ctrl+C` | quit (`Esc` closes an open box first) |
-| `t` / `T` | next / previous theme (saved in the settings file) |
+| `t` | open the theme box: `Up`/`Down` (or `t`/`T`) preview each theme live, `Enter` saves it, `Esc` goes back; `q` does not quit while the box is open |
 | `s` | settings: every change is saved at once |
 | `+` / `-` | more / fewer frames per second (saved) |
 | `space` | pause the animation |

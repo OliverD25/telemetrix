@@ -184,8 +184,34 @@ impl Loop {
         let s = &mut self.state;
         match action {
             Action::Quit => self.quit = true,
-            Action::NextTheme => self.cycle_theme(1),
-            Action::PrevTheme => self.cycle_theme(THEME_NAMES.len() - 1),
+            Action::OpenThemes => {
+                s.picker_original = s.theme_idx;
+                s.overlay = Overlay::Themes;
+                s.dirty = true;
+            }
+            Action::PickerMove(dir) => {
+                // A preview only: the file is written on Enter.
+                let n = THEME_NAMES.len() as i32;
+                s.theme_idx = (s.theme_idx as i32 + dir).rem_euclid(n) as usize;
+                s.dirty = true;
+            }
+            Action::PickerSave => {
+                s.overlay = Overlay::None;
+                let name = THEME_NAMES[s.theme_idx];
+                self.change(Change::Set("general.theme".into(), Value::Str(name.into())));
+                let saved = matches!(self.state.settings_footer, Some(Ok(_)));
+                let note = if saved {
+                    "saved"
+                } else {
+                    "not saved, see the log"
+                };
+                self.state.show_toast(&format!("theme: {name} {note}"));
+            }
+            Action::PickerCancel => {
+                s.theme_idx = s.picker_original;
+                s.overlay = Overlay::None;
+                s.dirty = true;
+            }
             Action::ToggleSettings => {
                 if s.overlay != Overlay::Settings {
                     s.plugin_ids = manager::discover(self.plugins.dir())
@@ -237,14 +263,6 @@ impl Loop {
             Action::Reload => self.rescan_plugins(true),
             Action::Nothing => {}
         }
-    }
-
-    fn cycle_theme(&mut self, step: usize) {
-        let idx = (self.state.theme_idx + step) % THEME_NAMES.len();
-        self.change(Change::Set(
-            "general.theme".into(),
-            Value::Str(THEME_NAMES[idx].into()),
-        ));
     }
 
     /// Applies one change from a key press at once, then saves it to the file.
@@ -354,7 +372,13 @@ impl Loop {
         let old = std::mem::replace(&mut self.state.config, new);
         let new = &self.state.config;
         if looks_different(&old, new) {
-            self.state.theme_idx = app::theme_index(&new.general.theme);
+            let idx = app::theme_index(&new.general.theme);
+            if self.state.overlay == Overlay::Themes {
+                // Keep the preview; the file's theme becomes what Esc goes back to.
+                self.state.picker_original = idx;
+            } else {
+                self.state.theme_idx = idx;
+            }
             self.state.dirty = true;
         }
         let intervals = MetricsIntervals::from_config(new);
@@ -388,6 +412,122 @@ fn looks_different(old: &Config, new: &Config) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    impl Loop {
+        /// A loop without a terminal, worker threads or plugins.
+        fn for_test(cfg: Config, flags: Flags, path: std::path::PathBuf) -> Self {
+            let mut quiet = cfg.clone();
+            quiet.plugins.enabled = false;
+            Self {
+                state: AppState::new(cfg, ConfigStatus::Ok),
+                flags,
+                last_mtime: mtime(&path),
+                path,
+                last_size: Size::new(80, 24),
+                quit: false,
+                metrics: mpsc::channel().0,
+                themes: themes::all(),
+                plugins: Manager::new(&quiet, mpsc::channel().0),
+                last_rescan: Instant::now(),
+            }
+        }
+    }
+
+    fn temp_file(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("telemetrix-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("telemetrix.toml")
+    }
+
+    fn saved_theme(path: &Path) -> String {
+        let text = std::fs::read_to_string(path).unwrap();
+        config::parse_text(&text).unwrap().config.general.theme
+    }
+
+    #[test]
+    fn picker_esc_restores_the_theme_and_writes_nothing() {
+        let path = temp_file("picker-esc");
+        let mut lp = Loop::for_test(Config::default(), Flags::default(), path.clone());
+        assert_eq!(lp.state.theme_name(), "matrix");
+        lp.act(Action::OpenThemes);
+        assert_eq!(lp.state.overlay, Overlay::Themes);
+        lp.act(Action::PickerMove(1));
+        assert_eq!(lp.state.theme_name(), "minimalist", "live preview");
+        lp.act(Action::PickerCancel);
+        assert_eq!(lp.state.theme_name(), "matrix");
+        assert_eq!(lp.state.overlay, Overlay::None);
+        assert!(!path.exists(), "a cancelled preview writes nothing");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn picker_enter_saves_and_beats_the_theme_flag_after_reload() {
+        let path = temp_file("picker-enter");
+        let flags = Flags {
+            theme: Some("minimalist".into()),
+            ..Flags::default()
+        };
+        let mut cfg = Config::default();
+        config::apply_flags(&mut cfg, &flags);
+        let mut lp = Loop::for_test(cfg, flags, path.clone());
+        assert_eq!(lp.state.theme_name(), "minimalist");
+        lp.act(Action::OpenThemes);
+        lp.act(Action::PickerMove(1));
+        lp.act(Action::PickerSave);
+        assert_eq!(lp.state.theme_name(), "matrix");
+        assert_eq!(lp.state.overlay, Overlay::None);
+        assert_eq!(saved_theme(&path), "matrix");
+        assert!(
+            lp.state
+                .toast
+                .as_ref()
+                .is_some_and(|(t, _)| t == "theme: matrix saved")
+        );
+        lp.reload();
+        assert_eq!(
+            lp.state.theme_name(),
+            "matrix",
+            "--theme must not win after the user chose"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn q_in_the_picker_does_not_quit() {
+        let path = temp_file("picker-q");
+        let mut lp = Loop::for_test(Config::default(), Flags::default(), path.clone());
+        lp.act(Action::OpenThemes);
+        let q = ratatui::crossterm::event::KeyEvent::new(
+            ratatui::crossterm::event::KeyCode::Char('q'),
+            ratatui::crossterm::event::KeyModifiers::NONE,
+        );
+        lp.act(app::key_action(&q, lp.state.overlay, false));
+        assert!(!lp.quit);
+        assert_eq!(lp.state.overlay, Overlay::Themes);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn reload_during_preview_moves_the_cancel_target() {
+        let path = temp_file("picker-reload");
+        let mut lp = Loop::for_test(Config::default(), Flags::default(), path.clone());
+        lp.act(Action::OpenThemes);
+        lp.act(Action::PickerMove(1));
+        assert_eq!(lp.state.theme_name(), "minimalist");
+        config::set(&path, "general.theme", &Value::Str("minimalist".into())).unwrap();
+        lp.reload();
+        assert_eq!(lp.state.overlay, Overlay::Themes, "the picker stays open");
+        lp.act(Action::PickerMove(1));
+        assert_eq!(lp.state.theme_name(), "matrix", "the preview keeps working");
+        lp.act(Action::PickerCancel);
+        assert_eq!(
+            lp.state.theme_name(),
+            "minimalist",
+            "Esc goes back to the file's theme"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
 
     #[test]
     fn static_theme_wakes_for_housekeeping_and_drain_only() {

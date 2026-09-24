@@ -18,6 +18,8 @@ pub enum Overlay {
     Log,
     Help,
     Settings,
+    /// The `t` theme picker.
+    Themes,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,8 +66,11 @@ pub enum Action {
         big: bool,
     },
     FpsStep(i32),
-    NextTheme,
-    PrevTheme,
+    OpenThemes,
+    /// Preview the next (1) or previous (-1) theme in the picker.
+    PickerMove(i32),
+    PickerSave,
+    PickerCancel,
     ToggleLog,
     ToggleHelp,
     TogglePause,
@@ -85,6 +90,16 @@ pub fn key_action(key: &KeyEvent, overlay: Overlay, exit_on_any_key: bool) -> Ac
             Action::Nothing
         };
     }
+    if overlay == Overlay::Themes {
+        // Only Esc leaves the picker; q must not quit in the middle of a choice.
+        return match key.code {
+            KeyCode::Up | KeyCode::Char('T') => Action::PickerMove(-1),
+            KeyCode::Down | KeyCode::Char('t') => Action::PickerMove(1),
+            KeyCode::Enter => Action::PickerSave,
+            KeyCode::Esc => Action::PickerCancel,
+            _ => Action::Nothing,
+        };
+    }
     if overlay == Overlay::Settings {
         let big = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
@@ -98,8 +113,7 @@ pub fn key_action(key: &KeyEvent, overlay: Overlay, exit_on_any_key: bool) -> Ac
     match key.code {
         KeyCode::Esc if overlay != Overlay::None => Action::CloseOverlay,
         KeyCode::Esc | KeyCode::Char('q') => Action::Quit,
-        KeyCode::Char('t') => Action::NextTheme,
-        KeyCode::Char('T') => Action::PrevTheme,
+        KeyCode::Char('t') | KeyCode::Char('T') => Action::OpenThemes,
         KeyCode::Char('s') => Action::ToggleSettings,
         KeyCode::Char('+') | KeyCode::Char('=') => Action::FpsStep(1),
         KeyCode::Char('-') => Action::FpsStep(-1),
@@ -136,6 +150,8 @@ pub struct AppState {
     pub self_memory: Option<SelfMemory>,
     pub over_budget: bool,
     plugins_over_budget: BTreeSet<String>,
+    /// While the theme picker is open: the theme that Esc goes back to.
+    pub picker_original: usize,
     log_sink: Option<LineWriter<File>>,
 }
 
@@ -165,6 +181,7 @@ impl AppState {
             self_memory: None,
             over_budget: false,
             plugins_over_budget: BTreeSet::new(),
+            picker_original: theme_idx,
             log_sink: None,
         };
         state.open_log_file();
@@ -369,11 +386,11 @@ mod tests {
         );
         assert_eq!(
             key_action(&key(KeyCode::Char('t')), none, false),
-            Action::NextTheme
+            Action::OpenThemes
         );
         assert_eq!(
             key_action(&key(KeyCode::Char('T')), none, false),
-            Action::PrevTheme
+            Action::OpenThemes
         );
         assert_eq!(
             key_action(&key(KeyCode::Char('l')), none, false),
@@ -387,6 +404,42 @@ mod tests {
             key_action(&key(KeyCode::Char('r')), none, false),
             Action::Reload
         );
+    }
+
+    #[test]
+    fn theme_picker_keys() {
+        let p = Overlay::Themes;
+        assert_eq!(
+            key_action(&key(KeyCode::Char('t')), p, false),
+            Action::PickerMove(1)
+        );
+        assert_eq!(
+            key_action(&key(KeyCode::Char('T')), p, false),
+            Action::PickerMove(-1)
+        );
+        assert_eq!(
+            key_action(&key(KeyCode::Down), p, false),
+            Action::PickerMove(1)
+        );
+        assert_eq!(
+            key_action(&key(KeyCode::Up), p, false),
+            Action::PickerMove(-1)
+        );
+        assert_eq!(
+            key_action(&key(KeyCode::Enter), p, false),
+            Action::PickerSave
+        );
+        assert_eq!(
+            key_action(&key(KeyCode::Esc), p, false),
+            Action::PickerCancel
+        );
+        assert_eq!(
+            key_action(&key(KeyCode::Char('q')), p, false),
+            Action::Nothing,
+            "q must not quit"
+        );
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(key_action(&ctrl_c, p, false), Action::Quit);
     }
 
     #[test]

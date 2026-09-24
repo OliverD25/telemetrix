@@ -3,6 +3,7 @@
 mod help_overlay;
 mod log_overlay;
 pub mod settings_overlay;
+mod theme_picker;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -55,6 +56,7 @@ pub fn draw(frame: &mut Frame, state: &AppState, theme: &mut dyn Theme) {
     match state.overlay {
         Overlay::None => {}
         Overlay::Settings => settings_overlay::draw(frame, area, state),
+        Overlay::Themes => theme_picker::draw(frame, area, state),
         Overlay::Log => log_overlay::draw(frame, area, state),
         Overlay::Help => help_overlay::draw(frame, area),
     }
@@ -84,7 +86,7 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &AppState) {
                 .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" · t theme · s settings · l log · ? help · q quit"),
+        Span::raw(" · t themes · s settings · l log · ? help · q quit"),
     ]);
     frame.render_widget(Paragraph::new(left).style(base), left_area);
     let strong = base.fg(Color::White).add_modifier(Modifier::BOLD);
@@ -233,6 +235,7 @@ mod tests {
                 Overlay::Log,
                 Overlay::Help,
                 Overlay::Settings,
+                Overlay::Themes,
             ] {
                 s.overlay = overlay;
                 for (w, h) in [(120, 40), (80, 24), (64, 16), (40, 10)] {
