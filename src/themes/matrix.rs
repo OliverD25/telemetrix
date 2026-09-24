@@ -11,8 +11,15 @@ use crate::app::AppState;
 use crate::config::Config;
 
 const GREEN: (u8, u8, u8) = (0, 255, 70);
-const DENSITY: f32 = 0.5;
-const SPEED: f32 = 1.0;
+const NAMED: [(&str, (u8, u8, u8)); 4] = [
+    ("green", GREEN),
+    ("amber", (255, 176, 0)),
+    ("cyan", (0, 215, 255)),
+    ("white", (220, 220, 220)),
+];
+/// Above this many cells a frame costs enough that 10 FPS is the ceiling.
+const LARGE_AREA: u32 = 20_000;
+const LARGE_AREA_FPS: u32 = 10;
 /// Larger gaps (a stall, a pause) would make every drop jump at once.
 const MAX_STEP: Duration = Duration::from_millis(200);
 
@@ -159,10 +166,23 @@ impl Rain {
     }
 }
 
+/// `green | amber | cyan | white | #rrggbb`; anything else is green.
+pub fn parse_color(s: &str) -> (u8, u8, u8) {
+    if let Some((_, rgb)) = NAMED.iter().find(|(name, _)| *name == s) {
+        return *rgb;
+    }
+    let hex = |i: usize| s.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok());
+    match (s.starts_with('#') && s.len() == 7, hex(1), hex(3), hex(5)) {
+        (true, Some(r), Some(g), Some(b)) => (r, g, b),
+        _ => GREEN,
+    }
+}
+
 /// Digital rain behind the metric cards.
 pub struct Matrix {
     rain: Rain,
     last_tick: Option<Instant>,
+    cells: u32,
 }
 
 impl Matrix {
@@ -177,7 +197,13 @@ impl Matrix {
         Self {
             rain: Rain::new(seed),
             last_tick: None,
+            cells: 0,
         }
+    }
+
+    fn fit(&mut self, area: Rect, density: f32) {
+        self.cells = u32::from(area.width) * u32::from(area.height);
+        self.rain.fit(area.width, area.height, density);
     }
 }
 
@@ -187,29 +213,101 @@ impl Theme for Matrix {
     }
 
     fn frame_interval(&self, cfg: &Config) -> Option<Duration> {
-        Some(Duration::from_secs_f64(
-            1.0 / f64::from(cfg.general.fps.max(1)),
-        ))
+        let mut fps = cfg.general.fps.max(1);
+        if self.cells > LARGE_AREA {
+            fps = fps.min(LARGE_AREA_FPS);
+        }
+        Some(Duration::from_secs_f64(1.0 / f64::from(fps)))
     }
 
     /// Advances by real elapsed time, so the rain speed does not depend on fps.
-    fn tick(&mut self, area: Rect, _cfg: &Config) {
+    fn tick(&mut self, area: Rect, cfg: &Config) {
         let now = Instant::now();
         let dt = self
             .last_tick
             .map_or(Duration::ZERO, |t| (now - t).min(MAX_STEP));
         self.last_tick = Some(now);
-        self.rain.fit(area.width, area.height, DENSITY);
-        self.rain.step(dt.as_secs_f32(), DENSITY, SPEED);
+        let m = &cfg.theme_matrix;
+        self.fit(area, m.density as f32);
+        self.rain
+            .step(dt.as_secs_f32(), m.density as f32, m.speed as f32);
     }
 
     fn draw(&mut self, frame: &mut Frame, state: &AppState) {
         let area = frame.area();
-        self.rain.fit(area.width, area.height, DENSITY);
+        let m = &state.config.theme_matrix;
+        let color = parse_color(&m.color);
+        self.fit(area, m.density as f32);
         let buf = frame.buffer_mut();
         buf.set_style(area, Style::new().bg(Color::Rgb(0, 0, 0)));
-        self.rain.render(buf, area, GREEN);
+        self.rain.render(buf, area, color);
         let body = common::body_area(area, state);
-        common::draw_columns(frame, body, state, &common::matrix_palette(GREEN), true);
+        common::draw_columns(frame, body, state, &common::matrix_palette(color), true);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ConfigStatus;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn render(seed: u64, cfg: &Config) -> Buffer {
+        let state = AppState::new(cfg.clone(), ConfigStatus::Ok);
+        let mut theme = Matrix::with_seed(seed);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|f| theme.draw(f, &state)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn rain_heads(buf: &Buffer, color: (u8, u8, u8)) -> usize {
+        let head = mix_white(color, 0.7);
+        buf.content().iter().filter(|c| c.fg == head).count()
+    }
+
+    #[test]
+    fn same_seed_same_picture() {
+        let cfg = Config::default();
+        assert_eq!(render(7, &cfg), render(7, &cfg));
+        assert_ne!(render(7, &cfg), render(8, &cfg));
+    }
+
+    #[test]
+    fn color_and_density_come_from_the_config() {
+        let mut cfg = Config::default();
+        cfg.theme_matrix.color = "amber".into();
+        cfg.theme_matrix.density = 1.0;
+        let amber = parse_color("amber");
+        assert!(rain_heads(&render(3, &cfg), amber) > 0, "amber drop heads");
+        assert_eq!(rain_heads(&render(3, &cfg), GREEN), 0);
+        cfg.theme_matrix.density = 0.0;
+        assert_eq!(
+            rain_heads(&render(3, &cfg), amber),
+            0,
+            "density 0 means no rain"
+        );
+    }
+
+    #[test]
+    fn colors_parse_with_a_green_fallback() {
+        assert_eq!(parse_color("cyan"), (0, 215, 255));
+        assert_eq!(parse_color("#102030"), (16, 32, 48));
+        assert_eq!(parse_color("#12345"), GREEN);
+        assert_eq!(parse_color("purple"), GREEN);
+    }
+
+    #[test]
+    fn large_terminals_drop_to_10_fps() {
+        let mut cfg = Config::default();
+        cfg.general.fps = 30;
+        let mut theme = Matrix::with_seed(1);
+        theme.tick(Rect::new(0, 0, 100, 40), &cfg);
+        assert_eq!(
+            theme.frame_interval(&cfg),
+            Some(Duration::from_secs_f64(1.0 / 30.0))
+        );
+        theme.tick(Rect::new(0, 0, 250, 90), &cfg);
+        assert_eq!(theme.frame_interval(&cfg), Some(Duration::from_millis(100)));
     }
 }
