@@ -11,6 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Wrap};
 
 use crate::app::{AppState, Overlay};
+use crate::selfmem;
 use crate::themes::Theme;
 use crate::themes::common::{self, ACCENT, MUTED, fg};
 
@@ -54,19 +55,22 @@ pub fn draw(frame: &mut Frame, state: &AppState, theme: &mut dyn Theme) {
     match state.overlay {
         Overlay::None => {}
         Overlay::Settings => settings_overlay::draw(frame, area, state),
-        Overlay::Log => log_overlay::draw(frame, area, &state.log),
+        Overlay::Log => log_overlay::draw(frame, area, state),
         Overlay::Help => help_overlay::draw(frame, area),
     }
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, state: &AppState) {
     let paused = if state.paused { " · PAUSED" } else { "" };
-    let right = format!(
+    let memory = state.self_memory.map_or(String::new(), |m| {
+        format!(" self {:.1} MB ·", selfmem::mb(m.working_set))
+    });
+    let rest = format!(
         " {} · {} fps{paused} ",
         state.theme_name(),
         state.config.general.fps
     );
-    let right_w = u16::try_from(right.chars().count()).unwrap_or(u16::MAX);
+    let right_w = u16::try_from(memory.chars().count() + rest.chars().count()).unwrap_or(u16::MAX);
     let [left_area, right_area] =
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(right_w)]).areas(area);
     let base = Style::new()
@@ -83,10 +87,17 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &AppState) {
         Span::raw(" · t theme · s settings · l log · ? help · q quit"),
     ]);
     frame.render_widget(Paragraph::new(left).style(base), left_area);
-    frame.render_widget(
-        Paragraph::new(right).style(base.fg(Color::White).add_modifier(Modifier::BOLD)),
-        right_area,
-    );
+    let strong = base.fg(Color::White).add_modifier(Modifier::BOLD);
+    let memory_style = if state.over_budget {
+        strong.fg(ACCENT)
+    } else {
+        strong
+    };
+    let right = Line::from(vec![
+        Span::styled(memory, memory_style),
+        Span::styled(rest, strong),
+    ]);
+    frame.render_widget(Paragraph::new(right).style(base), right_area);
 }
 
 fn draw_toast(frame: &mut Frame, body: Rect, text: &str) {

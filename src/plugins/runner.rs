@@ -57,6 +57,7 @@ pub fn error_data(id: &str, title: &str, error: String) -> PluginData {
         title: title.to_string(),
         metrics: Vec::new(),
         error: Some(error),
+        lua_bytes: None,
     }
 }
 
@@ -146,7 +147,12 @@ impl Plugin {
             title: card.title.unwrap_or_else(|| self.title().to_string()),
             metrics: card.metrics,
             error: None,
+            lua_bytes: Some(self.lua_bytes()),
         })
+    }
+
+    pub fn lua_bytes(&self) -> usize {
+        self.sandbox.lua.used_memory()
     }
 
     pub fn drop_idle_http(&self) {
@@ -251,7 +257,9 @@ fn run(
                             tx.send(AppEvent::Log(format!("error: plugin {}: {e}", plugin.id())));
                     }
                     last_error = Some(e.clone());
-                    error_data(plugin.id(), plugin.title(), e)
+                    let mut data = error_data(plugin.id(), plugin.title(), e);
+                    data.lua_bytes = Some(plugin.lua_bytes());
+                    data
                 }
             };
             if stop.load(Ordering::Relaxed) || tx.send(AppEvent::Plugin(data)).is_err() {

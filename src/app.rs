@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::File;
 use std::io::{LineWriter, Write};
 use std::time::{Duration, Instant, SystemTime};
@@ -9,7 +9,8 @@ use crate::config::{Config, ConfigStatus, THEME_NAMES};
 use crate::event::AppEvent;
 use crate::format;
 use crate::metrics::SystemSnapshot;
-use crate::plugins::{PluginCard, PluginStatus};
+use crate::plugins::{PluginCard, PluginData, PluginStatus};
+use crate::selfmem::{self, MB, SelfMemory};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Overlay {
@@ -131,6 +132,10 @@ pub struct AppState {
     pub settings_footer: Option<Result<String, String>>,
     /// Plugin files found when the settings overlay was opened.
     pub plugin_ids: Vec<String>,
+    /// The last reading of this program's own memory.
+    pub self_memory: Option<SelfMemory>,
+    pub over_budget: bool,
+    plugins_over_budget: BTreeSet<String>,
     log_sink: Option<LineWriter<File>>,
 }
 
@@ -157,6 +162,9 @@ impl AppState {
             settings_cursor: 0,
             settings_footer: None,
             plugin_ids: Vec::new(),
+            self_memory: None,
+            over_budget: false,
+            plugins_over_budget: BTreeSet::new(),
             log_sink: None,
         };
         state.open_log_file();
@@ -222,32 +230,92 @@ impl AppState {
                 push_capped(&mut self.ram_history, snapshot.ram_pct(), cap);
                 self.snapshot = Some(snapshot);
             }
-            AppEvent::Plugin(mut data) => match data.error.take() {
-                // A failed update keeps the last good metrics, shown as stale.
-                Some(err) => match self.plugins.get_mut(&data.id) {
-                    Some(card) => card.status = PluginStatus::Error(err),
-                    None => {
-                        let card = PluginCard {
-                            data,
-                            status: PluginStatus::Error(err),
-                        };
-                        self.plugins.insert(card.data.id.clone(), card);
-                    }
-                },
-                None => {
-                    let card = PluginCard {
-                        data,
-                        status: PluginStatus::Ok,
-                    };
-                    self.plugins.insert(card.data.id.clone(), card);
+            AppEvent::Plugin(data) => {
+                if let Some(bytes) = data.lua_bytes {
+                    self.check_plugin_memory(&data.id, bytes);
                 }
-            },
+                self.store_plugin(data);
+            }
             AppEvent::PluginRemoved(id) => {
                 self.plugins.remove(&id);
+                self.plugins_over_budget.remove(&id);
             }
             AppEvent::Log(text) => self.log(&text),
         }
         self.dirty = true;
+    }
+
+    fn store_plugin(&mut self, mut data: PluginData) {
+        match data.error.take() {
+            // A failed update keeps the last good metrics, shown as stale.
+            Some(err) => match self.plugins.get_mut(&data.id) {
+                Some(card) => {
+                    card.status = PluginStatus::Error(err);
+                    card.data.lua_bytes = data.lua_bytes;
+                }
+                None => {
+                    let card = PluginCard {
+                        data,
+                        status: PluginStatus::Error(err),
+                    };
+                    self.plugins.insert(card.data.id.clone(), card);
+                }
+            },
+            None => {
+                let card = PluginCard {
+                    data,
+                    status: PluginStatus::Ok,
+                };
+                self.plugins.insert(card.data.id.clone(), card);
+            }
+        }
+    }
+
+    /// Logs once when a plugin's Lua memory goes over its budget, and once
+    /// when it comes back. It only warns: nothing is stopped (decision 32).
+    fn check_plugin_memory(&mut self, id: &str, bytes: usize) {
+        let budget = self.config.memory.plugin_budget_mb * MB;
+        let over = bytes as u64 > budget;
+        let was_over = self.plugins_over_budget.contains(id);
+        if over && !was_over {
+            self.plugins_over_budget.insert(id.to_string());
+            self.log(&format!(
+                "warning: memory: plugin {id} uses {:.1} MB of Lua memory, over its {} MB budget",
+                selfmem::mb(bytes as u64),
+                self.config.memory.plugin_budget_mb
+            ));
+        } else if !over && was_over {
+            self.plugins_over_budget.remove(id);
+            self.log(&format!(
+                "memory: plugin {id} is back under its {} MB budget",
+                self.config.memory.plugin_budget_mb
+            ));
+        }
+    }
+
+    /// Stores a reading of the program's own memory; logs once per budget crossing.
+    pub fn record_self_memory(&mut self, m: SelfMemory) {
+        let shown = |m: &SelfMemory| (selfmem::mb(m.working_set) * 10.0).round() as i64;
+        if self.self_memory.as_ref().map(shown) != Some(shown(&m)) {
+            self.dirty = true;
+        }
+        self.self_memory = Some(m);
+        let budget = self.config.memory.budget_mb;
+        let over = m.working_set > budget * MB;
+        if over != self.over_budget {
+            self.over_budget = over;
+            self.dirty = true;
+            let now = selfmem::mb(m.working_set);
+            if over {
+                self.log(&format!(
+                    "warning: memory: {now:.1} MB is over the {budget} MB budget"
+                ));
+            } else {
+                self.log(&format!(
+                    "memory: {now:.1} MB is back under the {budget} MB budget"
+                ));
+            }
+        }
     }
 
     /// The top banner text, or `None` when the settings are fine.
@@ -394,6 +462,7 @@ mod tests {
                 value: "1".into(),
             }],
             error: None,
+            lua_bytes: None,
         };
         state.apply(AppEvent::Plugin(good));
         let mut bad = crate::plugins::runner::error_data("w", "W", "http timeout".into());
@@ -404,6 +473,42 @@ mod tests {
         assert_eq!(card.data.metrics.len(), 1);
         state.apply(AppEvent::PluginRemoved("w".into()));
         assert!(state.plugins.is_empty());
+    }
+
+    #[test]
+    fn memory_budgets_log_each_crossing_once() {
+        let mut state = AppState::new(Config::default(), ConfigStatus::Ok);
+        let budget = state.config.memory.budget_mb * MB;
+        let reading = |ws| SelfMemory {
+            working_set: ws,
+            peak_working_set: None,
+            private: None,
+        };
+        let lines = |s: &AppState| s.log.len();
+        let start = lines(&state);
+        state.record_self_memory(reading(budget - MB));
+        assert!(!state.over_budget);
+        state.record_self_memory(reading(budget + MB));
+        state.record_self_memory(reading(budget + 2 * MB));
+        assert!(state.over_budget);
+        assert_eq!(lines(&state), start + 1, "one line when crossing up");
+        assert_eq!(state.log.back().unwrap().level, Level::Warn);
+        state.record_self_memory(reading(budget - MB));
+        assert_eq!(lines(&state), start + 2, "one line when coming back");
+
+        let mut data = crate::plugins::runner::error_data("p", "P", "x".into());
+        data.error = None;
+        data.lua_bytes = Some((2 * MB) as usize);
+        state.apply(AppEvent::Plugin(data.clone()));
+        state.apply(AppEvent::Plugin(data.clone()));
+        assert_eq!(
+            lines(&state),
+            start + 3,
+            "one plugin warning, not one per update"
+        );
+        data.lua_bytes = Some(1000);
+        state.apply(AppEvent::Plugin(data));
+        assert_eq!(lines(&state), start + 4);
     }
 
     #[test]

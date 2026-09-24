@@ -11,6 +11,8 @@ Usage:
   telemetrix snapshot [--json] [--plugins]  read the metrics once and print them
   telemetrix plugin check <file> [--json] load a plugin, run update() once, print the card
   telemetrix plugin list                  list the plugins that would run
+  telemetrix selftest --memory [--seconds N] [--json]
+                                          measure memory against the budgets, exit 1 if over
   telemetrix themes                       list theme names
   telemetrix config init [--force]        write the default settings file
   telemetrix config path                  print where the settings file is
@@ -40,6 +42,9 @@ pub struct Flags {
     pub exit_on_any_key: bool,
     pub log: Option<PathBuf>,
     pub panic_test: bool,
+    /// Hidden, used by `selftest`: write a memory report here after `selftest_seconds`, then quit.
+    pub selftest_report: Option<PathBuf>,
+    pub selftest_seconds: u64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -64,6 +69,10 @@ pub enum Command {
         plugins: bool,
     },
     Themes,
+    Selftest {
+        seconds: u64,
+        json: bool,
+    },
     /// Hidden: exits 0 when a temperature sensor answers (used by the metrics thread).
     ProbeTemps,
     Config(ConfigCmd),
@@ -83,6 +92,8 @@ struct Switches {
     json: bool,
     force: bool,
     plugins: bool,
+    memory: bool,
+    seconds: Option<u64>,
 }
 
 pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
@@ -128,6 +139,24 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
             Long("json") => sw.json = true,
             Long("force") => sw.force = true,
             Long("plugins") => sw.plugins = true,
+            Long("memory") => sw.memory = true,
+            Long("seconds") => {
+                let n: u64 = text(parser.value())?
+                    .parse()
+                    .map_err(|_| "--seconds needs a whole number")?;
+                if !(5..=3600).contains(&n) {
+                    return Err("--seconds must be 5..3600".into());
+                }
+                sw.seconds = Some(n);
+            }
+            Long("selftest-report") => {
+                flags.selftest_report = Some(parser.value().map_err(|e| e.to_string())?.into())
+            }
+            Long("selftest-seconds") => {
+                flags.selftest_seconds = text(parser.value())?
+                    .parse()
+                    .map_err(|_| "--selftest-seconds needs a whole number")?
+            }
             Short('h') | Long("help") => help = true,
             Short('V') | Long("version") => version = true,
             Value(v) => words.push(v.string().map_err(|_| "arguments must be valid text")?),
@@ -155,6 +184,11 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
     let cmd = match words.as_slice() {
         [] => Command::Tui,
         ["themes"] => Command::Themes,
+        ["selftest"] if sw.memory => Command::Selftest {
+            seconds: sw.seconds.unwrap_or(30),
+            json: sw.json,
+        },
+        ["selftest"] => return Err("selftest needs --memory".into()),
         ["probe-temps"] => Command::ProbeTemps,
         ["plugin", "check", file] => Command::Plugin(PluginCmd::Check {
             file: PathBuf::from(file),
@@ -176,6 +210,7 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
         Command::Config(ConfigCmd::Check { .. })
             | Command::Snapshot { .. }
             | Command::Plugin(PluginCmd::Check { .. })
+            | Command::Selftest { .. }
     );
     if sw.plugins && !matches!(cmd, Command::Snapshot { .. }) {
         return Err("--plugins only applies to snapshot".into());
@@ -216,6 +251,14 @@ mod tests {
         );
         assert_eq!(cli.flags.config, Some(PathBuf::from("x.toml")));
         assert_eq!(run(&["probe-temps"]).unwrap().command, Command::ProbeTemps);
+        let cli = run(&["selftest", "--memory", "--json"]).unwrap();
+        assert_eq!(
+            cli.command,
+            Command::Selftest {
+                seconds: 30,
+                json: true
+            }
+        );
         assert!(
             !HELP.contains("probe-temps"),
             "internal command stays out of --help"
@@ -229,6 +272,8 @@ mod tests {
         assert!(run(&["config", "show", "--json"]).is_err());
         assert!(run(&["frobnicate"]).is_err());
         assert!(run(&["plugin", "check"]).is_err());
+        assert!(run(&["selftest"]).is_err());
+        assert!(run(&["selftest", "--memory", "--seconds", "1"]).is_err());
         assert!(run(&["--bogus"]).is_err());
     }
 }

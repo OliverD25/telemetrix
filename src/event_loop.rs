@@ -14,6 +14,7 @@ use crate::metrics::worker::{self, MetricsCmd, MetricsIntervals};
 use crate::plugins::PluginStatus;
 use crate::plugins::manager::{self, Manager};
 use crate::plugins::runner;
+use crate::selfmem;
 use crate::term::TerminalGuard;
 use crate::themes::{self, Theme};
 use crate::ui;
@@ -24,6 +25,8 @@ pub const HOUSEKEEPING: Duration = Duration::from_secs(2);
 /// capped to pick up new data promptly even on a static theme.
 pub const DRAIN: Duration = Duration::from_millis(250);
 const PANIC_TEST_AFTER: Duration = Duration::from_secs(1);
+/// How often the program reads its own memory (decision 31).
+const SELF_MEMORY_EVERY: Duration = Duration::from_secs(5);
 
 pub fn next_deadline(
     now: Instant,
@@ -90,6 +93,7 @@ fn event_loop(
 ) -> io::Result<()> {
     let start = Instant::now();
     let mut next_house = start + HOUSEKEEPING;
+    let mut next_memory = start;
     let mut next_frame = start;
     loop {
         let now = Instant::now();
@@ -144,6 +148,18 @@ fn event_loop(
         if now >= next_house {
             lp.housekeeping(guard.terminal.size()?);
             next_house = now + HOUSEKEEPING;
+        }
+        if now >= next_memory {
+            if let Some(m) = selfmem::read() {
+                lp.state.record_self_memory(m);
+            }
+            next_memory = now + SELF_MEMORY_EVERY;
+        }
+        if let Some(report) = &lp.flags.selftest_report
+            && start.elapsed() >= Duration::from_secs(lp.flags.selftest_seconds)
+        {
+            let doc = crate::commands::selftest::report_json(&lp.state);
+            return config::write_atomic(report, &format!("{doc:#}"));
         }
         if lp.flags.panic_test && start.elapsed() >= PANIC_TEST_AFTER {
             panic!("--panic-test: deliberate panic to check that the terminal is restored");

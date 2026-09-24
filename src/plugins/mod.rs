@@ -17,6 +17,8 @@ pub struct PluginData {
     pub metrics: Vec<MetricItem>,
     /// Set when loading or `update()` failed; `metrics` is then empty.
     pub error: Option<String>,
+    /// The plugin's Lua memory when the data was sent.
+    pub lua_bytes: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

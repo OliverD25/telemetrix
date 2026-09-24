@@ -48,6 +48,11 @@ pub fn to_json(
     if let Some(plugins) = plugins {
         doc["plugins"] = Value::Array(plugins);
     }
+    let own = crate::selfmem::read();
+    doc["self"] = json!({
+        "working_set_bytes": own.map(|m| m.working_set),
+        "private_bytes": own.and_then(|m| m.private),
+    });
     doc
 }
 
@@ -138,6 +143,10 @@ mod tests {
         assert_eq!(doc["system"]["disks"][0]["mount"], "C:\\");
         assert_eq!(doc["system"]["gpus"], json!([]));
         assert!(doc.get("plugins").is_none());
+        if cfg!(windows) {
+            assert!(doc["self"]["working_set_bytes"].as_u64().unwrap_or(0) > 0);
+            assert!(doc["self"]["private_bytes"].as_u64().unwrap_or(0) > 0);
+        }
         let doc = to_json(&s, "PC", "t", Some(Vec::new()));
         assert_eq!(doc["plugins"], json!([]));
     }

@@ -69,32 +69,20 @@ impl CpuMeter {
 
 #[cfg(windows)]
 fn read_times() -> Option<Times> {
-    #[repr(C)]
-    #[derive(Default)]
-    struct FileTime {
-        low: u32,
-        high: u32,
-    }
-    impl FileTime {
-        fn ticks(&self) -> u64 {
-            (u64::from(self.high) << 32) | u64::from(self.low)
-        }
-    }
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn GetSystemTimes(idle: *mut FileTime, kernel: *mut FileTime, user: *mut FileTime) -> i32;
-    }
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::GetSystemTimes;
+    let ticks = |t: &FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
     let (mut idle, mut kernel, mut user) = (
-        FileTime::default(),
-        FileTime::default(),
-        FileTime::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
     );
-    // SAFETY: three valid, writable FILETIME-shaped structs; the call only writes them.
+    // SAFETY: three valid, writable FILETIME values; the call only writes them.
     let ok = unsafe { GetSystemTimes(&mut idle, &mut kernel, &mut user) } != 0;
     // Kernel time already includes idle time.
     ok.then(|| Times {
-        idle: idle.ticks(),
-        total: kernel.ticks() + user.ticks(),
+        idle: ticks(&idle),
+        total: ticks(&kernel) + ticks(&user),
     })
 }
 

@@ -7,6 +7,7 @@ mod event_loop;
 mod format;
 mod metrics;
 mod plugins;
+mod selfmem;
 mod term;
 mod themes;
 mod ui;
@@ -32,6 +33,7 @@ fn main() -> ExitCode {
             println!("telemetrix {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
+        Command::Selftest { seconds, json } => commands::selftest::run(seconds, json, &cli.flags),
         Command::ProbeTemps => {
             if metrics::worker::any_temperature() {
                 ExitCode::SUCCESS

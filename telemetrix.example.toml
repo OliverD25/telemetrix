@@ -36,6 +36,10 @@ memory_limit_mb = 8         # per plugin, 1..64
 rescan_interval_s = 60      # 0 = rescan only on the r key
 max_plugins = 16            # at most this many plugins run, 1..64
 
+[memory]
+budget_mb = 13              # whole program, above it the status bar turns amber
+plugin_budget_mb = 1        # Lua memory per plugin, above it one log warning
+
 [theme.matrix]
 density = 0.5               # 0.0..1.0
 speed = 1.0                 # 0.1..5.0

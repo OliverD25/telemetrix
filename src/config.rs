@@ -18,6 +18,11 @@ pub const THEME_NAMES: &[&str] = &["minimalist", "matrix"];
 pub const MATRIX_COLORS: &[&str] = &["green", "amber", "cyan", "white"];
 const FILE_NAME: &str = "telemetrix.toml";
 const PLUGIN_MIN_INTERVAL: i64 = 5;
+/// The default setup (Matrix + 5 plugins) measured 11.1-11.3 MB working set
+/// in step 9 (`selftest --memory`); 13 MB leaves about 15 % headroom.
+const DEFAULT_BUDGET_MB: i64 = 13;
+/// The core (no plugins) must stay under this (decision 30, fixed).
+pub const CORE_BUDGET_MB: u64 = 10;
 
 // Str and StrList have no registry key yet; plugin settings may use them later.
 #[allow(dead_code)]
@@ -297,6 +302,20 @@ pub static SETTINGS: &[Setting] = &[
         "at most this many plugins run, 1..64",
     ),
     setting(
+        "memory.budget_mb",
+        int(5, 1024),
+        Value::Int(DEFAULT_BUDGET_MB),
+        true,
+        "whole program, above it the status bar turns amber",
+    ),
+    setting(
+        "memory.plugin_budget_mb",
+        int(1, 64),
+        Value::Int(1),
+        true,
+        "Lua memory per plugin, above it one log warning",
+    ),
+    setting(
         "theme.matrix.density",
         Kind::Float { min: 0.0, max: 1.0 },
         Value::Float(0.5),
@@ -400,6 +419,13 @@ pub struct Thresholds {
     pub disk_warn_pct: f32,
 }
 
+/// Budgets only warn; nothing is stopped because of memory (decision 32).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Memory {
+    pub budget_mb: u64,
+    pub plugin_budget_mb: u64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Plugins {
     pub enabled: bool,
@@ -451,6 +477,7 @@ pub struct Config {
     pub metrics: Metrics,
     pub thresholds: Thresholds,
     pub plugins: Plugins,
+    pub memory: Memory,
     pub theme_matrix: ThemeMatrix,
     pub theme_minimalist: ThemeMinimalist,
     pub plugin_cfg: BTreeMap<String, PluginConfig>,
@@ -482,6 +509,10 @@ impl Default for Config {
                 cpu_warn_pct: 0.0,
                 temp_warn_c: 0.0,
                 disk_warn_pct: 0.0,
+            },
+            memory: Memory {
+                budget_mb: 0,
+                plugin_budget_mb: 0,
             },
             plugins: Plugins {
                 enabled: false,
@@ -556,6 +587,8 @@ impl Config {
             "plugins.memory_limit_mb" => Value::Int(p.memory_limit_mb as i64),
             "plugins.rescan_interval_s" => Value::Int(p.rescan_interval_s as i64),
             "plugins.max_plugins" => Value::Int(p.max_plugins as i64),
+            "memory.budget_mb" => Value::Int(self.memory.budget_mb as i64),
+            "memory.plugin_budget_mb" => Value::Int(self.memory.plugin_budget_mb as i64),
             "theme.matrix.density" => Value::Float(self.theme_matrix.density),
             "theme.matrix.speed" => Value::Float(self.theme_matrix.speed),
             "theme.matrix.color" => Value::Str(self.theme_matrix.color.clone().into()),
@@ -608,6 +641,8 @@ impl Config {
             "plugins.memory_limit_mb" => p.memory_limit_mb = clamp_u64(v),
             "plugins.rescan_interval_s" => p.rescan_interval_s = clamp_u64(v),
             "plugins.max_plugins" => p.max_plugins = clamp_u64(v) as usize,
+            "memory.budget_mb" => self.memory.budget_mb = clamp_u64(v),
+            "memory.plugin_budget_mb" => self.memory.plugin_budget_mb = clamp_u64(v),
             "theme.matrix.density" => self.theme_matrix.density = v.as_f64(),
             "theme.matrix.speed" => self.theme_matrix.speed = v.as_f64(),
             "theme.matrix.color" => self.theme_matrix.color = v.as_str().to_string(),
@@ -1138,6 +1173,8 @@ mod tests {
         assert!(text.contains("\nfps = 15                    # frames per second"));
         assert!(text.contains("\n[theme.matrix]\ndensity = 0.5"));
         assert!(text.contains("\n[plugin.crypto]\ninterval = 120\n"));
+        assert!(text.contains("\n[memory]\nbudget_mb = 13 "));
+        assert!(text.contains("\nplugin_budget_mb = 1 "));
     }
 
     #[test]
