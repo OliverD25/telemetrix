@@ -2,6 +2,7 @@
 
 mod help_overlay;
 mod log_overlay;
+pub mod settings_overlay;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -51,7 +52,8 @@ pub fn draw(frame: &mut Frame, state: &AppState, theme: &mut dyn Theme) {
         draw_toast(frame, body, text);
     }
     match state.overlay {
-        Overlay::None | Overlay::Settings => {}
+        Overlay::None => {}
+        Overlay::Settings => settings_overlay::draw(frame, area, state),
         Overlay::Log => log_overlay::draw(frame, area, &state.log),
         Overlay::Help => help_overlay::draw(frame, area),
     }
@@ -78,7 +80,7 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &AppState) {
                 .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" · t theme · l log · ? help · q quit"),
+        Span::raw(" · t theme · s settings · l log · ? help · q quit"),
     ]);
     frame.render_widget(Paragraph::new(left).style(base), left_area);
     frame.render_widget(
@@ -214,7 +216,13 @@ mod tests {
                 message: "expected `=`".into(),
             };
             s.toast = Some(("hello".into(), std::time::Instant::now()));
-            for overlay in [Overlay::None, Overlay::Log, Overlay::Help] {
+            s.plugin_ids = vec!["clock".into(), "weather".into()];
+            for overlay in [
+                Overlay::None,
+                Overlay::Log,
+                Overlay::Help,
+                Overlay::Settings,
+            ] {
                 s.overlay = overlay;
                 for (w, h) in [(120, 40), (80, 24), (64, 16), (40, 10)] {
                     let buf = render(&s, w, h);

@@ -1,6 +1,3 @@
-// TEMP: later steps (metrics, themes, plugins, settings overlay) use the remaining items.
-#![allow(dead_code)]
-
 mod app;
 mod cli;
 mod commands;

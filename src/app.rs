@@ -16,8 +16,6 @@ pub enum Overlay {
     None,
     Log,
     Help,
-    /// Filled in by the settings overlay step.
-    #[allow(dead_code)]
     Settings,
 }
 
@@ -56,6 +54,15 @@ impl LogLine {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     Quit,
+    ToggleSettings,
+    SettingsUp,
+    SettingsDown,
+    /// Next (`dir` 1) or previous (`dir` -1) value; `big` = Shift, ten steps.
+    SettingsStep {
+        dir: i32,
+        big: bool,
+    },
+    FpsStep(i32),
     NextTheme,
     PrevTheme,
     ToggleLog,
@@ -77,11 +84,24 @@ pub fn key_action(key: &KeyEvent, overlay: Overlay, exit_on_any_key: bool) -> Ac
             Action::Nothing
         };
     }
+    if overlay == Overlay::Settings {
+        let big = key.modifiers.contains(KeyModifiers::SHIFT);
+        match key.code {
+            KeyCode::Up => return Action::SettingsUp,
+            KeyCode::Down => return Action::SettingsDown,
+            KeyCode::Enter | KeyCode::Right => return Action::SettingsStep { dir: 1, big },
+            KeyCode::Left => return Action::SettingsStep { dir: -1, big },
+            _ => {}
+        }
+    }
     match key.code {
         KeyCode::Esc if overlay != Overlay::None => Action::CloseOverlay,
         KeyCode::Esc | KeyCode::Char('q') => Action::Quit,
         KeyCode::Char('t') => Action::NextTheme,
         KeyCode::Char('T') => Action::PrevTheme,
+        KeyCode::Char('s') => Action::ToggleSettings,
+        KeyCode::Char('+') | KeyCode::Char('=') => Action::FpsStep(1),
+        KeyCode::Char('-') => Action::FpsStep(-1),
         KeyCode::Char('l') => Action::ToggleLog,
         KeyCode::Char('?') => Action::ToggleHelp,
         KeyCode::Char(' ') => Action::TogglePause,
@@ -106,11 +126,16 @@ pub struct AppState {
     pub dirty: bool,
     /// A short message at the bottom and the moment it disappears.
     pub toast: Option<(String, Instant)>,
+    pub settings_cursor: usize,
+    /// The result of the last save from the settings overlay: the path or the error.
+    pub settings_footer: Option<Result<String, String>>,
+    /// Plugin files found when the settings overlay was opened.
+    pub plugin_ids: Vec<String>,
     log_sink: Option<LineWriter<File>>,
 }
 
 pub fn theme_index(name: &str) -> usize {
-    THEME_NAMES.iter().position(|t| *t == name).unwrap_or(0)
+    crate::themes::index_of(name).unwrap_or(0)
 }
 
 impl AppState {
@@ -129,6 +154,9 @@ impl AppState {
             paused: false,
             dirty: true,
             toast: None,
+            settings_cursor: 0,
+            settings_footer: None,
+            plugin_ids: Vec::new(),
             log_sink: None,
         };
         state.open_log_file();
@@ -290,6 +318,35 @@ mod tests {
         assert_eq!(
             key_action(&key(KeyCode::Char('r')), none, false),
             Action::Reload
+        );
+    }
+
+    #[test]
+    fn settings_overlay_keys() {
+        let s = Overlay::Settings;
+        assert_eq!(key_action(&key(KeyCode::Up), s, false), Action::SettingsUp);
+        assert_eq!(
+            key_action(&key(KeyCode::Enter), s, false),
+            Action::SettingsStep { dir: 1, big: false }
+        );
+        let shift_left = KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT);
+        assert_eq!(
+            key_action(&shift_left, s, false),
+            Action::SettingsStep { dir: -1, big: true }
+        );
+        assert_eq!(
+            key_action(&key(KeyCode::Esc), s, false),
+            Action::CloseOverlay
+        );
+        let none = Overlay::None;
+        assert_eq!(key_action(&key(KeyCode::Up), none, false), Action::Nothing);
+        assert_eq!(
+            key_action(&key(KeyCode::Char('s')), none, false),
+            Action::ToggleSettings
+        );
+        assert_eq!(
+            key_action(&key(KeyCode::Char('+')), none, false),
+            Action::FpsStep(1)
         );
     }
 

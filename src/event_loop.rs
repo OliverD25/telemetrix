@@ -12,10 +12,12 @@ use crate::config::{self, Config, ConfigStatus, LoadOutcome, THEME_NAMES, Value}
 use crate::event::{AppEvent, WorkerCmd};
 use crate::metrics::worker::{self, MetricsCmd, MetricsIntervals};
 use crate::plugins::PluginStatus;
-use crate::plugins::manager::Manager;
+use crate::plugins::manager::{self, Manager};
+use crate::plugins::runner;
 use crate::term::TerminalGuard;
 use crate::themes::{self, Theme};
 use crate::ui;
+use crate::ui::settings_overlay::{self, Change};
 
 pub const HOUSEKEEPING: Duration = Duration::from_secs(2);
 /// `poll` does not wake when a worker sends on the channel, so the wait is
@@ -168,6 +170,47 @@ impl Loop {
             Action::Quit => self.quit = true,
             Action::NextTheme => self.cycle_theme(1),
             Action::PrevTheme => self.cycle_theme(THEME_NAMES.len() - 1),
+            Action::ToggleSettings => {
+                if s.overlay != Overlay::Settings {
+                    s.plugin_ids = manager::discover(self.plugins.dir())
+                        .iter()
+                        .map(|(p, _)| runner::stem(p))
+                        .collect();
+                    s.settings_footer = None;
+                }
+                s.toggle_overlay(Overlay::Settings);
+            }
+            Action::SettingsUp => {
+                s.settings_cursor = s.settings_cursor.saturating_sub(1);
+                s.dirty = true;
+            }
+            Action::SettingsDown => {
+                let rows = settings_overlay::rows(&s.plugin_ids);
+                let last = settings_overlay::selectable(&rows).len().saturating_sub(1);
+                s.settings_cursor = (s.settings_cursor + 1).min(last);
+                s.dirty = true;
+            }
+            Action::SettingsStep { dir, big } => {
+                let rows = settings_overlay::rows(&s.plugin_ids);
+                let sel = settings_overlay::selectable(&rows);
+                let row = &rows[sel[s.settings_cursor.min(sel.len() - 1)]];
+                if let Some(change) = settings_overlay::step(row, &s.config, dir, big) {
+                    self.change(change);
+                }
+            }
+            Action::FpsStep(dir) => {
+                let fps = i64::from(s.config.general.fps);
+                let next = settings_overlay::step_int(fps, 1, 60, dir, false);
+                // + and - stop at the ends instead of wrapping like the overlay does.
+                let next = if dir > 0 {
+                    next.max(fps)
+                } else {
+                    next.min(fps)
+                };
+                self.change(Change::Set("general.fps".into(), Value::Int(next)));
+                let shown = self.state.config.general.fps;
+                self.state.show_toast(&format!("{shown} fps"));
+            }
             Action::ToggleLog => s.toggle_overlay(Overlay::Log),
             Action::ToggleHelp => s.toggle_overlay(Overlay::Help),
             Action::CloseOverlay => s.toggle_overlay(Overlay::None),
@@ -181,16 +224,32 @@ impl Loop {
     }
 
     fn cycle_theme(&mut self, step: usize) {
+        let idx = (self.state.theme_idx + step) % THEME_NAMES.len();
+        self.change(Change::Set(
+            "general.theme".into(),
+            Value::Str(THEME_NAMES[idx].into()),
+        ));
+    }
+
+    /// Applies one change from a key press at once, then saves it to the file.
+    fn change(&mut self, change: Change) {
+        // The user chose this value, so a command-line flag must stop overriding it.
+        config::release_flag(&mut self.flags, change.key());
+        let mut new = self.state.config.clone();
+        settings_overlay::apply(&mut new, &change);
+        self.adopt(new, false);
+        let saved = settings_overlay::save(&self.path, &change);
+        // This write needs no reload: the settings in memory already match it.
+        self.last_mtime = mtime(&self.path);
         let s = &mut self.state;
-        s.theme_idx = (s.theme_idx + step) % THEME_NAMES.len();
-        let name = THEME_NAMES[s.theme_idx];
-        s.config.general.theme = name.to_string();
+        s.settings_footer = Some(match saved {
+            Ok(()) => Ok(self.path.display().to_string()),
+            Err(e) => {
+                s.log(&format!("error: cannot save {}: {e}", self.path.display()));
+                Err(e.to_string())
+            }
+        });
         s.dirty = true;
-        // The user picked a theme, so a --theme flag must stop overriding it on reload.
-        self.flags.theme = None;
-        if let Err(e) = config::set(&self.path, "general.theme", &Value::Str(name.into())) {
-            s.log(&format!("error: cannot save {}: {e}", self.path.display()));
-        }
     }
 
     fn rescan_plugins(&mut self, announce: bool) {
@@ -272,10 +331,10 @@ impl Loop {
             self.state.dirty = true;
         }
         self.state.config_status = status;
-        self.adopt(config);
+        self.adopt(config, true);
     }
 
-    fn adopt(&mut self, new: Config) {
+    fn adopt(&mut self, new: Config, announce: bool) {
         let old = std::mem::replace(&mut self.state.config, new);
         let new = &self.state.config;
         if looks_different(&old, new) {
@@ -295,7 +354,9 @@ impl Loop {
         if old.general.log_file != self.state.config.general.log_file {
             self.state.open_log_file();
         }
-        self.state.log("config reloaded");
+        if announce {
+            self.state.log("config reloaded");
+        }
     }
 }
 

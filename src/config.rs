@@ -1009,6 +1009,36 @@ pub fn set(path: &Path, key: &str, value: &Value) -> io::Result<()> {
     write_atomic(path, &doc.to_string())
 }
 
+/// Removes one dotted key from the file, so its default applies again.
+pub fn unset(path: &Path, key: &str) -> io::Result<()> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    let mut doc: DocumentMut = text.parse().map_err(|e: toml_edit::TomlError| {
+        invalid(format!(
+            "cannot save, the file has a syntax error: {}",
+            e.message().trim()
+        ))
+    })?;
+    let parts: Vec<&str> = key.split('.').collect();
+    let Some((last, tables)) = parts.split_last() else {
+        return Ok(());
+    };
+    let mut table = doc.as_table_mut();
+    for part in tables {
+        match table.get_mut(part).and_then(Item::as_table_mut) {
+            Some(t) => table = t,
+            None => return Ok(()),
+        }
+    }
+    if table.remove(last).is_none() {
+        return Ok(());
+    }
+    write_atomic(path, &doc.to_string())
+}
+
 /// Copies the old value's decor, adjusting the spaces before a trailing
 /// comment so the `#` column stays where it was when there is room.
 fn keep_comment_column(old: &toml_edit::Value, new: &toml_edit::Value) -> toml_edit::Decor {
@@ -1056,6 +1086,17 @@ pub fn apply_flags(cfg: &mut Config, flags: &Flags) {
     }
     if let Some(log) = &flags.log {
         cfg.general.log_file = log.clone();
+    }
+}
+
+/// The user changed `key` in the dashboard, so its flag stops overriding it.
+pub fn release_flag(flags: &mut Flags, key: &str) {
+    match key {
+        "general.theme" => flags.theme = None,
+        "general.fps" => flags.fps = None,
+        "plugins.enabled" => flags.no_plugins = false,
+        "general.exit_on_any_key" => flags.exit_on_any_key = false,
+        _ => {}
     }
 }
 
@@ -1184,6 +1225,19 @@ mod tests {
                 ),
             ]
         );
+        set(&file, "plugin.weather.interval", &Value::Int(30)).unwrap();
+        set(&file, "plugin.clock.interval", &Value::Int(30)).unwrap();
+        unset(&file, "plugin.weather.interval").unwrap();
+        unset(&file, "plugin.clock.interval").unwrap();
+        unset(&file, "plugin.nothing.here").unwrap();
+        let parsed = parse_text(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(
+            parsed.config.plugin_cfg["weather"].interval,
+            Some(600),
+            "built-in default"
+        );
+        assert_eq!(parsed.config.plugin_cfg["clock"].interval, None);
+        assert!(parsed.problems.is_empty());
         set(
             &dir.join("new").join("t.toml"),
             "general.theme",

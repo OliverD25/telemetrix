@@ -6,10 +6,13 @@ use ratatui::widgets::Paragraph;
 
 use crate::themes::common::fg;
 
-const KEYS: [(&str, &str); 7] = [
+const KEYS: [(&str, &str); 10] = [
     ("q  Esc  Ctrl+C", "quit (Esc closes an open overlay first)"),
     ("t / T", "next / previous theme"),
     ("space", "pause the animation"),
+    ("s", "settings (changes are saved at once)"),
+    ("Shift + Left/Right", "settings: ten steps at once"),
+    ("+ / -", "more / fewer frames per second"),
     ("l", "log overlay"),
     ("r", "rescan plugins"),
     ("?", "this help"),
