@@ -12,7 +12,8 @@ use ratatui::widgets::Paragraph;
 use crate::app::{self, Action, AppState, Overlay};
 use crate::cli::Flags;
 use crate::config::{self, Config, ConfigStatus, LoadOutcome, THEME_NAMES, Value};
-use crate::event::AppEvent;
+use crate::event::{AppEvent, WorkerCmd};
+use crate::metrics::worker::{self, MetricsCmd, MetricsIntervals};
 use crate::term::TerminalGuard;
 
 pub const HOUSEKEEPING: Duration = Duration::from_secs(2);
@@ -43,11 +44,13 @@ struct Loop {
     last_mtime: Option<SystemTime>,
     last_size: Size,
     quit: bool,
+    metrics: mpsc::Sender<MetricsCmd>,
 }
 
 pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags) -> io::Result<()> {
     let path = config::resolve_path(flags.config.as_deref());
-    let (_tx, rx) = mpsc::channel::<AppEvent>();
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let (metrics, _metrics_thread) = worker::spawn(MetricsIntervals::from_config(&cfg), tx);
     let mut state = AppState::new(cfg, status);
     state.log(&format!(
         "telemetrix {} started, settings: {}",
@@ -67,7 +70,18 @@ pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags) -> io::Result<()> {
         path,
         last_size: guard.terminal.size()?,
         quit: false,
+        metrics,
     };
+    let result = event_loop(&mut lp, &mut guard, &rx);
+    let _ = lp.metrics.send(WorkerCmd::Stop);
+    result
+}
+
+fn event_loop(
+    lp: &mut Loop,
+    guard: &mut TerminalGuard,
+    rx: &mpsc::Receiver<AppEvent>,
+) -> io::Result<()> {
     let start = Instant::now();
     let mut next_house = start + HOUSEKEEPING;
     let mut next_frame = start;
@@ -202,6 +216,10 @@ impl Loop {
         if looks_different(&old, new) {
             self.state.theme_idx = app::theme_index(&new.general.theme);
             self.state.dirty = true;
+        }
+        let intervals = MetricsIntervals::from_config(new);
+        if MetricsIntervals::from_config(&old) != intervals {
+            let _ = self.metrics.send(WorkerCmd::Reconfigure(intervals));
         }
         if old.general.log_file != new.general.log_file {
             self.state.open_log_file();

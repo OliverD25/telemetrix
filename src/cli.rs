@@ -8,6 +8,7 @@ telemetrix (TermSaver): terminal screensaver and live system telemetry dashboard
 
 Usage:
   telemetrix [flags]                      dashboard
+  telemetrix snapshot [--json] [--plugins]  read the metrics once and print them
   telemetrix config init [--force]        write the default settings file
   telemetrix config path                  print where the settings file is
   telemetrix config check [--json]        list every problem in the settings file
@@ -49,6 +50,7 @@ pub enum ConfigCmd {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Tui,
+    Snapshot { json: bool, plugins: bool },
     Config(ConfigCmd),
     Help,
     Version,
@@ -64,6 +66,7 @@ pub struct Cli {
 struct Switches {
     json: bool,
     force: bool,
+    plugins: bool,
 }
 
 pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
@@ -108,6 +111,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
             Long("panic-test") => flags.panic_test = true,
             Long("json") => sw.json = true,
             Long("force") => sw.force = true,
+            Long("plugins") => sw.plugins = true,
             Short('h') | Long("help") => help = true,
             Short('V') | Long("version") => version = true,
             Value(v) => words.push(v.string().map_err(|_| "arguments must be valid text")?),
@@ -134,13 +138,23 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
     let words: Vec<&str> = words.iter().map(String::as_str).collect();
     let cmd = match words.as_slice() {
         [] => Command::Tui,
+        ["snapshot"] => Command::Snapshot {
+            json: sw.json,
+            plugins: sw.plugins,
+        },
         ["config", "init"] => Command::Config(ConfigCmd::Init { force: sw.force }),
         ["config", "path"] => Command::Config(ConfigCmd::Path),
         ["config", "check"] => Command::Config(ConfigCmd::Check { json: sw.json }),
         ["config", "show"] => Command::Config(ConfigCmd::Show),
         _ => return Err(format!("unknown command {:?}, see --help", words.join(" "))),
     };
-    let takes_json = matches!(cmd, Command::Config(ConfigCmd::Check { .. }));
+    let takes_json = matches!(
+        cmd,
+        Command::Config(ConfigCmd::Check { .. }) | Command::Snapshot { .. }
+    );
+    if sw.plugins && !matches!(cmd, Command::Snapshot { .. }) {
+        return Err("--plugins only applies to snapshot".into());
+    }
     if sw.json && !takes_json {
         return Err("--json does not apply to this command".into());
     }

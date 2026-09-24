@@ -1,3 +1,5 @@
+pub mod worker;
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SystemSnapshot {
     pub cpu_usage: f32,

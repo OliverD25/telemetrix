@@ -895,6 +895,23 @@ fn read_plugin_tables(
     }
 }
 
+/// Settings file path, effective settings (file, then flags) and status.
+pub fn load_effective(flags: &Flags) -> (PathBuf, Config, ConfigStatus) {
+    let path = resolve_path(flags.config.as_deref());
+    let (mut cfg, status) = match load(&path) {
+        LoadOutcome::Loaded { config, warnings } if warnings.is_empty() => {
+            (config, ConfigStatus::Ok)
+        }
+        LoadOutcome::Loaded { config, warnings } => (config, ConfigStatus::Warnings(warnings)),
+        LoadOutcome::Syntax { line, message } => {
+            (Config::default(), ConfigStatus::Syntax { line, message })
+        }
+        LoadOutcome::Missing => (Config::default(), ConfigStatus::Ok),
+    };
+    apply_flags(&mut cfg, flags);
+    (path, cfg, status)
+}
+
 /// `--config` → `TELEMETRIX_CONFIG` → next to the executable → OS config dir.
 pub fn resolve_path(flag: Option<&Path>) -> PathBuf {
     let exe_dir = std::env::current_exe()

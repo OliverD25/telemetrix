@@ -1,5 +1,49 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::config::{BytesUnit, TempUnit};
+
+const SPARK: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// Binary units (GiB) or decimal units (GB), one decimal place.
+pub fn bytes(n: u64, unit: BytesUnit) -> String {
+    let (base, names) = match unit {
+        BytesUnit::Decimal => (1000.0, ["B", "KB", "MB", "GB", "TB", "PB"]),
+        BytesUnit::Binary => (1024.0, ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]),
+    };
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= base && i < names.len() - 1 {
+        v /= base;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", names[i])
+    }
+}
+
+pub fn pct(v: f32) -> String {
+    format!("{v:.1} %")
+}
+
+pub fn temperature(c: f32, unit: TempUnit) -> String {
+    match unit {
+        TempUnit::Celsius => format!("{c:.1} °C"),
+        TempUnit::Fahrenheit => format!("{:.1} °F", c * 9.0 / 5.0 + 32.0),
+    }
+}
+
+/// The last `width` percentages (0..100) as block glyphs, right-aligned.
+pub fn sparkline(values: &[f32], width: usize) -> String {
+    let skip = values.len().saturating_sub(width);
+    let glyphs: String = values[skip..]
+        .iter()
+        .map(|v| SPARK[((v / 100.0).clamp(0.0, 1.0) * 7.0).round() as usize])
+        .collect();
+    format!("{glyphs:>width$}")
+}
+
 fn unix_secs(t: SystemTime) -> u64 {
     t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
@@ -47,5 +91,32 @@ mod tests {
         assert_eq!(utc_timestamp(t), "2000-03-01T01:01:01Z");
         let t = UNIX_EPOCH + Duration::from_secs(1_790_366_400);
         assert_eq!(utc_timestamp(t), "2026-09-25T20:00:00Z");
+        assert_eq!(utc_hms(t), "20:00:00");
+    }
+
+    #[test]
+    fn byte_units() {
+        let gib = 1u64 << 30;
+        assert_eq!(bytes(512, BytesUnit::Binary), "512 B");
+        assert_eq!(bytes(gib * 319 / 10, BytesUnit::Binary), "31.9 GiB");
+        assert_eq!(bytes(gib * 319 / 10, BytesUnit::Decimal), "34.3 GB");
+        assert_eq!(bytes(2 * gib * 1024, BytesUnit::Binary), "2.0 TiB");
+        assert_eq!(bytes(1_500_000, BytesUnit::Decimal), "1.5 MB");
+    }
+
+    #[test]
+    fn percent_and_temperature() {
+        assert_eq!(pct(12.34), "12.3 %");
+        assert_eq!(temperature(55.0, TempUnit::Celsius), "55.0 °C");
+        assert_eq!(temperature(55.0, TempUnit::Fahrenheit), "131.0 °F");
+        assert_eq!(temperature(-40.0, TempUnit::Fahrenheit), "-40.0 °F");
+    }
+
+    #[test]
+    fn sparkline_glyphs_and_width() {
+        assert_eq!(sparkline(&[0.0, 50.0, 100.0], 3), "▁▅█");
+        assert_eq!(sparkline(&[0.0, 100.0], 4), "  ▁█");
+        assert_eq!(sparkline(&[10.0, 0.0, 100.0, 250.0], 2), "██");
+        assert_eq!(sparkline(&[], 0), "");
     }
 }
