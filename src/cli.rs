@@ -18,6 +18,7 @@ Usage:
   telemetrix config path                  print where the settings file is
   telemetrix config check [--json]        list every problem in the settings file
   telemetrix config show                  print effective settings and their source
+  telemetrix config reference             print every setting as a Markdown table
 
 Flags:
   --config <path>       settings file to use
@@ -53,6 +54,7 @@ pub enum ConfigCmd {
     Path,
     Check { json: bool },
     Show,
+    Reference,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -203,6 +205,7 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
         ["config", "path"] => Command::Config(ConfigCmd::Path),
         ["config", "check"] => Command::Config(ConfigCmd::Check { json: sw.json }),
         ["config", "show"] => Command::Config(ConfigCmd::Show),
+        ["config", "reference"] => Command::Config(ConfigCmd::Reference),
         _ => return Err(format!("unknown command {:?}, see --help", words.join(" "))),
     };
     let takes_json = matches!(

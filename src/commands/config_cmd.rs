@@ -20,6 +20,10 @@ pub fn run(cmd: ConfigCmd, flags: &Flags) -> ExitCode {
         }
         ConfigCmd::Check { json } => check(&path, json),
         ConfigCmd::Show => show(&path, flags),
+        ConfigCmd::Reference => {
+            print!("{}", config::reference_markdown());
+            ExitCode::SUCCESS
+        }
     }
 }
 

@@ -989,6 +989,37 @@ fn split_path(path: &str) -> (&str, &str) {
     path.rsplit_once('.').unwrap_or(("", path))
 }
 
+/// The settings reference for the README, as a Markdown table.
+pub fn reference_markdown() -> String {
+    let mut out = String::from(
+        "| Key | Default | Allowed values | In the `s` overlay | Meaning |\n|---|---|---|---|---|\n",
+    );
+    for s in SETTINGS {
+        let allowed = match &s.kind {
+            Kind::Enum(options) => options.join(r" \| "),
+            Kind::Int { min, max } => format!("{min}..{max}"),
+            Kind::Float { min, max } => format!("{min:?}..{max:?}"),
+            Kind::Bool => r"true \| false".into(),
+            Kind::Str => "text".into(),
+            Kind::Path => "a file or folder path".into(),
+            Kind::StrList => "list of texts".into(),
+            Kind::Color => format!(r"{} \| #rrggbb", MATRIX_COLORS.join(r" \| ")),
+        };
+        let overlay = if s.tui_editable {
+            "yes"
+        } else {
+            "no, edit the file"
+        };
+        out.push_str(&format!(
+            "| `{}` | `{}` | {allowed} | {overlay} | {} |\n",
+            s.path,
+            s.default,
+            s.help.replace('|', r"\|")
+        ));
+    }
+    out
+}
+
 pub fn render_default_file() -> String {
     let mut out = String::from(HEADER);
     let mut section = "";
@@ -1175,6 +1206,15 @@ mod tests {
         assert!(text.contains("\n[plugin.crypto]\ninterval = 120\n"));
         assert!(text.contains("\n[memory]\nbudget_mb = 13 "));
         assert!(text.contains("\nplugin_budget_mb = 1 "));
+    }
+
+    #[test]
+    fn readme_reference_matches_the_registry() {
+        let readme = include_str!("../README.md").replace("\r\n", "\n");
+        assert!(
+            readme.contains(&reference_markdown()),
+            "README.md is out of date: paste the output of `telemetrix config reference`"
+        );
     }
 
     #[test]
