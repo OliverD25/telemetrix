@@ -267,6 +267,53 @@ core       7.4 MB    7.4 MB    2.0 MB   10 MB  ok  (0 plugins)
 Run it before every release. Agents should run it after any change to the
 code or the plugins.
 
+## Linux
+
+telemetrix builds and runs the same way on Linux. You need Rust 1.95 or newer
+and a C compiler (gcc or clang) for the Lua interpreter.
+
+```
+cargo install --path .
+```
+
+This puts `telemetrix` in `~/.cargo/bin`. Copy the `plugins` folder next to
+it, or set `general.plugins_dir` to an absolute path.
+
+- **Settings file:** `~/.config/telemetrix/telemetrix.toml`, or
+  `$XDG_CONFIG_HOME/telemetrix/telemetrix.toml` when that variable is set.
+- **Start it automatically:** see the swayidle and xautolock recipes under
+  "Starting it automatically".
+- **Disks:** system and package mounts are not shown: snap images (`/snap`),
+  and on WSL its own mounts (`/usr/lib/wsl`, `/usr/lib/modules`,
+  `/mnt/wslg`, `/mnt/wsl`, `/init`). On WSL, the Windows drives at
+  `/mnt/c`, `/mnt/d` and so on are local disks of the host and appear as
+  "C: (/mnt/c)".
+- **Network drives:** nfs, nfs4, cifs, smb3, smbfs, fuse.sshfs and 9p mounts
+  go to the Network card. A hung network mount can still delay the disk
+  readings in v0.1.
+- **CPU temperature:** read from hwmon. telemetrix prefers the Intel
+  package sensor (`coretemp`, "Package id 0"), then the AMD control
+  temperature (`k10temp`, "Tctl"), then any other CPU sensor. WSL and most
+  virtual machines have no sensors; the line is then hidden.
+- **Containers:** sysinfo takes cgroup limits into account, so inside a
+  container the total RAM can be the container's limit, not the machine's.
+- **Signals:** SIGTERM, SIGHUP (the terminal was closed) and SIGINT end the
+  dashboard cleanly and restore the terminal. If the terminal is already
+  gone, the program still exits within about a second.
+- **`selftest --memory`** needs the `script` command from util-linux (part
+  of every common distribution); it gives each run a pseudo-terminal.
+
+Measured in WSL 2 (Ubuntu 24.04, release build, 30 seconds after the start,
+resident memory; Linux has no cheap "private bytes" figure):
+
+| Setup | Resident memory |
+|---|---|
+| no plugins | 4.0 MB |
+| 5 plugins, matrix (default) | 5.6 MB |
+
+These are WSL numbers: Linux shares library pages differently from Windows,
+so they are not comparable with the Windows table above.
+
 ## Guide for agents
 
 - **Change the settings file safely.** Write the new content to a temporary

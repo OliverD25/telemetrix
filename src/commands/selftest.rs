@@ -1,8 +1,9 @@
 //! `telemetrix selftest --memory`: the memory regression guard (decision 33).
 //!
-//! It starts the real dashboard twice in a hidden console, one run after
+//! It starts the real dashboard twice, one run after
 //! the other: once with the default settings and all plugins and once with
-//! `--no-plugins`. Each
+//! `--no-plugins`. Windows runs it in a hidden console, Linux in a
+//! pseudo-terminal from util-linux `script`. Each
 //! instance reads its own working set after the given seconds, writes it to
 //! a report file and quits. Measuring inside the real process, in a real
 //! console, counts everything the dashboard really loads (console code,
@@ -57,7 +58,12 @@ pub fn run(seconds: u64, json: bool, flags: &Flags) -> ExitCode {
         return ExitCode::FAILURE;
     }
     if !json {
-        println!("memory selftest: {seconds} s per run, one run after the other, hidden consoles");
+        let host = if cfg!(windows) {
+            "hidden consoles"
+        } else {
+            "pseudo-terminals"
+        };
+        println!("memory selftest: {seconds} s per run, one run after the other, {host}");
     }
     // One at a time: two instances side by side measured 1-2 MB higher for the core.
     let results: Vec<(Run, Option<Value>)> = [
