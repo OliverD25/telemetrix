@@ -557,131 +557,279 @@ mod weather {
 mod speedtest {
     use super::*;
 
-    /// Fake network: 9-13 ms pings, 312 Mbps down, 95 Mbps up, with progress calls.
+    fn routes() -> Vec<(&'static str, Answer)> {
+        vec![("api/js/servers", Answer::File("ookla_servers.json"))]
+    }
+
+    /// Fake pings (speedtest.example-c.net is nearest) and a fake speed_multi that
+    /// records its calls, reports progress and fails where FAIL says.
     fn fake(h: &Harness) {
         h.stub(
             "tcp_ping_ms",
-            "local n = 0 return function() n = n + 1 return ({ 12, 9, 13, 9, 10 })[(n - 1) % 5 + 1] end",
+            "PINGS = { ['speedtest.example-a.net'] = 10, \
+               ['speedtest.example-c.net'] = 4, ['speedtest.example-d.net'] = 12, \
+               ['speed.cloudflare.com'] = 56 } \
+             PINGED = {} \
+             return function(host, port) PINGED[#PINGED + 1] = host .. ':' .. port \
+               local ms = PINGS[host] if ms then return ms end return nil, 'timed out' end",
         );
         h.stub(
-            "speed_download",
-            "DOWNS = {} return function(url, bytes, secs, cb) DOWN = { url, bytes, secs } DOWNS[#DOWNS + 1] = bytes              cb(19500000, 0.5) return { mbps = 312, bytes = bytes, seconds = bytes * 8 / 312e6 } end",
+            "speed_multi",
+            "CALLS = {} FAIL = {} \
+             return function(o) \
+               CALLS[#CALLS + 1] = { o.direction, o.url, o.streams, o.seconds, o.warmup } \
+               for _, f in ipairs(FAIL) do \
+                 if o.direction == f[1] and o.url:find(f[2], 1, true) then return nil, f[3] end \
+               end \
+               local down = o.direction == 'down' \
+               o.progress(down and 912 or 905, 1.5) \
+               return { mbps = down and 935 or 933, bytes = 1, seconds = 2.5 } \
+             end",
         );
-        h.stub(
-            "speed_upload",
-            "return function(url, bytes, secs, cb) UP = { url, bytes, secs }              cb(5937500, 0.5) return { mbps = 95, bytes = bytes, seconds = 1 } end",
-        );
+    }
+
+    fn lua(h: &Harness, code: &str) {
+        h.plugin.lua().load(code).exec().unwrap();
+    }
+
+    fn calls(h: &Harness) -> Vec<(String, String)> {
+        h.plugin
+            .lua()
+            .load("local out = {} for i, c in ipairs(CALLS) do out[i] = c[1] .. ' ' .. c[2] end return out")
+            .eval::<Vec<String>>()
+            .unwrap()
+            .into_iter()
+            .map(|c| {
+                let (dir, url) = c.split_once(' ').unwrap();
+                (dir.to_string(), url.to_string())
+            })
+            .collect()
+    }
+
+    fn call(dir: &str, url: &str) -> (String, String) {
+        (dir.to_string(), url.to_string())
+    }
+
+    fn row(d: &PluginData, label: &str) -> String {
+        d.metrics
+            .iter()
+            .find(|m| m.label == label)
+            .map(|m| m.value.clone())
+            .unwrap_or_default()
     }
 
     #[test]
     fn start_never_tests_and_shows_the_hint() {
-        let h = Harness::new("speedtest", "", &[]);
+        let h = Harness::new("speedtest", "", &routes());
         fake(&h);
         let d = h.run(Trigger::Start);
         assert_eq!(d.metrics.len(), 1);
         assert_eq!(d.metrics[0].label, "press g to test");
-        assert!(h.emitted.borrow().is_empty(), "no test ran");
+        assert!(h.emitted.borrow().is_empty() && h.asked.borrow().is_empty());
         println!("{}", render_card(&d, 45));
     }
 
     #[test]
-    fn key_runs_the_test_with_progress_and_keeps_history() {
-        let h = Harness::new("speedtest", "", &[]);
+    fn nearest_ookla_server_by_ping() {
+        let h = Harness::new("speedtest", "", &routes());
         fake(&h);
         let d = h.run(Trigger::Key);
         assert_eq!(d.error, None, "{:?}", h.log.borrow());
-        let rows: Vec<(&str, &str)> = d
-            .metrics
-            .iter()
-            .map(|m| (m.label.as_str(), m.value.as_str()))
-            .collect();
+        let labels: Vec<&str> = d.metrics.iter().map(|m| m.label.as_str()).collect();
+        assert_eq!(labels, ["down", "up", "ping", "server", "last"]);
+        assert_eq!(row(&d, "down"), "935 Mbps");
+        assert_eq!(row(&d, "up"), "933 Mbps");
+        assert_eq!(row(&d, "ping"), "4 ms");
         assert_eq!(
-            &rows[..3],
-            [("down", "312 Mbps"), ("up", "95 Mbps"), ("ping", "10 ms")]
+            row(&d, "server"),
+            "Exampletown LTD, Exampletown…",
+            "cut to fit"
         );
-        assert_eq!(rows[3].0, "last");
+        assert_eq!(
+            calls(&h),
+            [
+                call("down", "https://speedtest.example-c.net:8080/download?size=25000000"),
+                call("up", "https://speedtest.example-c.net:8080/upload"),
+            ]
+        );
+        let args: (i64, i64, f64) = h
+            .plugin
+            .lua()
+            .load("return CALLS[1][3], CALLS[1][4], CALLS[1][5]")
+            .eval()
+            .unwrap();
+        assert_eq!(args, (4, 3, 0.5), "streams, seconds and warm-up");
+        let pings: Vec<String> = h.plugin.lua().load("return PINGED").eval().unwrap();
+        assert_eq!(
+            pings.len(),
+            5 * 3 + 5,
+            "3 per listed server, then 5 to the chosen one"
+        );
+        assert!(pings.iter().all(|p| p.ends_with(":8080")));
+        println!("{}", render_card(&d, 45));
+    }
+
+    #[test]
+    fn progress_rows_during_the_test() {
+        let h = Harness::new("speedtest", "", &routes());
+        fake(&h);
+        h.run(Trigger::Key);
         let progress: Vec<String> = h
             .emitted
             .borrow()
             .iter()
             .map(|c| format!("{} {}", c.metrics[0].label, c.metrics[0].value))
             .collect();
-        assert!(
-            progress.contains(&"testing download... 312 Mbps".to_string()),
-            "{progress:?}"
-        );
-        assert!(
-            progress.contains(&"testing upload... 95 Mbps".to_string()),
-            "{progress:?}"
-        );
-        let (url, bytes): (String, i64) = h
-            .plugin
-            .lua()
-            .load("return DOWN[1], DOWN[2]")
-            .eval()
-            .unwrap();
-        // 15 MB arrives as a 10 MB and a 5 MB piece: Cloudflare refuses a 15 MB request.
-        assert_eq!(url, "https://speed.cloudflare.com/__down?bytes=5000000");
-        assert_eq!(bytes, 5_000_000);
-        let pieces: Vec<i64> = h.plugin.lua().load("return DOWNS").eval().unwrap();
-        assert_eq!(pieces, [10_000_000, 5_000_000]);
+        for want in ["testing download... 912 Mbps", "testing upload... 905 Mbps"] {
+            assert!(progress.contains(&want.to_string()), "{progress:?}");
+        }
+    }
 
-        let d = h.run(Trigger::Interval);
-        let trend = d.metrics.last().unwrap();
+    #[test]
+    fn the_server_is_kept_for_24_hours() {
+        let h = Harness::new("speedtest", "", &routes());
+        fake(&h);
+        h.run(Trigger::Key);
+        h.run(Trigger::Interval);
         assert_eq!(
-            (trend.label.as_str(), trend.value.as_str()),
-            ("2 runs", "avg 312 Mbps")
+            h.asked_for("api/js/servers"),
+            1,
+            "the second test reuses the choice"
         );
-        assert_eq!(trend.trend.as_ref().map(Vec::len), Some(2));
-        let again = h.run(Trigger::Start);
+        h.age_store("s.server.chosen = s.server.chosen - 86401");
+        h.run(Trigger::Interval);
         assert_eq!(
-            again.metrics[0].value, "312 Mbps",
-            "a restart shows the stored result"
+            h.asked_for("api/js/servers"),
+            2,
+            "a day later it chooses again"
         );
+    }
+
+    #[test]
+    fn a_forced_server_and_forced_cloudflare() {
+        let mut h = Harness::new("speedtest", "server = 'my.host:8443'", &routes());
+        fake(&h);
+        lua(&h, "PINGS['my.host'] = 7");
+        let d = h.run(Trigger::Key);
+        assert_eq!(h.asked_for("api/js/servers"), 0);
+        assert_eq!(row(&d, "server"), "my.host:8443");
+        assert_eq!(row(&d, "ping"), "7 ms");
         assert_eq!(
-            h.run(Trigger::Settings).metrics.len(),
-            5,
-            "a settings change does not test"
+            calls(&h)[0].1,
+            "https://my.host:8443/download?size=25000000"
+        );
+        h.set("server", "'cloudflare'");
+        let d = h.run(Trigger::Key);
+        assert_eq!(row(&d, "server"), "Cloudflare");
+        assert_eq!(row(&d, "ping"), "56 ms");
+        assert_eq!(
+            calls(&h)[2..],
+            [
+                call("down", "https://speed.cloudflare.com/__down?bytes=10000000"),
+                call("up", "https://speed.cloudflare.com/__up"),
+            ]
+        );
+        assert!(
+            h.log.borrow().is_empty(),
+            "no backup message: {:?}",
+            h.log.borrow()
+        );
+    }
+
+    #[test]
+    fn cloudflare_is_the_backup_when_the_list_fails() {
+        let h = Harness::new("speedtest", "", &routes());
+        fake(&h);
+        h.route("api/js/servers", Answer::Status(503));
+        let d = h.run(Trigger::Key);
+        assert_eq!(d.error, None);
+        assert_eq!(row(&d, "server"), "Cloudflare (backup)");
+        assert_eq!(
+            *h.log.borrow(),
+            ["using Cloudflare as the backup: the Ookla server list failed: HTTP 503"]
         );
         println!("{}", render_card(&d, 45));
     }
 
     #[test]
-    fn manual_runs_and_history_keeps_30() {
+    fn cloudflare_is_the_backup_when_the_download_fails() {
+        let h = Harness::new("speedtest", "", &routes());
+        fake(&h);
+        lua(
+            &h,
+            "FAIL[1] = { 'down', 'speedtest.example-c.net', 'the server answered HTTP 403' }",
+        );
+        let d = h.run(Trigger::Key);
+        assert_eq!(row(&d, "server"), "Cloudflare (backup)");
+        let c = calls(&h);
+        assert_eq!(c.len(), 3, "Ookla down, then Cloudflare down and up: {c:?}");
+        assert!(h.log.borrow()[0].contains("download from speedtest.example-c.net:8080 failed"));
+        let chosen: bool = h
+            .plugin
+            .lua()
+            .load("return telemetrix.store_get().server ~= nil")
+            .eval()
+            .unwrap();
+        assert!(!chosen, "a failing server is chosen again next time");
+    }
+
+    #[test]
+    fn upload_failure_alone_does_not_switch_servers() {
+        let h = Harness::new("speedtest", "", &routes());
+        fake(&h);
+        lua(
+            &h,
+            "FAIL[1] = { 'up', 'speedtest.example-c.net', 'the server answered HTTP 500' }",
+        );
+        let d = h.run(Trigger::Key);
+        assert_eq!(row(&d, "up"), "failed: the server answered HTTP 500");
+        assert_eq!(row(&d, "down"), "935 Mbps");
+        assert_eq!(calls(&h).len(), 2, "no Cloudflare repeat");
+    }
+
+    #[test]
+    fn everything_failing_is_a_card_error() {
+        let h = Harness::new("speedtest", "", &routes());
+        fake(&h);
+        h.route("api/js/servers", Answer::Offline);
+        lua(
+            &h,
+            "FAIL[1] = { 'down', 'cloudflare', 'the server answered HTTP 403' }",
+        );
+        let d = h.run(Trigger::Key);
+        assert_eq!(
+            d.error.as_deref(),
+            Some(
+                "download from speed.cloudflare.com:443 failed: the server answered HTTP 403 \
+                 (after: the Ookla server list failed: connection refused)"
+            )
+        );
+    }
+
+    #[test]
+    fn old_size_settings_are_ignored_and_history_keeps_30() {
         let h = Harness::new(
             "speedtest",
-            "download_mb = 5
-max_seconds = 99",
-            &[],
+            "download_mb = 15\nupload_mb = 5\nmax_seconds = 8\nstreams = 99",
+            &routes(),
         );
         fake(&h);
         for _ in 0..32 {
             h.run(Trigger::Manual);
         }
         let d = h.run(Trigger::Start);
+        assert_eq!(d.error, None);
         assert_eq!(d.metrics.last().unwrap().label, "30 runs");
-        // The piece gets what is left of max_seconds, so a little under 8.
-        let secs: f64 = h.plugin.lua().load("return DOWN[3]").eval().unwrap();
-        assert!(
-            secs > 7.0 && secs <= 8.0,
-            "an out-of-range setting falls back to the default: {secs}"
-        );
-        let bytes: i64 = h.plugin.lua().load("return DOWN[2]").eval().unwrap();
-        assert_eq!(bytes, 5_000_000);
-    }
-
-    #[test]
-    fn a_failed_download_is_an_error() {
-        let h = Harness::new("speedtest", "", &[]);
-        fake(&h);
-        h.stub(
-            "speed_download",
-            "return function() return nil, 'the server answered HTTP 403' end",
-        );
-        let d = h.run(Trigger::Key);
+        let streams: i64 = h.plugin.lua().load("return CALLS[1][3]").eval().unwrap();
+        assert_eq!(streams, 4, "out of range falls back to the default");
+        let log = h.log.borrow();
+        assert_eq!(log.len(), 1, "one warning, only for streams: {log:?}");
+        assert!(log[0].starts_with("warning: streams = 99"));
+        drop(log);
         assert_eq!(
-            d.error.as_deref(),
-            Some("download failed: the server answered HTTP 403")
+            h.run(Trigger::Settings).metrics.len(),
+            6,
+            "a settings change does not test"
         );
     }
 }
