@@ -655,6 +655,7 @@ mod tests {
             "crypto",
             "weather",
             "currency",
+            "speedtest",
         ] {
             let path = dir.join(format!("{name}.lua"));
             let p = Plugin::load(

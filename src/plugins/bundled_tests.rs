@@ -29,6 +29,8 @@ pub struct Harness {
     /// Every URL the plugin asked for.
     pub asked: Rc<RefCell<Vec<String>>>,
     pub log: Rc<RefCell<Vec<String>>>,
+    /// Cards sent with `telemetrix.emit` during `update()`.
+    pub emitted: Rc<RefCell<Vec<PluginData>>>,
     dir: PathBuf,
 }
 
@@ -64,6 +66,8 @@ impl Harness {
         }
         let log = Rc::new(RefCell::new(Vec::new()));
         let sink = log.clone();
+        let emitted = Rc::new(RefCell::new(Vec::new()));
+        let out = emitted.clone();
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("plugins")
             .join(format!("{name}.lua"));
@@ -72,7 +76,7 @@ impl Harness {
             &settings,
             Arc::new(AtomicBool::new(false)),
             Rc::new(move |m: &str| sink.borrow_mut().push(m.to_string())),
-            runner::no_emit(),
+            Rc::new(move |d| out.borrow_mut().push(d)),
         )
         .unwrap_or_else(|e| panic!("{name}: {e}"));
         let h = Self {
@@ -86,6 +90,7 @@ impl Harness {
             )),
             asked: Rc::new(RefCell::new(Vec::new())),
             log,
+            emitted,
             dir,
         };
         h.fake_network();
@@ -121,6 +126,14 @@ impl Harness {
             .unwrap();
         let t: Table = lua.globals().get("telemetrix").unwrap();
         t.set("http_get", get).unwrap();
+    }
+
+    /// Replaces one host function with Lua code, like a fake speed test.
+    pub fn stub(&self, name: &str, lua_fn: &str) {
+        let lua = self.plugin.lua();
+        let f: mlua::Function = lua.load(lua_fn).eval().unwrap();
+        let t: Table = lua.globals().get("telemetrix").unwrap();
+        t.set(name, f).unwrap();
     }
 
     pub fn route(&self, pattern: &str, answer: Answer) {
@@ -499,6 +512,131 @@ mod weather {
             words,
             "clear,Tue Thu,mostly clear,cloudy,cloudy,fog,fog,drizzle,drizzle,rain,rain,\
              freezing rain,freezing rain,snow,snow,showers,showers,snow showers,snow showers,storm,storm"
+        );
+    }
+}
+
+mod speedtest {
+    use super::*;
+
+    /// Fake network: 9-13 ms pings, 312 Mbps down, 95 Mbps up, with progress calls.
+    fn fake(h: &Harness) {
+        h.stub(
+            "tcp_ping_ms",
+            "local n = 0 return function() n = n + 1 return ({ 12, 9, 13, 9, 10 })[(n - 1) % 5 + 1] end",
+        );
+        h.stub(
+            "speed_download",
+            "return function(url, bytes, secs, cb) DOWN = { url, bytes, secs }              cb(19500000, 0.5) cb(39000000, 1.0) return { mbps = 312, bytes = bytes, seconds = 1 } end",
+        );
+        h.stub(
+            "speed_upload",
+            "return function(url, bytes, secs, cb) UP = { url, bytes, secs }              cb(5937500, 0.5) return { mbps = 95, bytes = bytes, seconds = 1 } end",
+        );
+    }
+
+    #[test]
+    fn start_never_tests_and_shows_the_hint() {
+        let h = Harness::new("speedtest", "", &[]);
+        fake(&h);
+        let d = h.run(Trigger::Start);
+        assert_eq!(d.metrics.len(), 1);
+        assert_eq!(d.metrics[0].label, "press g to test");
+        assert!(h.emitted.borrow().is_empty(), "no test ran");
+        println!("{}", render_card(&d, 45));
+    }
+
+    #[test]
+    fn key_runs_the_test_with_progress_and_keeps_history() {
+        let h = Harness::new("speedtest", "", &[]);
+        fake(&h);
+        let d = h.run(Trigger::Key);
+        assert_eq!(d.error, None, "{:?}", h.log.borrow());
+        let rows: Vec<(&str, &str)> = d
+            .metrics
+            .iter()
+            .map(|m| (m.label.as_str(), m.value.as_str()))
+            .collect();
+        assert_eq!(
+            &rows[..3],
+            [("down", "312 Mbps"), ("up", "95 Mbps"), ("ping", "10 ms")]
+        );
+        assert_eq!(rows[3].0, "last");
+        let progress: Vec<String> = h
+            .emitted
+            .borrow()
+            .iter()
+            .map(|c| format!("{} {}", c.metrics[0].label, c.metrics[0].value))
+            .collect();
+        assert!(
+            progress.contains(&"testing download... 312 Mbps".to_string()),
+            "{progress:?}"
+        );
+        assert!(
+            progress.contains(&"testing upload... 95 Mbps".to_string()),
+            "{progress:?}"
+        );
+        let (url, bytes): (String, i64) = h
+            .plugin
+            .lua()
+            .load("return DOWN[1], DOWN[2]")
+            .eval()
+            .unwrap();
+        assert_eq!(url, "https://speed.cloudflare.com/__down?bytes=25000000");
+        assert_eq!(bytes, 25_000_000);
+
+        let d = h.run(Trigger::Interval);
+        let trend = d.metrics.last().unwrap();
+        assert_eq!(
+            (trend.label.as_str(), trend.value.as_str()),
+            ("2 runs", "avg 312 Mbps")
+        );
+        assert_eq!(trend.trend.as_ref().map(Vec::len), Some(2));
+        let again = h.run(Trigger::Start);
+        assert_eq!(
+            again.metrics[0].value, "312 Mbps",
+            "a restart shows the stored result"
+        );
+        assert_eq!(
+            h.run(Trigger::Settings).metrics.len(),
+            5,
+            "a settings change does not test"
+        );
+        println!("{}", render_card(&d, 45));
+    }
+
+    #[test]
+    fn manual_runs_and_history_keeps_30() {
+        let h = Harness::new(
+            "speedtest",
+            "download_mb = 5
+max_seconds = 99",
+            &[],
+        );
+        fake(&h);
+        for _ in 0..32 {
+            h.run(Trigger::Manual);
+        }
+        let d = h.run(Trigger::Start);
+        assert_eq!(d.metrics.last().unwrap().label, "30 runs");
+        let secs: i64 = h.plugin.lua().load("return DOWN[3]").eval().unwrap();
+        assert_eq!(secs, 8, "an out-of-range setting falls back to the default");
+        let bytes: i64 = h.plugin.lua().load("return DOWN[2]").eval().unwrap();
+        assert_eq!(bytes, 5_000_000);
+    }
+
+    #[test]
+    fn a_failed_download_is_an_error() {
+        let h = Harness::new("speedtest", "", &[]);
+        fake(&h);
+        h.stub(
+            "speed_download",
+            "return function() return nil, 'the server answered HTTP 403' end",
+        );
+        let d = h.run(Trigger::Key);
+        assert_eq!(
+            d.error.as_deref(),
+            Some("download failed: the server answered HTTP 403")
         );
     }
 }
