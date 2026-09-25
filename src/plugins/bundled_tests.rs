@@ -620,8 +620,8 @@ mod speedtest {
             .load("return DOWN[1], DOWN[2]")
             .eval()
             .unwrap();
-        assert_eq!(url, "https://speed.cloudflare.com/__down?bytes=25000000");
-        assert_eq!(bytes, 25_000_000);
+        assert_eq!(url, "https://speed.cloudflare.com/__down?bytes=15000000");
+        assert_eq!(bytes, 15_000_000);
 
         let d = h.run(Trigger::Interval);
         let trend = d.metrics.last().unwrap();
