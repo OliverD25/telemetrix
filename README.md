@@ -408,9 +408,10 @@ A short run cannot show a slow leak. The soak runs one hidden dashboard
 with the default plugins (without the speed test, whose test would hide
 everything else) for 10 minutes of warm-up plus the given minutes. The
 dashboard notes its private bytes (memory that belongs to this program
-alone) once a minute. After the warm-up, the command fits a straight line
-through those numbers and fails with exit code 1 when private memory grows
-faster than 0.2 MB per hour. It also fails when the peak is over the
+alone) once a minute. After the warm-up, the command takes the median of
+the slopes between all pairs of those numbers, which ignores the single
+jumps of about 0.2 MB when a plugin fetches something, and fails with exit
+code 1 when private memory grows faster than 0.2 MB per hour. It also fails when the peak is over the
 budget. `--json` prints every minute's number.
 
 For a deeper look, build with `cargo build --release --features

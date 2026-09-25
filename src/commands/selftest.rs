@@ -48,21 +48,29 @@ const SOAK_WARMUP_MIN: u64 = 10;
 /// A soak fails above this private-memory growth.
 const SOAK_LIMIT_MB_PER_HOUR: f64 = 0.2;
 
-/// The least-squares slope of the samples (one per minute), in MB per hour.
+/// The growth of the samples (one per minute) in MB per hour: the median
+/// of the slopes between every pair of samples (Theil-Sen). Private bytes
+/// jump up and down by about 0.2 MB when a plugin fetches something, and
+/// the median ignores such single jumps where a least-squares line tilts
+/// towards them.
 pub fn growth_mb_per_hour(samples: &[u64]) -> Option<f64> {
-    if samples.len() < 2 {
+    let mut slopes = Vec::new();
+    for (i, &a) in samples.iter().enumerate() {
+        for (j, &b) in samples.iter().enumerate().skip(i + 1) {
+            slopes.push((b as f64 - a as f64) / (j - i) as f64);
+        }
+    }
+    if slopes.is_empty() {
         return None;
     }
-    let n = samples.len() as f64;
-    let mean_x = (n - 1.0) / 2.0;
-    let mean_y = samples.iter().map(|&b| b as f64).sum::<f64>() / n;
-    let (mut num, mut den) = (0.0, 0.0);
-    for (i, &b) in samples.iter().enumerate() {
-        let dx = i as f64 - mean_x;
-        num += dx * (b as f64 - mean_y);
-        den += dx * dx;
-    }
-    Some(num / den * 60.0 / MB as f64)
+    slopes.sort_by(f64::total_cmp);
+    let mid = slopes.len() / 2;
+    let median = if slopes.len() % 2 == 1 {
+        slopes[mid]
+    } else {
+        (slopes[mid - 1] + slopes[mid]) / 2.0
+    };
+    Some(median * 60.0 / MB as f64)
 }
 
 /// `selftest --memory --soak <minutes>`: one dashboard with the default
@@ -352,6 +360,15 @@ mod tests {
         let g = growth_mb_per_hour(&rising).unwrap();
         assert!((g - 1.0).abs() < 0.01, "{g}");
         assert_eq!(growth_mb_per_hour(&[MB]), None);
+        // Flat with one fetch spike at the end, as seen in a real soak.
+        let mut spiky = vec![4 * MB; 50];
+        spiky[49] = 4 * MB + 300 * 1024;
+        spiky[20] = 4 * MB + 200 * 1024;
+        assert_eq!(
+            growth_mb_per_hour(&spiky),
+            Some(0.0),
+            "single jumps are ignored"
+        );
     }
 
     #[test]
