@@ -13,6 +13,7 @@ use ureq::Agent;
 use super::PluginData;
 use super::manifest::CardUpdate;
 use super::sandbox::{Deadline, remaining};
+use super::speed::{self, Multi};
 use super::store;
 
 const BODY_LIMIT: u64 = 1 << 20;
@@ -440,6 +441,47 @@ pub fn install(lua: &Lua, ctx: HostCtx) -> mlua::Result<()> {
         )?;
     }
 
+    let deadline = ctx.deadline.clone();
+    t.set(
+        "speed_multi",
+        lua.create_function(move |lua, opts: Table| {
+            let direction: Option<String> = opts.get("direction")?;
+            let upload = match direction.as_deref() {
+                None | Some("down") => false,
+                Some("up") => true,
+                Some(other) => {
+                    let msg = format!("direction must be \"down\" or \"up\", not {other:?}");
+                    return Ok((Value::Nil, Value::String(lua.create_string(msg)?)));
+                }
+            };
+            let spec = Multi {
+                upload,
+                url: opts.get::<Option<String>>("url")?.unwrap_or_default(),
+                streams: opts.get::<Option<usize>>("streams")?.unwrap_or(4),
+                seconds: opts.get::<Option<f64>>("seconds")?.unwrap_or(3.0),
+                warmup: opts.get::<Option<f64>>("warmup")?.unwrap_or(0.5),
+                piece_bytes: opts
+                    .get::<Option<u64>>("piece_bytes")?
+                    .unwrap_or(25_000_000),
+            };
+            let progress: Option<Function> = opts.get("progress")?;
+            let result = speed::run(&spec, remaining(&deadline), |mbps, secs| match &progress {
+                Some(f) => f.call::<()>((mbps, secs)).map_err(|e| e.to_string()),
+                None => Ok(()),
+            });
+            Ok(match result {
+                Ok(t) => {
+                    let out = lua.create_table()?;
+                    out.set("bytes", t.bytes)?;
+                    out.set("seconds", t.seconds)?;
+                    out.set("mbps", t.mbps())?;
+                    (Value::Table(out), Value::Nil)
+                }
+                Err(e) => (Value::Nil, Value::String(lua.create_string(e)?)),
+            })
+        })?,
+    )?;
+
     let (sink, meta) = (ctx.emit.clone(), ctx.meta.clone());
     let recent: RefCell<VecDeque<Instant>> = RefCell::new(VecDeque::new());
     t.set(
@@ -603,6 +645,18 @@ mod tests {
             seconds: 2.0,
         };
         assert!((t.mbps() - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn speed_multi_checks_its_arguments_without_the_network() {
+        let (lua, _) = lua_with_host();
+        let ok: bool = lua
+            .load(
+                "local a, e1 = telemetrix.speed_multi({ url = 'http://x/' })                  local b, e2 = telemetrix.speed_multi({ url = 'https://x/', direction = 'sideways' })                  local c, e3 = telemetrix.speed_multi({ url = 'https://x/', streams = 0 })                  return a == nil and b == nil and c == nil and e1:find('https') ~= nil                  and e2:find('direction') ~= nil and e3:find('streams') ~= nil",
+            )
+            .eval()
+            .unwrap();
+        assert!(ok);
     }
 
     #[test]
