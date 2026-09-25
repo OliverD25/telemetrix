@@ -185,9 +185,9 @@ cards are not empty after a restart.
 | Internet latency | time to connect to 1.1.1.1:443 | a TCP connection, no service | none | every 30 seconds |
 | Clock, Uptime | time and date; computer name and uptime | this computer | none | every second; every 30 seconds |
 
-**The speed test uses data.** One run downloads 25 MB and uploads 10 MB with
-the default settings, about 35 MB. At the 30-minute interval that is about
-1.7 GB a day, or about 50 GB a month. On a metered connection, raise the
+**The speed test uses data.** One run downloads 15 MB and uploads 5 MB with
+the default settings, about 20 MB. At the 30-minute interval that is about
+1 GB a day, or about 29 GB a month. On a metered connection, raise the
 interval, lower `download_mb` and `upload_mb` in the `s` box, or set
 `enabled = false` under `[plugin.speedtest]`.
 

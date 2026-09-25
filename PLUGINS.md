@@ -397,7 +397,7 @@ only shows its stored result. With `--run` it really runs.
 | `currency.lua` | hryvnia rates from Monobank and PrivatBank, NBU graphs | `primary_bank`, `show_month`, `compact`; file only: `currencies` | yes |
 | `crypto.lua` | coin prices from Binance, 7- and 30-day graphs | `quote`; file only: `coins` | yes |
 | `weather.lua` | now, tomorrow and the day after (Open-Meteo) | `city`; file only: `lat`, `lon`, `label` | yes |
-| `speedtest.lua` | download, upload and ping (Cloudflare), key `g` | `download_mb`, `upload_mb`, `max_seconds` | yes, about 35 MB per run |
+| `speedtest.lua` | download, upload and ping (Cloudflare), key `g` | `download_mb`, `upload_mb`, `max_seconds` | yes, about 20 MB per run |
 
 These files live in `plugins/` in the repository and are built into the
 program, which installs them into the plugin home. The README describes

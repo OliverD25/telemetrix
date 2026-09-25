@@ -1,8 +1,8 @@
 -- Internet speed test against Cloudflare (speed.cloudflare.com, free, no key):
 -- ping, download and upload, every 30 minutes or when you press g.
--- Settings in [plugin.speedtest]: download_mb (5..100, default 25),
--- upload_mb (1..50, default 10), max_seconds per direction (3..15, default 8).
--- Data use: about 35 MB per run with the defaults, so about 1.7 GB a day at
+-- Settings in [plugin.speedtest]: download_mb (5..100, default 15),
+-- upload_mb (1..50, default 5), max_seconds per direction (3..15, default 8).
+-- Data use: about 20 MB per run with the defaults, so about 1 GB a day at
 -- the 30-minute interval. Starting the dashboard never runs a test: the card
 -- shows the last stored result until the interval or the g key.
 
@@ -103,8 +103,8 @@ return {
   run_key = "g",
   call_timeout = 40,
   settings_schema = {
-    download_mb = { kind = "int", label = "download MB", min = 5, max = 100, step = 5, default = 25 },
-    upload_mb = { kind = "int", label = "upload MB", min = 1, max = 50, default = 10 },
+    download_mb = { kind = "int", label = "download MB", min = 5, max = 100, step = 5, default = 15 },
+    upload_mb = { kind = "int", label = "upload MB", min = 1, max = 50, default = 5 },
     max_seconds = { kind = "int", label = "max seconds", min = 3, max = 15, default = 8 },
   },
   update = function()
