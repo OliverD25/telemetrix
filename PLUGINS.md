@@ -45,6 +45,9 @@ The file must return a table with these fields:
 | `title` | no | The card title. Default: the id. |
 | `id` | no | A unique name. Default: the file name without `.lua`. Keep it equal to the file name: telemetrix uses the file name to decide whether to start the plugin, and the id to find its settings. |
 | `interval` | no | Seconds between two `update()` calls, 1 or more. Default: `plugins.default_interval_s` (60). |
+| `run_key` | no | One key that runs `update()` at once, like `"g"`. See [A key that runs the plugin now](#a-key-that-runs-the-plugin-now). |
+| `call_timeout` | no | Seconds one `update()` call may take, 1..60. Default: `plugins.call_timeout_s` (5). |
+| `settings_schema` | no | The settings a user can change in the `s` box. See [Settings the user can change in the dashboard](#settings-the-user-can-change-in-the-dashboard). |
 
 `update()` must return a table:
 
@@ -58,9 +61,28 @@ The file must return a table with these fields:
 }
 ```
 
-Every metric needs a `label` and a `value`. Keep labels short: a card is about
-30 characters wide. Do not use emoji. Many terminals draw them two cells wide,
-and the card then looks broken. Block characters and `°` are fine.
+Every metric needs a `label` and a `value`. Keep rows short: a card is 30 to
+45 characters wide, depending on the terminal. Do not use emoji. Many
+terminals draw them two cells wide, and the card then looks broken. Block
+characters and `°` are fine.
+
+### A graph in a row
+
+Add `trend`, a list of 2 to 400 numbers, and the row gets a small graph
+between the label and the value:
+
+```lua
+{ label = "7d", value = "+0.8%", trend = { 44.1, 44.3, 44.2, 44.6, 44.5 } }
+```
+
+```
+7d ▁▁▁▃▃▃▃▂▂▂▂██████▇▇▇▇ +0.8%
+```
+
+The graph fills the space between the label and the value. It is scaled to
+its own lowest and highest number. The value is green when the last number
+is higher than the first one, and red when it is lower. A `trend` that is
+not a list of 2..400 numbers turns only that row into a red error line.
 
 ## Settings for your plugin
 
@@ -81,8 +103,65 @@ local name = telemetrix.settings.name or "nobody"
 ```
 
 Always give a default with `or`: the key may be missing. telemetrix refreshes
-`telemetrix.settings` before every `update()`, so a saved change to the file
-reaches the plugin within a few seconds.
+`telemetrix.settings` before every `update()`. When the plugin's own section
+changes, the plugin runs again within a second (see
+[Why update() runs](#why-update-runs)).
+
+### Settings the user can change in the dashboard
+
+Declare a setting in `settings_schema`, and it gets a row in the `s` box,
+under the plugin's section after `enabled` and `interval`:
+
+```lua
+return {
+  title = "Weather",
+  settings_schema = {
+    city  = { kind = "text", label = "city", default = "Kyiv" },
+    units = { kind = "enum", label = "units", options = { "metric", "imperial" } },
+    days  = { kind = "int", label = "days", min = 1, max = 7, step = 1, default = 3 },
+    wind  = { kind = "bool", label = "show wind", default = true },
+  },
+  update = function()
+    local city = telemetrix.settings.city   -- always set: the file value or the default
+    ...
+  end,
+}
+```
+
+| Field | Kinds | Meaning |
+|---|---|---|
+| `kind` | all | `"text"`, `"enum"`, `"bool"` or `"int"` |
+| `label` | all | The row name in the `s` box. Default: the key. |
+| `default` | all | Used when the file has no value or a wrong one. Without it: `""`, the first option, `false`, or `min`. |
+| `options` | enum | The choices, a list of text. |
+| `min`, `max` | int | Required. |
+| `step` | int | One press of `Left` or `Right`. Default 1. `Shift` moves ten steps. |
+
+- Keys may use `a-z`, `A-Z`, `0-9`, `_` and `-`. `enabled` and `interval`
+  cannot be schema keys.
+- The rows are sorted by key.
+- A broken schema (an unknown kind, a default outside `min..max`) stops the
+  plugin from loading. `plugin check` shows the reason.
+- telemetrix checks the file values against the schema before they reach
+  `telemetrix.settings`. A wrong value (wrong type, out of range, not one of
+  the options) gives one warning in the log, and the plugin sees the
+  default. A missing value also becomes the default, without a warning.
+- Keys that are not in the schema reach the plugin unchanged. Use them for
+  things the `s` box cannot edit, like lists.
+
+In the `s` box, `enum`, `bool` and `int` rows change with `Left`, `Right`
+and `Enter`, like the other rows. On a `text` row, `Enter` opens an input
+line with a cursor:
+
+- type up to 64 characters; `Backspace`, `Delete`, `Left`, `Right`, `Home`
+  and `End` work as usual;
+- `Enter` saves the text to `[plugin.<id>]` in the settings file, and the
+  plugin runs at once (its trigger is `"key"`); an empty text removes the
+  key, so the default applies again;
+- `Esc` closes the input and saves nothing.
+
+While the input is open, every key goes to it: `q` does not quit and `t`
+does not open the theme box. Only `Ctrl+C` still quits.
 
 ## Functions telemetrix gives you
 
@@ -93,13 +172,135 @@ All of them live in the global table `telemetrix`.
 | `http_get(url [, timeout_s])` | `body, status` or `nil, error_text` | HTTP GET. A status like 404 is not an error: check `status` yourself. The body is limited to 1 MiB. The timeout is `plugins.http_timeout_s` unless you give a shorter one. |
 | `json_decode(text)` | `table` or `nil, error_text` | JSON `null` becomes `nil`. A list with `null` holes then has gaps, so `#list` may be wrong. |
 | `tcp_ping_ms(host, port [, timeout_ms])` | `milliseconds` or `nil, error_text` | Time to open a TCP connection. The default timeout is 2000 ms. |
-| `log(text)` | nothing | Writes a line to the log. Press `l` in the dashboard to see it. |
+| `store_get()` | `table` or `nil` (nothing stored), or `nil, error_text` | What `store_set` saved last, also after a restart. |
+| `store_set(table)` | `true` or `nil, error_text` | Saves the table. See [Remembering things](#remembering-things-between-runs). |
+| `emit(card)` | `true`, or `false` when dropped | Shows a card at once, before `update()` returns. See [Showing progress](#showing-progress). |
+| `trigger()` | text | Why this `update()` runs. See [Why update() runs](#why-update-runs). |
+| `speed_download(url, max_bytes, max_seconds [, progress])` | result or `nil, error_text` | See [Speed tests](#speed-tests). |
+| `speed_upload(url, bytes, max_seconds [, progress])` | result or `nil, error_text` | See [Speed tests](#speed-tests). |
+| `log(text)` | nothing | Writes a line to the log. Press `l` in the dashboard to see it. A text that starts with `warning: ` is shown as a warning. |
 | `now_ms()` | number | Milliseconds from a fixed start point. Use it to measure time, not as a clock. |
 | `uptime_s()` | number | Seconds since this computer started. |
 | `hostname()` | text | The name of this computer. |
 | `settings` | table | Your `[plugin.<name>]` keys, see above. |
 
 `print(...)` also writes to the log. It never writes to the screen.
+
+### Remembering things between runs
+
+`store_set(table)` saves a table in a small JSON file, one per plugin.
+`store_get()` reads it back, also after the dashboard restarts. Use it for
+the last good values, a cache, or a history:
+
+```lua
+local store = telemetrix.store_get() or {}
+store.count = (store.count or 0) + 1
+local ok, err = telemetrix.store_set(store)
+if not ok then
+  telemetrix.log("cannot save: " .. err)
+end
+```
+
+- The table may hold text, numbers, booleans and more tables. Functions
+  cannot be stored.
+- The file may be 64 KB at most. A bigger table is refused with an error.
+- The file is written to a temporary name first and then renamed, so a crash
+  never leaves half a file.
+- The files live in `<data folder>/plugins/<id>.json`. The data folder is
+  `--data-dir <dir>`, else `%LOCALAPPDATA%\telemetrix` on Windows and
+  `$XDG_DATA_HOME/telemetrix` (or `~/.local/share/telemetrix`) on Linux.
+- The store needs a plugin id of `a-z`, `0-9` and `_` only.
+
+### A key that runs the plugin now
+
+With `run_key = "g"`, pressing `g` in the dashboard runs `update()` at once,
+without waiting for the interval. Its trigger is then `"key"`.
+
+- It must be one printable character.
+- Keys that telemetrix uses itself (`q`, `Q`, `t`, `T`, `s`, `l`, `r`, `?`,
+  space, `+`, `=`, `-`) are refused, with a warning in the log.
+- When two plugins want the same key, the first one keeps it and the other
+  gets a warning.
+
+### Longer work
+
+One `update()` call may take `plugins.call_timeout_s` seconds (5 by
+default). A plugin that needs longer, like a speed test, sets its own limit:
+
+```lua
+return { title = "Speed test", call_timeout = 40, update = ... }
+```
+
+The limit is 60 seconds at most. The time counts from the start of the call;
+network requests are cut short when the time is up.
+
+### Showing progress
+
+`emit(card)` shows a card at once, while `update()` is still running. It
+takes the same table that `update()` returns. The card that `update()`
+returns at the end replaces it.
+
+```lua
+telemetrix.emit({ metrics = { { label = "testing download...", value = "312 Mbps" } } })
+```
+
+- At most 10 cards per second are shown. More are dropped, and `emit`
+  returns `false`.
+- A card that is not valid is an error, even when it would be dropped.
+
+### Why update() runs
+
+`trigger()` tells the plugin why this `update()` call happens:
+
+| Value | When |
+|---|---|
+| `"start"` | The first call after the plugin started: the dashboard started, the file changed, or the plugin was turned on. `snapshot --plugins` and `plugin check` (without `--run`) also give `"start"`: they start the plugin fresh and run it once. |
+| `"interval"` | A normal call when the interval is over. |
+| `"key"` | The user pressed the plugin's `run_key`, or saved a text setting of this plugin in the `s` box. |
+| `"manual"` | `telemetrix plugin check <file> --run`. |
+| `"settings"` | The plugin's own `[plugin.<id>]` section changed, in the `s` box or in the file. The call comes about 0.3 seconds after the change. A change to another plugin's section does not run this plugin. |
+
+Top-level code in the file (outside `update`) runs while the plugin loads;
+`trigger()` gives `"start"` there.
+
+Use it to skip expensive work when it is not wanted. The speed-test plugin
+shows its stored result on `"start"` and `"settings"`, and tests only on
+`"interval"`, `"key"` and `"manual"`:
+
+```lua
+local why = telemetrix.trigger()
+if why == "start" or why == "settings" then
+  return show_last_result()
+end
+```
+
+### Speed tests
+
+Two functions measure the internet connection. Both accept only `https://`
+addresses. Neither keeps the data in memory: the program reads or writes it
+16 KB at a time.
+
+- `speed_download(url, max_bytes, max_seconds [, progress])` downloads from
+  `url`. It stops after `max_bytes` bytes or `max_seconds` seconds,
+  whichever comes first. The server must answer HTTP 200.
+- `speed_upload(url, bytes, max_seconds [, progress])` sends `bytes` zero
+  bytes with an HTTP POST. It stops early when `max_seconds` runs out.
+
+Both return a table `{ bytes = ..., seconds = ..., mbps = ... }`, or `nil`
+and an error text. `progress`, if given, is called as
+`progress(bytes, seconds)` at most 4 times per second, with the bytes moved
+so far. An error inside `progress` stops the transfer.
+
+```lua
+local r, err = telemetrix.speed_download(
+  "https://speed.cloudflare.com/__down?bytes=25000000", 25000000, 8,
+  function(bytes, seconds)
+    telemetrix.emit({ metrics = { { label = "down", value = string.format("%.0f Mbps", bytes * 8 / seconds / 1e6) } } })
+  end)
+```
+
+Both count against `call_timeout`. Give the plugin enough time for both
+directions plus a few seconds.
 
 ## What a plugin cannot do
 
@@ -114,14 +315,14 @@ Limits, all set in `telemetrix.toml` under `[plugins]`:
 
 | Limit | Setting | Default |
 |---|---|---|
-| Lua time for one `update()` call | `call_timeout_s` | 5 s |
+| Time for one `update()` call | `call_timeout_s` (or the plugin's own `call_timeout`) | 5 s |
 | Memory for one plugin | `memory_limit_mb` | 8 MB |
 | One HTTP request | `http_timeout_s` | 10 s |
 | Plugins that run at the same time | `max_plugins` | 16 |
 
 The time limit counts Lua work. A request that is waiting for the network does
 not count as Lua work, but its timeout is cut to the time that is left. So one
-call takes at most about the Lua time limit. The one exception is a slow name
+call takes at most about the time limit. The one exception is a slow name
 lookup (DNS) inside `tcp_ping_ms`, which the limit cannot cut short.
 
 ## When something goes wrong
@@ -143,12 +344,19 @@ These commands work without the dashboard, so an agent can use them too:
 ```
 telemetrix plugin check plugins/hello.lua          # run update() once, print the card
 telemetrix plugin check plugins/hello.lua --json   # the same as JSON
+telemetrix plugin check plugins/hello.lua --run    # the same, with trigger() = "manual"
 telemetrix plugin list                             # every plugin with id, interval, state
 telemetrix snapshot --json --plugins               # metrics and every plugin card, once
 ```
 
 `plugin check` exits with code 1 when the plugin fails, and prints the error.
-It uses the plugin's `[plugin.<name>]` settings from `telemetrix.toml`.
+It uses the plugin's `[plugin.<name>]` settings from `telemetrix.toml`. It
+also prints the plugin's `settings_schema`, one line per key. Cards sent
+with `emit` appear as `progress:` lines, and `log` lines as `log:` lines,
+both on standard error.
+
+Without `--run` the trigger is `"start"`, so a plugin like the speed test
+only shows its stored result. With `--run` it really runs.
 
 ## Notes for agents that write plugins
 
@@ -158,7 +366,11 @@ It uses the plugin's `[plugin.<name>]` settings from `telemetrix.toml`.
 - Run `telemetrix plugin check <file>` after every change. Exit code 0 means
   the card works.
 - Put anything a user may want to change (a city, a host, a list of coins) in
-  `[plugin.<name>]` settings, not in the code.
+  `[plugin.<name>]` settings, not in the code. Declare it in
+  `settings_schema` when the user should change it in the `s` box.
+- Call `telemetrix.http_get` and the other functions at call time, not once
+  at load time into a local variable. The plugin tests in this repository
+  replace them with recorded answers.
 
 ## The default plugins
 
@@ -167,5 +379,21 @@ It uses the plugin's `[plugin.<name>]` settings from `telemetrix.toml`.
 | `clock.lua` | local time and date, every second | none | no |
 | `uptime.lua` | computer name and uptime | none | no |
 | `network_ping.lua` | time to connect to a host | `host`, `port` | yes |
-| `crypto.lua` | coin prices in US dollars (CoinGecko) | `coins` | yes |
-| `weather.lua` | temperature and wind (Open-Meteo) | `lat`, `lon`, `label`, `temperature_unit` | yes |
+| `currency.lua` | hryvnia rates from Monobank and PrivatBank, NBU graphs | `primary_bank`, `show_month`, `compact`; file only: `currencies` | yes |
+| `crypto.lua` | coin prices from Binance, 7- and 30-day graphs | `quote`; file only: `coins` | yes |
+| `weather.lua` | now, tomorrow and the day after (Open-Meteo) | `city`; file only: `lat`, `lon` | yes |
+| `speedtest.lua` | download, upload and ping (Cloudflare), key `g` | `download_mb`, `upload_mb`, `max_seconds` | yes, about 35 MB per run |
+
+The README describes each data source and its free limits.
+
+- **currency:** `compact = true` shows only the primary bank. Use it when
+  the cards are narrower than about 42 characters: the full row
+  `USD  mono 44.80/45.20  privat 44.60/45.05` needs 41. A plugin cannot
+  learn the card width, so this is a setting. `show_month = false` hides the
+  30-day graphs.
+- **weather:** temperatures are always °C. The plugin does not see
+  `units.temperature`, because telemetrix passes only the plugin's own
+  section to it. `lat` and `lon` in the file are used instead of the city;
+  remove them to use the typed city.
+- **crypto:** old settings files list CoinGecko names (`"bitcoin"`); they
+  still work.

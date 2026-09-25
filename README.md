@@ -4,11 +4,12 @@
 Windows 11 and Linux, written in Rust.
 
 It shows CPU, memory, swap, disks and CPU temperature (where the computer
-reports it), plus cards from small Lua plugins: weather, crypto prices,
-internet latency, a clock, uptime, or anything you write yourself. It uses
-about 7 MB of memory without plugins and about 11 MB with the five default
-plugins, and almost no CPU on the static theme. Settings live in a commented
-`telemetrix.toml` that a wrong value can never break.
+reports it), plus cards from small Lua plugins: exchange rates, crypto
+prices, weather, an internet speed test, internet latency, a clock, uptime,
+or anything you write yourself. It uses about 7.5 MB of memory without
+plugins and about 12.5 MB with the seven default plugins, and almost no CPU
+on the static theme. Settings live in a commented `telemetrix.toml` that a
+wrong value can never break.
 
 ## Build and run
 
@@ -40,11 +41,18 @@ telemetrix --exit-on-any-key      # screensaver mode: any key quits
 | `space` | pause the animation |
 | `l` | log, with the program's own memory use at the top |
 | `r` | look for new, changed and removed plugins now |
+| `g` | run the speed test now (a plugin's own key) |
 | `?` | help |
 
 Inside the settings box: `Up`/`Down` move, `Enter` or `Right` pick the next
 value, `Left` the previous one, `Shift` with `Left`/`Right` moves ten steps.
 Paths are shown but can only be changed in the file.
+
+Each plugin's section in the settings box also lists the plugin's own
+settings, like the weather city or the main bank. On a text setting,
+`Enter` opens an input line: type the text, `Enter` saves it and the plugin
+runs at once, `Esc` cancels. While you type, every key goes to the input;
+only `Ctrl+C` quits.
 
 ## Flags
 
@@ -74,7 +82,7 @@ These need no terminal window, so scripts and agents can use them.
 | `telemetrix config check [--json]` | list every problem in the settings file, with line numbers; exit 1 if there is one |
 | `telemetrix config show` | print every setting, its value and where it came from (default, file or flag) |
 | `telemetrix config reference` | print the settings table below |
-| `telemetrix plugin check <file> [--json]` | run a plugin once and print its card or its error; exit 1 on error |
+| `telemetrix plugin check <file> [--json] [--run]` | run a plugin once and print its card, its settings and any error; exit 1 on error. `--run` acts like the plugin's key, so the speed test really runs |
 | `telemetrix plugin list` | list the plugins that would run |
 | `telemetrix themes` | list the theme names |
 | `telemetrix selftest --memory [--seconds N] [--json]` | measure memory against the budgets; exit 1 if over (see below) |
@@ -113,6 +121,48 @@ readings there; protecting against that is planned after v0.1.
 
 **Roadmap:** the original brief lists eight more themes. They are planned for
 later versions.
+
+## Plugins and where their data comes from
+
+telemetrix comes with seven plugins. None needs an account or a key. The
+network plugins stay far below the free limits of their services. When a
+service does not answer, a card keeps its last values and marks them
+stale. Rates, prices, the weather place and speed results are kept in a
+small file per plugin (`%LOCALAPPDATA%\telemetrix\plugins` on Windows,
+`~/.local/share/telemetrix/plugins` on Linux, or `--data-dir <dir>`), so
+cards are not empty after a restart.
+
+| Plugin | Shows | Data source | Free limit | How often telemetrix asks |
+|---|---|---|---|---|
+| Currency | USD, EUR, GBP to hryvnia from two banks, 7- and 30-day graphs | Monobank `api.monobank.ua/bank/currency`; PrivatBank card rate `api.privatbank.ua/p24api/pubinfo`; NBU official rate `bank.gov.ua/NBU_Exchange` | Monobank: 1 request per 5 minutes. PrivatBank and NBU publish no limit. | Monobank and PrivatBank every 5 minutes (Monobank never sooner, even after a restart). NBU history once a day, one request per currency. |
+| Crypto | BTC, ETH, SOL in USDT, 7- and 30-day graphs | Binance `api.binance.com/api/v3/ticker/price` and `/klines` | Binance counts a request weight of 6000 per minute per IP address. | Prices every minute (one request). Daily history once an hour, one request per coin. |
+| Weather | now, tomorrow and the day after | Open-Meteo `api.open-meteo.com` and its geocoding service | 10 000 requests per day for non-commercial use. | Every 10 minutes. The city is looked up once per change. |
+| Speed test | download, upload, ping | Cloudflare `speed.cloudflare.com` | No published limit. | Every 6 hours, and when you press `g`. Never at start. |
+| Internet latency | time to connect to 1.1.1.1:443 | a TCP connection, no service | none | every 30 seconds |
+| Clock, Uptime | time and date; computer name and uptime | this computer | none | every second; every 30 seconds |
+
+**The speed test uses data.** One run downloads 25 MB and uploads 10 MB with
+the default settings, about 35 MB. At the 6-hour interval that is about
+140 MB a day, or about 4.2 GB a month. On a metered connection, raise the
+interval, lower `download_mb` and `upload_mb` in the `s` box, or set
+`enabled = false` under `[plugin.speedtest]`.
+
+Settings you can change in the `s` box:
+
+- **Currency:** the primary bank (`mono` or `privat`), the 30-day graph on
+  or off, and `compact`. The full row
+  `USD  mono 44.80/45.20  privat 44.60/45.05` needs a card about 42
+  characters wide; with `compact` on, the card shows only the primary bank.
+  The list of currencies (`currencies = ["USD", "EUR", "GBP"]`) is set in
+  the file.
+- **Crypto:** the quote currency (default `USDT`). The coins
+  (`coins = ["BTC", "ETH", "SOL"]`) are set in the file.
+- **Weather:** the city. Exact `lat` and `lon` in the file are used instead
+  of the city. Temperatures are always °C.
+- **Speed test:** `download_mb` (5..100), `upload_mb` (1..50) and
+  `max_seconds` per direction (3..15).
+
+To write your own plugin, see [PLUGINS.md](PLUGINS.md).
 
 ## Settings
 
@@ -193,7 +243,7 @@ Keeping telemetrix small is a main goal. There are two budgets:
 
 - **Core** (the dashboard without plugins): under **10 MB** working set. This
   limit is fixed.
-- **Total** (the default setup, Matrix and the five plugins): under
+- **Total** (the default setup, Matrix and the seven plugins): under
   `memory.budget_mb`, **13 MB** by default. Each plugin gets an allowance of
   about 1 MB (`memory.plugin_budget_mb` for its Lua memory).
 
@@ -216,7 +266,8 @@ memory that belongs to this program alone.
 | 2 offline plugins (clock, uptime) | 7.9 MB | 2.4 MB |
 | 1 network plugin (weather) | 10.0 MB | 2.5 MB |
 | 5 plugins, minimalist | 11.0 MB | 3.4 MB |
-| 5 plugins, matrix (default) | 11.0 MB | 3.3 MB |
+| 5 plugins, matrix (v0.1 default) | 11.0 MB | 3.3 MB |
+| 7 plugins, matrix (v0.2 default, `selftest --memory`, 30 s) | 12.5 MB | 4.5 MB |
 
 For comparison, a Rust program that does nothing but sleep uses 4.9 MB
 working set on the same PC. Much of that comes from Windows itself and from
@@ -260,8 +311,8 @@ fail, which is fine for this test.
 ```
 memory selftest: 30 s per run, one run after the other, hidden consoles
             final      peak   private  budget  result
-total     11.1 MB   11.1 MB    3.3 MB   13 MB  ok  (5 plugins)
-core       7.4 MB    7.4 MB    2.0 MB   10 MB  ok  (0 plugins)
+total     12.5 MB   12.6 MB    4.5 MB   13 MB  ok  (7 plugins)
+core       7.6 MB    7.7 MB    2.0 MB   10 MB  ok  (0 plugins)
 ```
 
 Run it before every release. Agents should run it after any change to the
@@ -309,7 +360,7 @@ resident memory; Linux has no cheap "private bytes" figure):
 | Setup | Resident memory |
 |---|---|
 | no plugins | 4.0 MB |
-| 5 plugins, matrix (default) | 5.6 MB |
+| 5 plugins, matrix (v0.1 default) | 5.6 MB |
 
 These are WSL numbers: Linux shares library pages differently from Windows,
 so they are not comparable with the Windows table above.
