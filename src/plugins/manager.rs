@@ -148,6 +148,15 @@ impl Manager {
         }
     }
 
+    /// Wakes the plugin with this card id to run now; false when none runs.
+    pub fn run_now(&self, id: &str) -> bool {
+        let running = self.running.values().find(|r| r.handle.current_id() == id);
+        if let Some(r) = running {
+            r.handle.run_now();
+        }
+        running.is_some()
+    }
+
     pub fn stop_all(&mut self) {
         let paths: Vec<PathBuf> = self.running.keys().cloned().collect();
         for path in paths {

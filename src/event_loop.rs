@@ -267,6 +267,16 @@ impl Loop {
                 s.dirty = true;
             }
             Action::Reload => self.rescan_plugins(true),
+            Action::Key(c) => {
+                if let Some(id) = s.plugin_keys.get(&c).cloned() {
+                    let msg = if self.plugins.run_now(&id) {
+                        format!("{id}: running now")
+                    } else {
+                        format!("{id} is not running")
+                    };
+                    self.state.show_toast(&msg);
+                }
+            }
             Action::Nothing => {}
         }
     }

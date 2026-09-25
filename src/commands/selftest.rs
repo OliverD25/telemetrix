@@ -85,6 +85,9 @@ pub fn run(seconds: u64, json: bool, flags: &Flags) -> ExitCode {
             run.report.display().to_string(),
             "--selftest-seconds".to_string(),
             seconds.to_string(),
+            // Plugin stores of the test runs never touch the user's data.
+            "--data-dir".to_string(),
+            dir.join(format!("{label}-data")).display().to_string(),
         ];
         if core {
             args.push("--no-plugins".into());

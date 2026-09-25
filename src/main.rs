@@ -24,6 +24,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    plugins::store::set_data_dir(cli.flags.data_dir.clone());
     match cli.command {
         Command::Help => {
             print!("{}", cli::HELP);

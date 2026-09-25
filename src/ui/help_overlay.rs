@@ -4,6 +4,7 @@ use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::app::AppState;
 use crate::themes::common::fg;
 
 const KEYS: [(&str, &str); 10] = [
@@ -19,18 +20,26 @@ const KEYS: [(&str, &str); 10] = [
     ("--exit-on-any-key", "screensaver mode: any key quits"),
 ];
 
-pub fn draw(frame: &mut Frame, area: Rect) {
-    let height = u16::try_from(KEYS.len() + 2).unwrap_or(u16::MAX);
-    let inner = super::overlay_frame(frame, super::popup(area, 72, height), "keys");
-    let lines: Vec<Line> = KEYS
+pub fn draw(frame: &mut Frame, area: Rect, state: &AppState) {
+    let plugin_rows: Vec<(String, String)> = state
+        .plugin_keys
         .iter()
+        .map(|(key, id)| (key.to_string(), format!("run the {id} plugin now")))
+        .collect();
+    let height = u16::try_from(KEYS.len() + plugin_rows.len() + 2).unwrap_or(u16::MAX);
+    let inner = super::overlay_frame(frame, super::popup(area, 72, height), "keys");
+    let rows = KEYS
+        .iter()
+        .map(|(k, w)| (k.to_string(), w.to_string()))
+        .chain(plugin_rows);
+    let lines: Vec<Line> = rows
         .map(|(keys, what)| {
             Line::from(vec![
                 Span::styled(
                     format!("  {keys:<20}"),
                     fg(Color::White).add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(*what),
+                Span::raw(what),
             ])
         })
         .collect();

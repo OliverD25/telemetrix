@@ -10,8 +10,14 @@ pub struct PluginManifest {
     pub id: String,
     pub title: String,
     pub interval: Option<u64>,
+    /// A key that runs `update()` at once, like `g` for the speed test.
+    pub run_key: Option<char>,
+    /// Seconds for one `update()` call, capped at `MAX_CALL_TIMEOUT`.
+    pub call_timeout: Option<u64>,
     pub update: Function,
 }
+
+pub const MAX_CALL_TIMEOUT: u64 = 60;
 
 impl PluginManifest {
     pub fn from_table(t: &Table, file_stem: &str) -> Result<Self, String> {
@@ -31,6 +37,24 @@ impl PluginManifest {
             Value::Number(n) if n >= 1.0 => Some(n as u64),
             _ => return Err("interval must be a number of seconds, 1 or more".into()),
         };
+        let run_key = match t.get::<Value>("run_key").map_err(|e| e.to_string())? {
+            Value::Nil => None,
+            Value::String(s) => {
+                let s = s.to_string_lossy();
+                let mut chars = s.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None) if !c.is_control() && c != ' ' => Some(c),
+                    _ => return Err("run_key must be one printable character".into()),
+                }
+            }
+            _ => return Err("run_key must be a one-character string".into()),
+        };
+        let call_timeout = match t.get::<Value>("call_timeout").map_err(|e| e.to_string())? {
+            Value::Nil => None,
+            Value::Integer(n) if n >= 1 => Some((n as u64).min(MAX_CALL_TIMEOUT)),
+            Value::Number(n) if n >= 1.0 => Some((n as u64).min(MAX_CALL_TIMEOUT)),
+            _ => return Err("call_timeout must be a number of seconds, 1 or more".into()),
+        };
         let update = match t.get::<Value>("update").map_err(|e| e.to_string())? {
             Value::Function(f) => f,
             _ => return Err("the returned table needs an update function".into()),
@@ -39,6 +63,8 @@ impl PluginManifest {
             id,
             title,
             interval,
+            run_key,
+            call_timeout,
             update,
         })
     }
@@ -156,6 +182,30 @@ mod tests {
             .eval()
             .unwrap();
         assert!(PluginManifest::from_table(&t, "f").is_err());
+    }
+
+    #[test]
+    fn run_key_and_call_timeout() {
+        let lua = Lua::new();
+        let t: Table = lua
+            .load("return { run_key = 'g', call_timeout = 90, update = print }")
+            .eval()
+            .unwrap();
+        let m = PluginManifest::from_table(&t, "speed").unwrap();
+        assert_eq!(m.run_key, Some('g'));
+        assert_eq!(m.call_timeout, Some(60), "capped at 60 s");
+        for bad in [
+            "run_key = 'gg'",
+            "run_key = ''",
+            "run_key = 1",
+            "call_timeout = 0",
+        ] {
+            let t: Table = lua
+                .load(format!("return {{ {bad}, update = print }}"))
+                .eval()
+                .unwrap();
+            assert!(PluginManifest::from_table(&t, "x").is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -28,6 +28,7 @@ Flags:
   --no-plugins          run no plugins
   --exit-on-any-key     screensaver mode: any key quits
   --log <path>          also write the log to this file
+  --data-dir <dir>      folder for plugin stores
   -h, --help            this text
   -V, --version         version
 ";
@@ -46,6 +47,8 @@ pub struct Flags {
     /// Hidden, used by `selftest`: write a memory report here after `selftest_seconds`, then quit.
     pub selftest_report: Option<PathBuf>,
     pub selftest_seconds: u64,
+    /// Where plugin stores live; the OS data folder when not set.
+    pub data_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -150,6 +153,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
                     return Err("--seconds must be 5..3600".into());
                 }
                 sw.seconds = Some(n);
+            }
+            Long("data-dir") => {
+                flags.data_dir = Some(parser.value().map_err(|e| e.to_string())?.into())
             }
             Long("selftest-report") => {
                 flags.selftest_report = Some(parser.value().map_err(|e| e.to_string())?.into())

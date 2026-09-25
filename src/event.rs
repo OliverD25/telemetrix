@@ -9,6 +9,11 @@ pub enum AppEvent {
     Plugin(PluginData),
     PluginRemoved(String),
     Log(String),
+    /// Sent once after a plugin file loaded: what the main loop must know about it.
+    PluginMeta {
+        id: String,
+        run_key: Option<char>,
+    },
     /// One round of the Windows network-drive thread.
     Network(Vec<NetDrive>),
 }
@@ -17,5 +22,7 @@ pub enum AppEvent {
 #[derive(Debug)]
 pub enum WorkerCmd<R> {
     Reconfigure(R),
+    /// Do the work now instead of at the next interval (plugin run keys).
+    RunNow,
     Stop,
 }

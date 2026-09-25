@@ -1,5 +1,7 @@
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::net::{TcpStream, ToSocketAddrs};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -7,7 +9,10 @@ use std::time::{Duration, Instant};
 use mlua::{Lua, LuaSerdeExt, Table, Value};
 use ureq::Agent;
 
+use super::PluginData;
+use super::manifest::CardUpdate;
 use super::sandbox::{Deadline, remaining};
+use super::store;
 
 const BODY_LIMIT: u64 = 1 << 20;
 const AGENT_IDLE: Duration = Duration::from_secs(60);
@@ -15,6 +20,18 @@ const PING_TIMEOUT: Duration = Duration::from_secs(2);
 const USER_AGENT: &str = concat!("telemetrix/", env!("CARGO_PKG_VERSION"));
 
 pub type LogFn = Rc<dyn Fn(&str)>;
+/// Where `telemetrix.emit(card)` sends an in-between card.
+pub type EmitFn = Rc<dyn Fn(PluginData)>;
+
+/// More emits than this per second are dropped.
+pub const EMITS_PER_SECOND: usize = 10;
+
+/// The plugin's id and title: the file name until the file has loaded.
+#[derive(Clone, Debug, Default)]
+pub struct PluginMeta {
+    pub id: String,
+    pub title: String,
+}
 
 /// One HTTP client for all plugin threads, so the TLS root store and the
 /// connection pool exist once. It is created on the first request and dropped
@@ -61,6 +78,9 @@ impl Http {
 
 pub struct HostCtx {
     pub log: LogFn,
+    pub emit: EmitFn,
+    pub meta: Rc<RefCell<PluginMeta>>,
+    pub data_dir: PathBuf,
     pub http: Rc<RefCell<Http>>,
     pub deadline: Deadline,
 }
@@ -171,6 +191,67 @@ pub fn install(lua: &Lua, ctx: HostCtx) -> mlua::Result<()> {
 
     t.set("now_ms", lua.create_function(|_, ()| Ok(now_ms()))?)?;
 
+    let (sink, meta) = (ctx.emit.clone(), ctx.meta.clone());
+    let recent: RefCell<VecDeque<Instant>> = RefCell::new(VecDeque::new());
+    t.set(
+        "emit",
+        lua.create_function(move |_, card: Value| {
+            let now = Instant::now();
+            let mut recent = recent.borrow_mut();
+            while recent
+                .front()
+                .is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(1))
+            {
+                recent.pop_front();
+            }
+            // A malformed card is an error even when it would be dropped.
+            let card = CardUpdate::from_value(card).map_err(mlua::Error::runtime)?;
+            if recent.len() >= EMITS_PER_SECOND {
+                return Ok(false);
+            }
+            recent.push_back(now);
+            let meta = meta.borrow();
+            sink(PluginData {
+                id: meta.id.clone(),
+                title: card.title.unwrap_or_else(|| meta.title.clone()),
+                metrics: card.metrics,
+                error: None,
+                lua_bytes: None,
+            });
+            Ok(true)
+        })?,
+    )?;
+
+    let (dir, meta) = (ctx.data_dir.clone(), ctx.meta.clone());
+    t.set(
+        "store_get",
+        lua.create_function(move |lua, ()| {
+            Ok(match store::load(&dir, &meta.borrow().id) {
+                Ok(Some(json)) => (json_to_lua(lua, &json)?, Value::Nil),
+                Ok(None) => (Value::Nil, Value::Nil),
+                Err(e) => (Value::Nil, Value::String(lua.create_string(e)?)),
+            })
+        })?,
+    )?;
+    let (dir, meta) = (ctx.data_dir.clone(), ctx.meta.clone());
+    t.set(
+        "store_set",
+        lua.create_function(move |lua, value: Value| {
+            let json: serde_json::Value = match lua.from_value(value) {
+                Ok(json) => json,
+                Err(e) => {
+                    let msg =
+                        format!("only tables of text, numbers and booleans can be stored: {e}");
+                    return Ok((Value::Nil, Value::String(lua.create_string(msg)?)));
+                }
+            };
+            Ok(match store::save(&dir, &meta.borrow().id, &json) {
+                Ok(()) => (Value::Boolean(true), Value::Nil),
+                Err(e) => (Value::Nil, Value::String(lua.create_string(e)?)),
+            })
+        })?,
+    )?;
+
     let deadline = ctx.deadline.clone();
     t.set(
         "tcp_ping_ms",
@@ -237,11 +318,56 @@ mod tests {
         let sink = lines.clone();
         let ctx = HostCtx {
             log: Rc::new(move |m: &str| sink.borrow_mut().push(m.to_string())),
+            emit: Rc::new(|_| {}),
+            meta: Rc::new(RefCell::new(PluginMeta {
+                id: "test".into(),
+                title: "Test".into(),
+            })),
+            data_dir: std::env::temp_dir().join(format!("telemetrix-host-{}", std::process::id())),
             http: Rc::new(RefCell::new(Http::new(Duration::from_secs(1)))),
             deadline: Rc::new(Cell::new(None)),
         };
         install(&lua, ctx).unwrap();
         (lua, lines)
+    }
+
+    #[test]
+    fn emit_is_limited_to_ten_per_second() {
+        let lua = Lua::new();
+        let got = Rc::new(RefCell::new(Vec::new()));
+        let seen = got.clone();
+        let ctx = HostCtx {
+            log: Rc::new(|_: &str| {}),
+            emit: Rc::new(move |d: PluginData| seen.borrow_mut().push(d)),
+            meta: Rc::new(RefCell::new(PluginMeta {
+                id: "speed".into(),
+                title: "Speed".into(),
+            })),
+            data_dir: std::env::temp_dir(),
+            http: Rc::new(RefCell::new(Http::new(Duration::from_secs(1)))),
+            deadline: Rc::new(std::cell::Cell::new(None)),
+        };
+        install(&lua, ctx).unwrap();
+        let sent: i64 = lua
+            .load(
+                "local n = 0 for i = 1, 15 do \
+                 if telemetrix.emit({ metrics = { { label = 'down', value = i } } }) then n = n + 1 end end \
+                 return n",
+            )
+            .eval()
+            .unwrap();
+        assert_eq!(sent, 10);
+        let got = got.borrow();
+        assert_eq!(got.len(), 10);
+        assert_eq!(
+            (got[0].id.as_str(), got[0].title.as_str()),
+            ("speed", "Speed")
+        );
+        assert_eq!(got[9].metrics[0].value, "10");
+        assert!(
+            lua.load("telemetrix.emit({ nope = 1 })").exec().is_err(),
+            "a bad card is an error"
+        );
     }
 
     #[test]

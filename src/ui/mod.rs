@@ -58,7 +58,7 @@ pub fn draw(frame: &mut Frame, state: &AppState, theme: &mut dyn Theme) {
         Overlay::Settings => settings_overlay::draw(frame, area, state),
         Overlay::Themes => theme_picker::draw(frame, area, state),
         Overlay::Log => log_overlay::draw(frame, area, state),
-        Overlay::Help => help_overlay::draw(frame, area),
+        Overlay::Help => help_overlay::draw(frame, area, state),
     }
 }
 

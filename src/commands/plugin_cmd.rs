@@ -42,10 +42,19 @@ pub fn run(cmd: PluginCmd, flags: &Flags) -> ExitCode {
 
 fn check(file: &Path, json: bool, cfg: &Config) -> ExitCode {
     let settings = RunnerSettings::from_config(cfg);
+    let progress = Rc::new(|d: crate::plugins::PluginData| {
+        let rows: Vec<String> = d
+            .metrics
+            .iter()
+            .map(|m| format!("{} {}", m.label, m.value))
+            .collect();
+        eprintln!("progress: {}", rows.join(", "));
+    });
     let data = runner::run_once(
         file,
         &settings,
         Rc::new(|msg: &str| eprintln!("log: {msg}")),
+        progress,
     );
     if json {
         println!("{:#}", to_json(&data));
@@ -80,7 +89,13 @@ fn list(cfg: &Config) -> ExitCode {
     }
     for (path, _) in files {
         let stop = Arc::new(AtomicBool::new(false));
-        match Plugin::load(&path, &settings, stop, Rc::new(|_: &str| {})) {
+        match Plugin::load(
+            &path,
+            &settings,
+            stop,
+            Rc::new(|_: &str| {}),
+            runner::no_emit(),
+        ) {
             Ok(p) => {
                 let enabled = if cfg.plugins.enabled && settings.enabled(p.id()) {
                     "enabled"
@@ -121,7 +136,7 @@ pub fn run_all_once(cfg: &Config) -> Vec<Value> {
     for (i, path) in files.iter().enumerate() {
         let (tx, path, settings) = (tx.clone(), path.clone(), settings.clone());
         thread::spawn(move || {
-            let data = runner::run_once(&path, &settings, Rc::new(|_: &str| {}));
+            let data = runner::run_once(&path, &settings, Rc::new(|_: &str| {}), runner::no_emit());
             let _ = tx.send((i, data));
         });
     }

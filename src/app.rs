@@ -68,6 +68,8 @@ pub enum Action {
     },
     FpsStep(i32),
     OpenThemes,
+    /// A key the app does not use; it may be a plugin's run key.
+    Key(char),
     /// Preview the next (1) or previous (-1) theme in the picker.
     PickerMove(i32),
     PickerSave,
@@ -122,11 +124,14 @@ pub fn key_action(key: &KeyEvent, overlay: Overlay, exit_on_any_key: bool) -> Ac
         KeyCode::Char('?') => Action::ToggleHelp,
         KeyCode::Char(' ') => Action::TogglePause,
         KeyCode::Char('r') => Action::Reload,
+        KeyCode::Char(c) => Action::Key(c),
         _ => Action::Nothing,
     }
 }
 
 const TOAST_FOR: Duration = Duration::from_secs(2);
+/// Keys the dashboard itself uses; a plugin cannot take them as run keys.
+pub const RESERVED_KEYS: [char; 12] = ['q', 't', 'T', 's', 'l', 'r', '?', ' ', '+', '=', '-', 'Q'];
 
 pub struct AppState {
     pub config: Config,
@@ -153,6 +158,8 @@ pub struct AppState {
     plugins_over_budget: BTreeSet<String>,
     /// While the theme picker is open: the theme that Esc goes back to.
     pub picker_original: usize,
+    /// Run keys of plugins: key → plugin id.
+    pub plugin_keys: BTreeMap<char, String>,
     /// Network drives; `None` until the first answer ("checking...").
     pub network: Option<Vec<NetDrive>>,
     log_sink: Option<LineWriter<File>>,
@@ -186,6 +193,7 @@ impl AppState {
             plugins_over_budget: BTreeSet::new(),
             picker_original: theme_idx,
             network: None,
+            plugin_keys: BTreeMap::new(),
             log_sink: None,
         };
         state.open_log_file();
@@ -260,7 +268,14 @@ impl AppState {
                 }
                 self.store_plugin(data);
             }
+            AppEvent::PluginMeta { id, run_key } => {
+                self.plugin_keys.retain(|_, owner| *owner != id);
+                if let Some(key) = run_key {
+                    self.register_run_key(&id, key);
+                }
+            }
             AppEvent::PluginRemoved(id) => {
+                self.plugin_keys.retain(|_, owner| *owner != id);
                 self.plugins.remove(&id);
                 self.plugins_over_budget.remove(&id);
             }
@@ -268,6 +283,22 @@ impl AppState {
             AppEvent::Network(drives) => self.network = Some(drives),
         }
         self.dirty = true;
+    }
+
+    /// Accepts a plugin's run key unless the app or another plugin uses it.
+    fn register_run_key(&mut self, id: &str, key: char) {
+        if RESERVED_KEYS.contains(&key) {
+            self.log(&format!(
+                "warning: plugin {id}: run key {key:?} is used by telemetrix itself, ignored"
+            ));
+        } else if let Some(owner) = self.plugin_keys.get(&key) {
+            let owner = owner.clone();
+            self.log(&format!(
+                "warning: plugin {id}: run key {key:?} already belongs to {owner}, ignored"
+            ));
+        } else {
+            self.plugin_keys.insert(key, id.to_string());
+        }
     }
 
     fn store_plugin(&mut self, mut data: PluginData) {
@@ -390,7 +421,7 @@ mod tests {
         assert_eq!(key_action(&ctrl_c, none, false), Action::Quit);
         assert_eq!(
             key_action(&key(KeyCode::Char('c')), none, false),
-            Action::Nothing
+            Action::Key('c')
         );
         assert_eq!(
             key_action(&key(KeyCode::Char('t')), none, false),
@@ -567,6 +598,28 @@ mod tests {
         data.lua_bytes = Some(1000);
         state.apply(AppEvent::Plugin(data));
         assert_eq!(lines(&state), start + 4);
+    }
+
+    #[test]
+    fn run_keys_skip_app_keys_and_duplicates() {
+        let mut state = AppState::new(Config::default(), ConfigStatus::Ok);
+        let meta = |id: &str, key| AppEvent::PluginMeta {
+            id: id.into(),
+            run_key: Some(key),
+        };
+        state.apply(meta("speedtest", 'g'));
+        state.apply(meta("other", 'g'));
+        state.apply(meta("bad", 's'));
+        assert_eq!(state.plugin_keys.len(), 1);
+        assert_eq!(state.plugin_keys[&'g'], "speedtest");
+        let warnings = state.log.iter().filter(|l| l.level == Level::Warn).count();
+        assert_eq!(warnings, 2);
+        state.apply(AppEvent::PluginRemoved("speedtest".into()));
+        assert!(state.plugin_keys.is_empty());
+        assert_eq!(
+            key_action(&key(KeyCode::Char('g')), Overlay::None, false),
+            Action::Key('g')
+        );
     }
 
     #[test]

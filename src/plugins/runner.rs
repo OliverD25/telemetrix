@@ -9,7 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::PluginData;
-use super::host_api::{self, HostCtx, Http, LogFn};
+use super::host_api::{self, EmitFn, HostCtx, Http, LogFn, PluginMeta};
 use super::manifest::{CardUpdate, PluginManifest};
 use super::sandbox::Sandbox;
 use crate::config::{Config, PluginConfig};
@@ -23,6 +23,8 @@ pub struct RunnerSettings {
     pub http_timeout: Duration,
     pub call_timeout: Duration,
     pub memory_limit: usize,
+    /// Where plugin stores live (`--data-dir` or the OS data folder).
+    pub data_dir: PathBuf,
 }
 
 impl RunnerSettings {
@@ -34,6 +36,7 @@ impl RunnerSettings {
             http_timeout: Duration::from_secs(p.http_timeout_s),
             call_timeout: Duration::from_secs(p.call_timeout_s),
             memory_limit: (p.memory_limit_mb as usize) << 20,
+            data_dir: super::store::data_dir(),
         }
     }
 
@@ -81,24 +84,37 @@ pub struct Plugin {
     http: Rc<RefCell<Http>>,
 }
 
+/// An emit sink for callers that show no progress.
+pub fn no_emit() -> EmitFn {
+    Rc::new(|_| {})
+}
+
 impl Plugin {
     pub fn load(
         path: &Path,
         s: &RunnerSettings,
         stop: Arc<AtomicBool>,
         log: LogFn,
+        emit: EmitFn,
     ) -> Result<Self, String> {
         let source = std::fs::read_to_string(path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let sandbox = Sandbox::new(s.memory_limit, stop).map_err(|e| short(&e))?;
         let http = Rc::new(RefCell::new(Http::new(s.http_timeout)));
+        let stem = stem(path);
+        let meta = Rc::new(RefCell::new(PluginMeta {
+            id: stem.clone(),
+            title: stem.clone(),
+        }));
         let ctx = HostCtx {
             log,
+            emit,
+            meta: meta.clone(),
+            data_dir: s.data_dir.clone(),
             http: http.clone(),
             deadline: sandbox.deadline.clone(),
         };
         host_api::install(&sandbox.lua, ctx).map_err(|e| short(&e))?;
-        let stem = stem(path);
         if let Some(cfg) = s.for_id(&stem) {
             host_api::set_settings(&sandbox.lua, &cfg.settings).map_err(|e| short(&e))?;
         }
@@ -106,6 +122,10 @@ impl Plugin {
         let table = sandbox.load_file(path, &source).map_err(|e| short(&e));
         sandbox.disarm();
         let manifest = PluginManifest::from_table(&table?, &stem)?;
+        *meta.borrow_mut() = PluginMeta {
+            id: manifest.id.clone(),
+            title: manifest.title.clone(),
+        };
         Ok(Self {
             sandbox,
             manifest,
@@ -129,6 +149,17 @@ impl Plugin {
             .map_or(s.default_interval, Duration::from_secs)
     }
 
+    pub fn run_key(&self) -> Option<char> {
+        self.manifest.run_key
+    }
+
+    /// The plugin's own `call_timeout`, else `plugins.call_timeout_s`.
+    pub fn call_timeout(&self, s: &RunnerSettings) -> Duration {
+        self.manifest
+            .call_timeout
+            .map_or(s.call_timeout, Duration::from_secs)
+    }
+
     pub fn apply_limits(&self, s: &RunnerSettings) {
         let _ = self.sandbox.lua.set_memory_limit(s.memory_limit);
         self.http.borrow_mut().timeout = s.http_timeout;
@@ -138,7 +169,7 @@ impl Plugin {
         let empty = toml_edit::Table::new();
         let settings = s.for_id(self.id()).map_or(&empty, |c| &c.settings);
         host_api::set_settings(&self.sandbox.lua, settings).map_err(|e| short(&e))?;
-        self.sandbox.arm(s.call_timeout);
+        self.sandbox.arm(self.call_timeout(s));
         let result = self.manifest.update.call::<mlua::Value>(());
         self.sandbox.disarm();
         let card = CardUpdate::from_value(result.map_err(|e| short(&e))?)?;
@@ -161,9 +192,9 @@ impl Plugin {
 }
 
 /// Loads a plugin and runs `update()` once on the calling thread.
-pub fn run_once(path: &Path, s: &RunnerSettings, log: LogFn) -> PluginData {
+pub fn run_once(path: &Path, s: &RunnerSettings, log: LogFn, emit: EmitFn) -> PluginData {
     let stem = stem(path);
-    match Plugin::load(path, s, Arc::new(AtomicBool::new(false)), log) {
+    match Plugin::load(path, s, Arc::new(AtomicBool::new(false)), log, emit) {
         Ok(p) => p
             .update(s)
             .unwrap_or_else(|e| error_data(p.id(), p.title(), e)),
@@ -186,6 +217,11 @@ impl RunnerHandle {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
         let _ = self.cmd.send(WorkerCmd::Stop);
+    }
+
+    /// Wakes the thread from its interval sleep to run `update()` now.
+    pub fn run_now(&self) {
+        let _ = self.cmd.send(WorkerCmd::RunNow);
     }
 }
 
@@ -223,18 +259,26 @@ fn run(
     let log: LogFn = Rc::new(move |msg: &str| {
         let _ = log_tx.send(AppEvent::Log(format!("plugin {log_name}: {msg}")));
     });
-    let plugin = match Plugin::load(path, &settings, stop.clone(), log) {
+    let emit_tx = tx.clone();
+    let emit: EmitFn = Rc::new(move |data| {
+        let _ = emit_tx.send(AppEvent::Plugin(data));
+    });
+    let plugin = match Plugin::load(path, &settings, stop.clone(), log, emit) {
         Ok(p) => p,
         Err(e) => {
             let _ = tx.send(AppEvent::Log(format!("error: plugin {stem}: {e}")));
             let _ = tx.send(AppEvent::Plugin(error_data(&stem, &stem, e)));
-            while let Ok(WorkerCmd::Reconfigure(_)) = cmds.recv() {}
+            while let Ok(WorkerCmd::Reconfigure(_) | WorkerCmd::RunNow) = cmds.recv() {}
             return;
         }
     };
     if let Ok(mut slot) = id_slot.lock() {
         *slot = plugin.id().to_string();
     }
+    let _ = tx.send(AppEvent::PluginMeta {
+        id: plugin.id().to_string(),
+        run_key: plugin.run_key(),
+    });
     let _ = tx.send(AppEvent::Log(format!(
         "plugin {} loaded from {}",
         plugin.id(),
@@ -273,7 +317,7 @@ fn run(
                 settings = new;
                 plugin.apply_limits(&settings);
             }
-            Err(RecvTimeoutError::Timeout) => {}
+            Ok(WorkerCmd::RunNow) | Err(RecvTimeoutError::Timeout) => {}
         }
     }
 }
@@ -299,6 +343,51 @@ mod tests {
         Rc::new(|_: &str| {})
     }
 
+    fn temp_data(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("telemetrix-runner-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn store_survives_between_runs() {
+        let mut s = settings();
+        s.data_dir = temp_data("store");
+        let first = run_once(&fixture("store.lua"), &s, quiet(), no_emit());
+        assert_eq!(first.error, None);
+        assert_eq!(first.metrics[0].value, "1");
+        let second = run_once(&fixture("store.lua"), &s, quiet(), no_emit());
+        assert_eq!(
+            second.metrics[0].value, "2",
+            "the count came back from the store"
+        );
+        assert!(s.data_dir.join("plugins").join("store.json").is_file());
+        std::fs::remove_dir_all(&s.data_dir).unwrap();
+    }
+
+    #[test]
+    fn run_now_wakes_the_thread_between_intervals() {
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn(fixture("static.lua"), settings(), tx);
+        let card = |rx: &mpsc::Receiver<AppEvent>, wait| loop {
+            match rx.recv_timeout(wait) {
+                Ok(AppEvent::Plugin(d)) => return Some(d),
+                Ok(_) => {}
+                Err(_) => return None,
+            }
+        };
+        assert!(card(&rx, Duration::from_secs(5)).is_some(), "first run");
+        let start = Instant::now();
+        handle.run_now();
+        assert!(
+            card(&rx, Duration::from_secs(2)).is_some(),
+            "woken, although the interval is 60 s"
+        );
+        assert!(start.elapsed() < Duration::from_secs(2));
+        handle.stop();
+    }
+
     #[test]
     fn static_plugin_returns_its_metrics() {
         let mut s = settings();
@@ -311,7 +400,7 @@ mod tests {
                 settings: doc.as_table().clone(),
             },
         );
-        let data = run_once(&fixture("static.lua"), &s, quiet());
+        let data = run_once(&fixture("static.lua"), &s, quiet(), no_emit());
         assert_eq!(data.error, None);
         assert_eq!(data.title, "Static");
         assert_eq!(data.metrics[0].label, "answer");
@@ -322,6 +411,7 @@ mod tests {
             &s,
             Arc::new(AtomicBool::new(false)),
             quiet(),
+            no_emit(),
         )
         .unwrap();
         assert_eq!(
@@ -333,7 +423,7 @@ mod tests {
 
     #[test]
     fn broken_plugin_reports_the_line() {
-        let data = run_once(&fixture("broken.lua"), &settings(), quiet());
+        let data = run_once(&fixture("broken.lua"), &settings(), quiet(), no_emit());
         let err = data.error.expect("broken.lua must fail");
         assert_eq!(data.id, "broken");
         assert!(err.contains("broken.lua:"), "{err}");
@@ -342,7 +432,7 @@ mod tests {
     #[test]
     fn slow_plugin_hits_the_deadline() {
         let start = Instant::now();
-        let data = run_once(&fixture("slow.lua"), &settings(), quiet());
+        let data = run_once(&fixture("slow.lua"), &settings(), quiet(), no_emit());
         assert!(
             data.error
                 .as_deref()
@@ -358,12 +448,18 @@ mod tests {
         let s = RunnerSettings::from_config(&Config::default());
         for name in ["clock", "uptime", "network_ping", "crypto", "weather"] {
             let path = dir.join(format!("{name}.lua"));
-            let p = Plugin::load(&path, &s, Arc::new(AtomicBool::new(false)), quiet())
-                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let p = Plugin::load(
+                &path,
+                &s,
+                Arc::new(AtomicBool::new(false)),
+                quiet(),
+                no_emit(),
+            )
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(p.id(), name);
         }
         for name in ["clock", "uptime"] {
-            let data = run_once(&dir.join(format!("{name}.lua")), &s, quiet());
+            let data = run_once(&dir.join(format!("{name}.lua")), &s, quiet(), no_emit());
             assert_eq!(data.error, None, "{name}");
             assert_eq!(data.metrics.len(), 2, "{name}");
         }
