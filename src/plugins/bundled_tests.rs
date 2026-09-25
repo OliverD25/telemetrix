@@ -658,7 +658,7 @@ mod speedtest {
             .load("return CALLS[1][3], CALLS[1][4], CALLS[1][5]")
             .eval()
             .unwrap();
-        assert_eq!(args, (4, 3, 0.5), "streams, seconds and warm-up");
+        assert_eq!(args, (2, 3, 0.5), "streams, seconds and warm-up");
         let pings: Vec<String> = h.plugin.lua().load("return PINGED").eval().unwrap();
         assert_eq!(
             pings.len(),
@@ -821,7 +821,7 @@ mod speedtest {
         assert_eq!(d.error, None);
         assert_eq!(d.metrics.last().unwrap().label, "30 runs");
         let streams: i64 = h.plugin.lua().load("return CALLS[1][3]").eval().unwrap();
-        assert_eq!(streams, 4, "out of range falls back to the default");
+        assert_eq!(streams, 2, "out of range falls back to the default");
         let log = h.log.borrow();
         assert_eq!(log.len(), 1, "one warning, only for streams: {log:?}");
         assert!(log[0].starts_with("warning: streams = 99"));

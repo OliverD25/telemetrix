@@ -7,7 +7,7 @@
 --   server  = ""   empty: the nearest Ookla server, chosen by ping and kept
 --                  for 24 hours; "host:port" forces one; "cloudflare" uses
 --                  Cloudflare only
---   streams = 4    parallel connections, 1..8
+--   streams = 2    parallel connections, 1..8 (2 keeps a test under the memory budget)
 --   seconds = 3    per direction, 2..10; the first 0.5 s is not counted
 --
 -- Data use: each direction moves its speed times its seconds. At 935 Mbps
@@ -243,7 +243,7 @@ return {
   call_timeout = 60,
   settings_schema = {
     server = { kind = "text", label = "server", default = "" },
-    streams = { kind = "int", label = "streams", min = 1, max = 8, default = 4 },
+    streams = { kind = "int", label = "streams", min = 1, max = 8, default = 2 },
     seconds = { kind = "int", label = "seconds", min = 2, max = 10, default = 3 },
   },
   update = function()

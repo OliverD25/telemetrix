@@ -186,7 +186,7 @@ cards are not empty after a restart.
 | Clock, Uptime | time and date; computer name and uptime | this computer | none | every second; every 30 seconds |
 
 **The speed test uses a lot of data.** It runs for a fixed time, not a
-fixed size: 3 seconds per direction over 4 connections. So each test moves
+fixed size: 3 seconds per direction over 2 connections. So each test moves
 about (download speed + upload speed) × 3 seconds. On a 935/933 Mbps line
 that is about 700 MB per test, and at the 30-minute interval about 34 GB a
 day, or about 1 TB a month. On a metered connection, raise the interval,

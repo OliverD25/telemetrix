@@ -412,7 +412,7 @@ compact = false               # true = only the primary bank, for narrow cards
 [plugin.speedtest]
 interval = 1800               # every 30 minutes; press g to test now
 server = ""                   # empty = nearest Ookla server; "host:port"; "cloudflare"
-streams = 4                   # parallel connections, 1..8
+streams = 2                   # parallel connections, 1..8
 seconds = 3                   # per direction, 2..10; about 700 MB per test at 1 Gbps
 
 [plugin.network_ping]
