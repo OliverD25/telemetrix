@@ -178,7 +178,7 @@ cards are not empty after a restart.
 
 | Plugin | Shows | Data source | Free limit | How often telemetrix asks |
 |---|---|---|---|---|
-| Currency | USD, EUR, GBP to hryvnia from two banks, 7- and 30-day graphs | Monobank `api.monobank.ua/bank/currency`; PrivatBank card rate `api.privatbank.ua/p24api/pubinfo`; NBU official rate `bank.gov.ua/NBU_Exchange` | Monobank: 1 request per 5 minutes. PrivatBank and NBU publish no limit. | Monobank and PrivatBank every 5 minutes (Monobank never sooner, even after a restart). NBU history once a day, one request per currency. |
+| Currency | USD, EUR, GBP to hryvnia from one bank (the other as backup), 7- and 30-day graphs | Monobank `api.monobank.ua/bank/currency`; PrivatBank card rate `api.privatbank.ua/p24api/pubinfo`; NBU official rate `bank.gov.ua/NBU_Exchange` | Monobank: 1 request per 5 minutes. PrivatBank and NBU publish no limit. | Monobank and PrivatBank every 5 minutes (Monobank never sooner, even after a restart). NBU history once a day, one request per currency. |
 | Crypto | BTC, ETH, SOL in USDT, 7- and 30-day graphs | Binance `api.binance.com/api/v3/ticker/price` and `/klines` | Binance counts a request weight of 6000 per minute per IP address. | Prices every minute (one request). Daily history once an hour, one request per coin. |
 | Weather | now, tomorrow and the day after | Open-Meteo `api.open-meteo.com` and its geocoding service | 10 000 requests per day for non-commercial use. | Every 10 minutes. The city is looked up once per change. |
 | Speed test | download, upload, ping, server | the nearest Ookla speed-test server; Cloudflare `speed.cloudflare.com` as the backup | No published limit. | Every 30 minutes, and when you press `g`. Never at start. The server list once a day. |
@@ -203,12 +203,18 @@ Cloudflare's servers can be farther away, so its numbers are often lower.
 
 Settings you can change in the `s` box:
 
-- **Currency:** the primary bank (`mono` or `privat`), the 30-day graph on
-  or off, and `compact`. The full row
-  `USD  mono 44.80/45.20  privat 44.60/45.05` needs a card about 42
-  characters wide; with `compact` on, the card shows only the primary bank.
-  The list of currencies (`currencies = ["USD", "EUR", "GBP"]`) is set in
-  the file.
+- **Currency:** the primary bank, `mono` or `privat`. The card shows that
+  bank's buy and sell rates in a table, with one grey line of 7-day and
+  30-day graphs (of the official NBU rate) under each currency. The other
+  bank is only a backup: the card switches to it when the primary bank
+  fails and has no rates from the last hour, and the title then says
+  `(backup)`. Rates from a failed bank that are less than an hour old stay
+  on the card with a red `stale since 14:32 (HTTP 429)` line. Monobank has
+  no buy/sell rate for GBP, so the card shows its cross rate; PrivatBank
+  has no GBP at all, so the card shows the NBU rate. On a card narrower
+  than about 40 characters the 30-day graph is left out. The list of
+  currencies (`currencies = ["USD", "EUR", "GBP"]`) is set in the file.
+  The v0.2 keys `compact` and `show_month` are no longer used.
 - **Crypto:** the quote currency (default `USDT`). The coins
   (`coins = ["BTC", "ETH", "SOL"]`) are set in the file.
 - **Weather:** the city. A city wins over `lat` and `lon`. The coordinates

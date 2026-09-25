@@ -29,9 +29,9 @@ pub enum MetricStyle {
     Dim,
     /// A column header above other rows.
     Header,
-    /// The value in the rising colour.
+    /// The value (or, without a value, the label) in the rising colour.
     Good,
-    /// The value in the warning colour.
+    /// The value (or, without a value, the label) in the warning colour.
     Bad,
 }
 

@@ -405,9 +405,7 @@ quote = "USDT"
 [plugin.currency]
 interval = 300                # Monobank allows one request per 5 minutes
 currencies = ["USD", "EUR", "GBP"]
-primary_bank = "mono"         # mono | privat
-show_month = true             # the 30-day graph
-compact = false               # true = only the primary bank, for narrow cards
+primary_bank = "mono"         # mono | privat; the other bank is only a backup
 
 [plugin.speedtest]
 interval = 1800               # every 30 minutes; press g to test now

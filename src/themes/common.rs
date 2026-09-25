@@ -437,8 +437,20 @@ pub fn metric_line(m: &crate::plugins::MetricItem, pal: &Palette, w: usize) -> L
     }
     match m.style {
         None => kv(&m.label, m.value.clone(), w, pal, pal.value),
-        Some(MetricStyle::Good) => kv(&m.label, m.value.clone(), w, pal, RISE),
-        Some(MetricStyle::Bad) => kv(&m.label, m.value.clone(), w, pal, WARN),
+        // Without a value, the label carries the colour (a footer like "stale since 14:32").
+        Some(MetricStyle::Good | MetricStyle::Bad) => {
+            let color = if m.style == Some(MetricStyle::Good) {
+                RISE
+            } else {
+                WARN
+            };
+            let label = if m.value.is_empty() {
+                fg(color)
+            } else {
+                fg(pal.label)
+            };
+            styled_kv(&m.label, &m.value, w, label, fg(color))
+        }
         Some(MetricStyle::Header) => {
             let style = fg(pal.label).add_modifier(Modifier::BOLD);
             styled_kv(&m.label, &m.value, w, style, style)

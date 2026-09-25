@@ -1,13 +1,14 @@
--- Hryvnia exchange rates: Monobank and PrivatBank (card rate) now, and the
--- official NBU rate of the last 30 days as 7-day and 30-day graphs.
+-- Hryvnia exchange rates from one bank at a time: Monobank or PrivatBank
+-- (card rate). Under each currency, one quiet line with the 7-day and
+-- 30-day graphs of the official NBU rate.
 -- Settings in [plugin.currency]:
 --   currencies   = { "USD", "EUR", "GBP" }   (file only)
---   primary_bank = "mono" or "privat"       (shown first; the only one when compact)
---   show_month   = true                     (the 30-day graph)
---   compact      = false                    (true: only the primary bank, for narrow cards)
+--   primary_bank = "mono" or "privat"       (the bank the card shows)
+-- The other bank is only a backup: it is shown when the primary bank fails
+-- and has no rates from the last hour. Both banks are still asked on every
+-- update, so the backup is ready.
 -- Monobank allows one request per 5 minutes. The plugin never asks it more
 -- often, even when it runs sooner (a restart, a settings change).
--- A bank that fails keeps its last stored rates, marked stale.
 
 local MONO_URL = "https://api.monobank.ua/bank/currency"
 local PRIVAT_URL = "https://api.privatbank.ua/p24api/pubinfo?json&exchange&coursid=11"
@@ -119,50 +120,63 @@ local function last_n(points, n)
   return out
 end
 
-local function trend_row(label, points)
-  local a, b = points[1], points[#points]
-  return { label = label, value = string.format("%+.2f%%", (b - a) / a * 100), trend = points }
+local BARS = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
+local SPARK_WIDTH = 7
+-- Rates older than this make the card switch to the backup bank.
+local FRESH = 3600
+local NAMES = { mono = "monobank", privat = "privatbank" }
+
+-- `points` as `width` bar glyphs, scaled to their own lowest and highest value.
+local function spark(points, width)
+  local lo, hi = math.huge, -math.huge
+  for _, p in ipairs(points) do
+    lo, hi = math.min(lo, p), math.max(hi, p)
+  end
+  local out = {}
+  for i = 1, width do
+    local idx = #points
+    if width > 1 then
+      idx = ((i - 1) * (#points - 1) + (width - 1) // 2) // (width - 1) + 1
+    end
+    local level = hi > lo and math.floor((points[idx] - lo) / (hi - lo) * 7 + 0.5) + 1 or 4
+    out[i] = BARS[level]
+  end
+  return table.concat(out)
 end
 
-local function bank_text(bank, r)
-  if not r then
-    return nil
-  end
-  if r.buy then
-    return string.format("%s %.2f/%.2f", bank, r.buy, r.sell)
-  end
-  return string.format("%s x%.2f", bank, r.cross)
+local function period(label, points)
+  local a, b = points[1], points[#points]
+  return string.format("%s %s %+.2f%%", label, spark(points, SPARK_WIDTH), (b - a) / a * 100)
+end
+
+-- Two right-aligned columns of the same width, so rows line up.
+local function columns(left, right)
+  return string.format("%8s  %8s", left, right)
 end
 
 local function short_error(err)
   return #err <= 12 and err or err:sub(1, 11) .. "…"
 end
 
-local function currency_rows(cur, store, banks, compact, show_month)
-  local parts, paired = {}, false
-  for i, bank in ipairs(banks) do
-    local b = store[bank] or {}
-    local r = b.rates and b.rates[cur]
-    local text = (i == 1 or not compact) and bank_text(bank, r)
-    if text then
-      if compact and b.err then
-        text = text .. " (stale)"
-      end
-      parts[#parts + 1] = text
-    end
-    paired = paired or (r and r.buy ~= nil)
+local function currency_rows(cur, rates, points)
+  local r = rates and rates[cur]
+  local value
+  if r and r.buy then
+    value = columns(string.format("%.2f", r.buy), string.format("%.2f", r.sell))
+  elseif r and r.cross then
+    value = columns(string.format("%.2f", r.cross), "cross")
+  elseif points and #points > 0 then
+    value = columns(string.format("%.2f", points[#points]), "NBU")
+  else
+    value = "no rate"
   end
-  local points = store.nbu and store.nbu[cur]
-  -- Without a buy/sell pair from any bank (GBP), the official rate helps.
-  if not paired and points and #points > 0 then
-    parts[#parts + 1] = string.format("NBU %.2f", points[#points])
-  end
-  local rows = { { label = cur, value = #parts > 0 and table.concat(parts, "  ") or "no rate" } }
+  local rows = { { label = cur, value = value } }
   if points and #points >= 2 then
-    rows[#rows + 1] = trend_row("7d", last_n(points, 7))
-    if show_month then
-      rows[#rows + 1] = trend_row("30d", last_n(points, 30))
-    end
+    rows[2] = {
+      label = "  " .. period("7d", last_n(points, 7)),
+      value = period("30d", last_n(points, 30)),
+      style = "dim",
+    }
   end
   return rows
 end
@@ -182,6 +196,25 @@ local function currency_list(value)
   return out
 end
 
+-- The bank the card shows: the primary one, unless it failed and has no
+-- rates from the last hour while the other bank has some.
+local function shown_bank(store, primary, now)
+  local other = primary == "mono" and "privat" or "mono"
+  local p = store[primary]
+  local usable = p.rates and (not p.err or now - (p.ok or 0) < FRESH)
+  if usable or not store[other].rates then
+    return primary, nil
+  end
+  local why = p.err or "no rates"
+  if p.ok then
+    why = why .. ", last rates " .. os.date("%H:%M", p.ok)
+  end
+  return other, why
+end
+
+-- The last "which bank" note, so the log gets one line per change.
+local last_note
+
 return {
   title = "Currency",
   interval = 300,
@@ -192,13 +225,11 @@ return {
       options = { "mono", "privat" },
       default = "mono",
     },
-    show_month = { kind = "bool", label = "30-day graph", default = true },
-    compact = { kind = "bool", label = "primary bank only", default = false },
   },
   update = function()
     local s = telemetrix.settings
     local currencies = currency_list(s.currencies)
-    local banks = s.primary_bank == "privat" and { "privat", "mono" } or { "mono", "privat" }
+    local primary = s.primary_bank == "privat" and "privat" or "mono"
     local store = telemetrix.store_get() or {}
     store.mono, store.privat = store.mono or {}, store.privat or {}
     local now = os.time()
@@ -214,23 +245,36 @@ return {
       error("no rates yet: mono " .. (store.mono.err or "?")
         .. ", privat " .. (store.privat.err or "?"), 0)
     end
-    local metrics = {}
+    local bank, why = shown_bank(store, primary, now)
+    local note = why and string.format("using %s as the backup: %s %s", NAMES[bank], NAMES[primary], why)
+    if note ~= last_note then
+      if note then
+        telemetrix.log(note)
+      end
+      last_note = note
+    end
+
+    local b = store[bank]
+    local metrics = { { label = "", value = columns("buy", "sell"), style = "header" } }
     for _, cur in ipairs(currencies) do
-      for _, row in ipairs(currency_rows(cur, store, banks, s.compact, s.show_month)) do
+      for _, row in ipairs(currency_rows(cur, b.rates, store.nbu and store.nbu[cur])) do
         metrics[#metrics + 1] = row
       end
     end
-    for i, bank in ipairs(banks) do
-      local b = store[bank]
-      if b.err and (i == 1 or not s.compact) then
-        local value = b.ok
-            and string.format("%s since %s (%s)", bank, os.date("%H:%M", b.ok), short_error(b.err))
-          or string.format("%s: %s", bank, short_error(b.err))
-        if not (s.compact and b.ok) then
-          metrics[#metrics + 1] = { label = b.ok and "stale" or "no data", value = value }
-        end
-      end
+    if b.ok and b.err then
+      metrics[#metrics + 1] = {
+        label = string.format("stale since %s (%s)", os.date("%H:%M", b.ok), short_error(b.err)),
+        value = "",
+        style = "bad",
+      }
+    elseif b.ok then
+      metrics[#metrics + 1] = { label = "updated " .. os.date("%H:%M", b.ok), value = "", style = "dim" }
+    else
+      metrics[#metrics + 1] = { label = NAMES[bank] .. ": " .. short_error(b.err or "no rates"), value = "", style = "bad" }
     end
-    return { metrics = metrics }
+    return {
+      title = "Currency · " .. NAMES[bank] .. (why and " (backup)" or ""),
+      metrics = metrics,
+    }
   end,
 }

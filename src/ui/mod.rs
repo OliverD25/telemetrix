@@ -340,6 +340,7 @@ mod tests {
                     styled("7d quiet", "30d quiet", Some(MetricStyle::Dim)),
                     styled("up", "risegood", Some(MetricStyle::Good)),
                     styled("stale", "sincebad", Some(MetricStyle::Bad)),
+                    styled("footerbad", "", Some(MetricStyle::Bad)),
                 ],
                 error: None,
                 lua_bytes: None,
@@ -369,6 +370,16 @@ mod tests {
             assert_eq!(cell("30d quiet").fg, MUTED, "{theme}");
             assert_eq!(cell("risegood").fg, RISE, "{theme}");
             assert_eq!(cell("sincebad").fg, WARN, "{theme}");
+            assert_ne!(
+                cell("stale").fg,
+                WARN,
+                "{theme}: the label of a row with a value"
+            );
+            assert_eq!(
+                cell("footerbad").fg,
+                WARN,
+                "{theme}: no value, the label is red"
+            );
         }
         // Too narrow for both parts: a dim row keeps its label and drops the value.
         let pal = crate::themes::common::minimalist_palette();

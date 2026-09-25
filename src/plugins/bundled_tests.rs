@@ -230,6 +230,7 @@ pub fn render_card(data: &PluginData, width: u16) -> String {
 
 mod currency {
     use super::*;
+    use crate::plugins::MetricStyle;
 
     fn routes() -> Vec<(&'static str, Answer)> {
         vec![
@@ -241,24 +242,104 @@ mod currency {
         ]
     }
 
+    fn rows(d: &PluginData) -> Vec<(&str, &str)> {
+        d.metrics
+            .iter()
+            .map(|m| (m.label.as_str(), m.value.as_str()))
+            .collect()
+    }
+
     #[test]
-    fn both_banks_nbu_and_graphs() {
+    fn monobank_table_with_quiet_graph_lines() {
         let h = Harness::new("currency", "", &routes());
         let d = h.run(Trigger::Start);
         assert_eq!(d.error, None, "{:?}", h.log.borrow());
-        let rows: Vec<(&str, &str)> = d
-            .metrics
-            .iter()
-            .map(|m| (m.label.as_str(), m.value.as_str()))
-            .collect();
-        assert_eq!(rows[0], ("USD", "mono 44.80/45.20  privat 44.60/45.05"));
-        assert_eq!(rows[1], ("7d", "+0.69%"));
-        assert_eq!(rows[3].0, "EUR");
-        assert_eq!(rows[6], ("GBP", "mono x59.94  NBU 59.46"));
-        assert_eq!(d.metrics.len(), 9);
-        assert_eq!(d.metrics[1].trend.as_ref().map(Vec::len), Some(7));
-        assert_eq!(d.metrics[2].trend.as_ref().map(Vec::len), Some(30));
+        assert_eq!(d.title, "Currency · monobank");
+        let r = rows(&d);
+        assert_eq!(r[0], ("", "     buy      sell"));
+        assert_eq!(r[1], ("USD", "   44.80     45.20"));
+        // The 7 NBU points of the fixture, scaled to 8 levels, and 30 points
+        // resampled to 7 glyphs.
+        assert_eq!(r[2], ("  7d ▁▁▁▂▄▅█ +0.69%", "30d ▃▂▅▂▃▄█ +0.90%"));
+        assert_eq!(r[3], ("EUR", "   50.87     51.53"));
+        assert_eq!(r[5], ("GBP", "   59.94     cross"));
+        assert!(r[7].0.starts_with("updated "));
+        assert_eq!(d.metrics.len(), 8);
+        let style = |i: usize| d.metrics[i].style;
+        assert_eq!(style(0), Some(MetricStyle::Header));
+        assert_eq!(style(1), None);
+        assert_eq!(style(2), Some(MetricStyle::Dim));
+        assert_eq!(style(7), Some(MetricStyle::Dim));
+        assert!(
+            d.metrics.iter().all(|m| m.trend.is_none()),
+            "no full-width graphs"
+        );
         println!("{}", render_card(&d, 45));
+    }
+
+    #[test]
+    fn privatbank_shows_gbp_from_the_nbu() {
+        let h = Harness::new("currency", "primary_bank = 'privat'", &routes());
+        let d = h.run(Trigger::Start);
+        assert_eq!(d.title, "Currency · privatbank");
+        let r = rows(&d);
+        assert_eq!(r[1], ("USD", "   44.60     45.05"));
+        assert_eq!(r[5], ("GBP", "   59.46       NBU"));
+        assert!(
+            h.log.borrow().is_empty(),
+            "no backup note: {:?}",
+            h.log.borrow()
+        );
+        println!("{}", render_card(&d, 45));
+    }
+
+    #[test]
+    fn the_other_bank_is_the_backup_when_the_primary_has_nothing() {
+        let mut routes = routes();
+        routes.insert(0, ("api.monobank.ua", Answer::Status(429)));
+        let h = Harness::new("currency", "", &routes);
+        let d = h.run(Trigger::Start);
+        assert_eq!(d.title, "Currency · privatbank (backup)");
+        assert_eq!(rows(&d)[1], ("USD", "   44.60     45.05"));
+        assert_eq!(
+            *h.log.borrow(),
+            ["using privatbank as the backup: monobank HTTP 429"]
+        );
+        h.run(Trigger::Interval);
+        assert_eq!(h.log.borrow().len(), 1, "the note is logged once");
+        println!("{}", render_card(&d, 45));
+    }
+
+    #[test]
+    fn a_recent_failure_shows_the_stored_rates_as_stale() {
+        let h = Harness::new("currency", "", &routes());
+        h.run(Trigger::Start);
+        h.age_store("s.mono.tried = s.mono.tried - 301");
+        h.route("api.monobank.ua", Answer::Status(429));
+        let d = h.run(Trigger::Interval);
+        assert_eq!(
+            d.title, "Currency · monobank",
+            "rates from the last hour stay"
+        );
+        assert_eq!(rows(&d)[1], ("USD", "   44.80     45.20"));
+        let footer = d.metrics.last().unwrap();
+        assert!(
+            footer.label.starts_with("stale since ") && footer.label.ends_with(" (HTTP 429)"),
+            "{footer:?}"
+        );
+        assert_eq!(footer.style, Some(MetricStyle::Bad));
+        println!("{}", render_card(&d, 45));
+        // An hour later the backup takes over.
+        h.age_store("s.mono.ok = s.mono.ok - 3600 s.mono.tried = s.mono.tried - 301");
+        let d = h.run(Trigger::Interval);
+        assert_eq!(d.title, "Currency · privatbank (backup)");
+        assert!(
+            h.log
+                .borrow()
+                .last()
+                .unwrap()
+                .contains("monobank HTTP 429, last rates")
+        );
     }
 
     #[test]
@@ -283,40 +364,8 @@ mod currency {
     }
 
     #[test]
-    fn a_failing_bank_keeps_its_last_rates_marked_stale() {
-        let mut h = Harness::new("currency", "", &routes());
-        h.run(Trigger::Start);
-        h.age_store("s.mono.tried = s.mono.tried - 301");
-        h.route("api.monobank.ua", Answer::Status(429));
-        h.route("api.privatbank.ua", Answer::Offline);
-        let d = h.run(Trigger::Interval);
-        assert_eq!(d.error, None);
-        assert_eq!(d.metrics[0].value, "mono 44.80/45.20  privat 44.60/45.05");
-        let stale: Vec<&str> = d
-            .metrics
-            .iter()
-            .filter(|m| m.label == "stale")
-            .map(|m| m.value.as_str())
-            .collect();
-        assert_eq!(stale.len(), 2);
-        assert!(stale[0].starts_with("mono since ") && stale[0].ends_with("(HTTP 429)"));
-        assert!(stale[1].starts_with("privat since "), "{stale:?}");
-        h.set("compact", "true");
-        h.set("primary_bank", "'privat'");
-        let d = h.run(Trigger::Settings);
-        assert_eq!(d.metrics[0].value, "privat 44.60/45.05 (stale)");
-        let gbp = d.metrics.iter().find(|m| m.label == "GBP").unwrap();
-        assert_eq!(gbp.value, "NBU 59.46", "PrivatBank has no GBP");
-        println!("{}", render_card(&d, 45));
-    }
-
-    #[test]
     fn nothing_stored_and_no_answer_is_an_error() {
-        let h = Harness::new(
-            "currency",
-            "show_month = false",
-            &[("", Answer::Status(500))],
-        );
+        let h = Harness::new("currency", "", &[("", Answer::Status(500))]);
         let d = h.run(Trigger::Start);
         assert_eq!(
             d.error.as_deref(),
@@ -325,11 +374,18 @@ mod currency {
     }
 
     #[test]
-    fn show_month_off_hides_the_30_day_graph() {
-        let h = Harness::new("currency", "show_month = false", &routes());
+    fn old_settings_are_ignored_and_a_narrow_card_drops_the_30_days() {
+        let h = Harness::new("currency", "compact = true\nshow_month = false", &routes());
         let d = h.run(Trigger::Start);
-        assert!(d.metrics.iter().all(|m| m.label != "30d"));
-        assert_eq!(d.metrics.len(), 6);
+        assert_eq!(d.error, None);
+        assert!(h.log.borrow().is_empty(), "{:?}", h.log.borrow());
+        assert_eq!(d.metrics.len(), 8, "the old keys change nothing");
+        let narrow = render_card(&d, 40);
+        assert!(
+            narrow.contains("7d ▁▁▁▂▄▅█ +0.69%") && !narrow.contains("30d"),
+            "{narrow}"
+        );
+        println!("{narrow}");
     }
 }
 

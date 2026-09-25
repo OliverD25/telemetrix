@@ -110,10 +110,14 @@ Add `style` to a metric to change how its row looks:
 | `"good"` | the value in green | a value that is fine |
 | `"bad"` | the value in red | a value that needs attention, like old data |
 
+With `good` or `bad` and an empty value, the label takes the colour, for
+a one-line note like `stale since 14:32 (HTTP 429)`.
+
 ```lua
 { label = "", value = "     buy      sell", style = "header" },
 { label = "USD", value = "   44.63     45.03" },
 { label = "  7d ▁▂▃▅▇▆█ +0.69%", value = "30d ▂▃▄▃▅▆█ +0.96%", style = "dim" },
+{ label = "stale since 14:32 (HTTP 429)", value = "", style = "bad" },
 ```
 
 - An unknown `style` is ignored, so the row looks normal.
@@ -458,7 +462,7 @@ only shows its stored result. With `--run` it really runs.
 | `clock.lua` | local time and date, every second | none | no |
 | `uptime.lua` | computer name and uptime | none | no |
 | `network_ping.lua` | time to connect to a host | `host`, `port` | yes |
-| `currency.lua` | hryvnia rates from Monobank and PrivatBank, NBU graphs | `primary_bank`, `show_month`, `compact`; file only: `currencies` | yes |
+| `currency.lua` | hryvnia rates from one bank (Monobank or PrivatBank, the other as backup), NBU graphs | `primary_bank`; file only: `currencies` | yes |
 | `crypto.lua` | coin prices from Binance, 7- and 30-day graphs | `quote`; file only: `coins` | yes |
 | `weather.lua` | now, tomorrow and the day after (Open-Meteo) | `city`; file only: `lat`, `lon`, `label` | yes |
 | `speedtest.lua` | download, upload and ping against the nearest Ookla server (Cloudflare as backup), key `g` | `server`, `streams`, `seconds` | yes, about 700 MB per test at 1 Gbps |
@@ -467,11 +471,12 @@ These files live in `plugins/` in the repository and are built into the
 program, which installs them into the plugin home. The README describes
 each data source and its free limits.
 
-- **currency:** `compact = true` shows only the primary bank. Use it when
-  the cards are narrower than about 42 characters: the full row
-  `USD  mono 44.80/45.20  privat 44.60/45.05` needs 41. A plugin cannot
-  learn the card width, so this is a setting. `show_month = false` hides the
-  30-day graphs.
+- **currency:** a good example of `style`. The `buy  sell` row is a
+  `header`, the graph lines under each currency are `dim`, and a stale
+  footer is `bad`. The small graphs are built in Lua from bar characters,
+  so two of them fit on one line; the engine's `trend` graph always fills
+  the whole row. On a narrow card the `dim` line drops its value, which is
+  the 30-day part.
 - **weather:** temperatures are always °C. The plugin does not see
   `units.temperature`, because telemetrix passes only the plugin's own
   section to it. A city in the file (typed in the `s` box or written by
