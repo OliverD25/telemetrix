@@ -227,8 +227,25 @@ All of them live in the global table `telemetrix`.
 | `uptime_s()` | number | Seconds since this computer started. |
 | `hostname()` | text | The name of this computer. |
 | `settings` | table | Your `[plugin.<name>]` keys, see above. |
+| `units` | table | The `[units]` settings, read-only: `temperature` is `"celsius"` or `"fahrenheit"`, `bytes` is `"binary"` or `"decimal"`. |
 
 `print(...)` also writes to the log. It never writes to the screen.
+
+### Units
+
+`telemetrix.units` holds the user's `[units]` settings, refreshed before
+every `update()` like `settings`:
+
+```lua
+local u = telemetrix.units
+local f = u.temperature == "fahrenheit"            -- or "celsius"
+local text = f and string.format("%.1f °F", c * 9 / 5 + 32) or string.format("%.1f °C", c)
+-- u.bytes is "binary" (KiB, MiB) or "decimal" (kB, MB)
+```
+
+When the user changes `[units]` (in the `s` box or in the file), every
+plugin runs again with the trigger `"settings"`, so a card redraws in the
+new unit at once. Changing the table from Lua has no effect.
 
 ### Remembering things between runs
 
@@ -302,7 +319,7 @@ telemetrix.emit({ metrics = { { label = "testing download...", value = "312 Mbps
 | `"interval"` | A normal call when the interval is over. |
 | `"key"` | The user pressed the plugin's `run_key`, or saved a text setting of this plugin in the `s` box. |
 | `"manual"` | `telemetrix plugin check <file> --run`. |
-| `"settings"` | The plugin's own `[plugin.<id>]` section changed, in the `s` box or in the file. The call comes about 0.3 seconds after the change. A change to another plugin's section does not run this plugin. |
+| `"settings"` | The plugin's own `[plugin.<id>]` section or the `[units]` section changed, in the `s` box or in the file. The call comes about 0.3 seconds after the change. A change to another plugin's section does not run this plugin. |
 
 Top-level code in the file (outside `update`) runs while the plugin loads;
 `trigger()` gives `"start"` there.
@@ -477,9 +494,7 @@ each data source and its free limits.
   so two of them fit on one line; the engine's `trend` graph always fills
   the whole row. On a narrow card the `dim` line drops its value, which is
   the 30-day part.
-- **weather:** temperatures are always °C. The plugin does not see
-  `units.temperature`, because telemetrix passes only the plugin's own
-  section to it. A city in the file (typed in the `s` box or written by
+- **weather:** temperatures follow `telemetrix.units.temperature`. A city in the file (typed in the `s` box or written by
   hand) wins over `lat` and `lon`. The coordinates are used only when no
   city is set, and then `label` is the card title. Old v0.1 settings files
   have exactly that: `lat`, `lon` and `label`, no city. Whenever `lat` or

@@ -4,8 +4,11 @@
 --   lat, lon, label        (file only, optional: an exact place and its name,
 --                           used only when city is not set)
 -- Without city and without lat/lon the card shows Kyiv.
--- Temperatures are always °C: telemetrix does not pass units.temperature to
--- plugins.
+-- Temperatures follow units.temperature in telemetrix.toml (°C or °F).
+--
+-- Weather data by Open-Meteo.com (CC BY 4.0). Free for non-commercial use:
+-- 600 calls a minute, 5,000 an hour, 10,000 a day. The data license asks
+-- for attribution, so the card ends with a "data: Open-Meteo.com" line.
 
 local GEO_URL = "https://geocoding-api.open-meteo.com/v1/search?name=%s&count=1&language=en&format=json"
 local FORECAST_URL = "https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
@@ -163,21 +166,27 @@ return {
     if type(now) ~= "table" or type(daily) ~= "table" or type(daily.time) ~= "table" then
       error("Open-Meteo sent no forecast", 0)
     end
+    local fahrenheit = (telemetrix.units or {}).temperature == "fahrenheit"
+    local unit = fahrenheit and "°F" or "°C"
+    local function temp(c)
+      return fahrenheit and c * 9 / 5 + 32 or c
+    end
     metrics[#metrics + 1] = {
       label = "now",
-      value = string.format("%.1f °C  wind %s km/h  %s",
-        now.temperature_2m or 0, round(now.wind_speed_10m or 0), sky(now.weather_code)),
+      value = string.format("%.1f %s  wind %s km/h  %s",
+        temp(now.temperature_2m or 0), unit, round(now.wind_speed_10m or 0), sky(now.weather_code)),
     }
     for i = 2, math.min(3, #daily.time) do
       local low, high = daily.temperature_2m_min[i], daily.temperature_2m_max[i]
       local rain = daily.precipitation_probability_max and daily.precipitation_probability_max[i]
-      local value = string.format("%s..%s °C  %s", low and round(low) or "?",
-        high and round(high) or "?", sky(daily.weather_code[i]))
+      local value = string.format("%s..%s %s  %s", low and round(temp(low)) or "?",
+        high and round(temp(high)) or "?", unit, sky(daily.weather_code[i]))
       if rain then
         value = value .. "  rain " .. round(rain) .. "%"
       end
       metrics[#metrics + 1] = { label = weekday(daily.time[i]), value = value }
     end
+    metrics[#metrics + 1] = { label = "data: Open-Meteo.com", value = "", style = "dim" }
     return { title = title, metrics = metrics }
   end,
 }

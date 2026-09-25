@@ -26,6 +26,8 @@ pub struct RunnerSettings {
     pub memory_limit: usize,
     /// Where plugin stores live (`--data-dir` or the OS data folder).
     pub data_dir: PathBuf,
+    /// `[units]`, which plugins read as `telemetrix.units`.
+    pub units: crate::config::Units,
 }
 
 impl RunnerSettings {
@@ -38,6 +40,7 @@ impl RunnerSettings {
             call_timeout: Duration::from_secs(p.call_timeout_s),
             memory_limit: (p.memory_limit_mb as usize) << 20,
             data_dir: super::store::data_dir(),
+            units: cfg.units.clone(),
         }
     }
 
@@ -129,6 +132,7 @@ impl Plugin {
         if let Some(cfg) = s.for_id(&stem) {
             host_api::set_settings(&sandbox.lua, &cfg.settings).map_err(|e| short(&e))?;
         }
+        host_api::set_units(&sandbox.lua, &s.units).map_err(|e| short(&e))?;
         sandbox.arm(s.call_timeout);
         let table = sandbox.load_file(path, &source).map_err(|e| short(&e));
         sandbox.disarm();
@@ -201,6 +205,7 @@ impl Plugin {
     pub fn update(&self, s: &RunnerSettings, trigger: Trigger) -> Result<PluginData, String> {
         let settings = self.checked_settings(s);
         host_api::set_settings(&self.sandbox.lua, &settings).map_err(|e| short(&e))?;
+        host_api::set_units(&self.sandbox.lua, &s.units).map_err(|e| short(&e))?;
         self.trigger.set(trigger);
         self.sandbox.arm(self.call_timeout(s));
         let result = self.manifest.update.call::<mlua::Value>(());
@@ -390,7 +395,9 @@ fn wait(
         match cmds.recv_timeout(due.saturating_duration_since(Instant::now())) {
             Ok(WorkerCmd::Stop) | Err(RecvTimeoutError::Disconnected) => return None,
             Ok(WorkerCmd::Reconfigure(new)) => {
-                changed |= new.for_id(plugin.id()) != settings.for_id(plugin.id());
+                // New units change what every plugin shows, like its own settings do.
+                changed |= new.for_id(plugin.id()) != settings.for_id(plugin.id())
+                    || new.units != settings.units;
                 *settings = new;
                 plugin.apply_limits(settings);
                 due = if changed {
@@ -543,6 +550,14 @@ mod tests {
         let (t, d) = next(Duration::from_secs(2)).unwrap();
         assert_eq!((t.as_str(), d.metrics[1].value.as_str()), ("key", "Odesa"));
         assert!(next(Duration::from_millis(700)).is_none(), "only one run");
+
+        s.units.temperature = crate::config::TempUnit::Fahrenheit;
+        let _ = handle.cmd.send(WorkerCmd::Reconfigure(s.clone()));
+        assert_eq!(
+            next(Duration::from_secs(2)).unwrap().0,
+            "settings",
+            "new units run every plugin"
+        );
 
         s.plugin_cfg.get_mut("schema").unwrap().interval = Some(1);
         let _ = handle.cmd.send(WorkerCmd::Reconfigure(s.clone()));

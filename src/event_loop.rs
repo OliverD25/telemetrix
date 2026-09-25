@@ -492,6 +492,7 @@ impl Loop {
         }
         if old.plugins != new.plugins
             || old.plugin_cfg != new.plugin_cfg
+            || old.units != new.units
             || old.general.plugins_dir != new.general.plugins_dir
         {
             let report = self.plugins.reconfigure(new);

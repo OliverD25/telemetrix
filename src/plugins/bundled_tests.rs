@@ -492,10 +492,32 @@ mod weather {
                 ("now", "15.9 °C  wind 9 km/h  cloudy"),
                 ("Sat", "10..19 °C  cloudy  rain 0%"),
                 ("Sun", "10..19 °C  cloudy  rain 0%"),
+                ("data: Open-Meteo.com", ""),
             ]
+        );
+        assert_eq!(
+            d.metrics[3].style,
+            Some(crate::plugins::MetricStyle::Dim),
+            "the CC BY 4.0 attribution is a quiet last line"
         );
         assert!(h.asked.borrow()[1].contains("latitude=50.45466&longitude=30.5238"));
         println!("{}", render_card(&d, 45));
+    }
+
+    #[test]
+    fn fahrenheit_follows_the_units_setting() {
+        let mut h = Harness::new("weather", "", &routes());
+        h.settings.units.temperature = crate::config::TempUnit::Fahrenheit;
+        let d = h.run(Trigger::Settings);
+        let values: Vec<&str> = d.metrics.iter().map(|m| m.value.as_str()).collect();
+        assert_eq!(
+            values[..3],
+            [
+                "60.6 °F  wind 9 km/h  cloudy",
+                "51..66 °F  cloudy  rain 0%",
+                "50..65 °F  cloudy  rain 0%"
+            ]
+        );
     }
 
     #[test]

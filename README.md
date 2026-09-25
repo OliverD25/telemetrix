@@ -222,8 +222,8 @@ Settings you can change in the `s` box:
   file. Settings files from v0.1 have `lat`, `lon` and `label` but no city,
   so they keep showing the same place until you type a city. Without a city
   and without coordinates the card shows Kyiv. The log says which one is
-  used, and `config check` warns when a file has both. Temperatures are
-  always °C.
+  used, and `config check` warns when a file has both. Temperatures follow
+  `units.temperature` (°C or °F); changing it redraws the card at once.
 - **Speed test:** `server` (empty = the nearest Ookla server, `host:port`
   forces one, `cloudflare` uses Cloudflare only), `streams` (parallel
   connections, 1..8) and `seconds` per direction (2..10). The old keys

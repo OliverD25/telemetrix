@@ -589,6 +589,25 @@ fn toml_to_json(v: &toml_edit::Value) -> serde_json::Value {
     }
 }
 
+/// Sets `telemetrix.units = { temperature = "celsius"|"fahrenheit",
+/// bytes = "binary"|"decimal" }` from `[units]`.
+pub fn set_units(lua: &Lua, units: &crate::config::Units) -> mlua::Result<()> {
+    use crate::config::{BytesUnit, TempUnit};
+    let u = lua.create_table()?;
+    let temperature = match units.temperature {
+        TempUnit::Celsius => "celsius",
+        TempUnit::Fahrenheit => "fahrenheit",
+    };
+    let bytes = match units.bytes {
+        BytesUnit::Binary => "binary",
+        BytesUnit::Decimal => "decimal",
+    };
+    u.set("temperature", temperature)?;
+    u.set("bytes", bytes)?;
+    let t: Table = lua.globals().get("telemetrix")?;
+    t.set("units", u)
+}
+
 /// Replaces `telemetrix.settings` with the plugin's `[plugin.<id>]` keys.
 pub fn set_settings(lua: &Lua, settings: &toml_edit::Table) -> mlua::Result<()> {
     let map: serde_json::Map<String, serde_json::Value> = settings
@@ -831,6 +850,26 @@ mod tests {
             .eval()
             .unwrap();
         assert!(ok);
+    }
+
+    #[test]
+    fn units_reach_lua() {
+        let (lua, _) = lua_with_host();
+        let mut units = crate::config::Config::default().units;
+        set_units(&lua, &units).unwrap();
+        let text: String = lua
+            .load("return telemetrix.units.temperature .. ' ' .. telemetrix.units.bytes")
+            .eval()
+            .unwrap();
+        assert_eq!(text, "celsius binary");
+        units.temperature = crate::config::TempUnit::Fahrenheit;
+        units.bytes = crate::config::BytesUnit::Decimal;
+        set_units(&lua, &units).unwrap();
+        let text: String = lua
+            .load("return telemetrix.units.temperature .. ' ' .. telemetrix.units.bytes")
+            .eval()
+            .unwrap();
+        assert_eq!(text, "fahrenheit decimal");
     }
 
     #[test]
