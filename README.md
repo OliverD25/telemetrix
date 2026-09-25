@@ -6,7 +6,7 @@ Windows 11 and Linux, written in Rust.
 It shows CPU, memory, swap, disks and CPU temperature (where the computer
 reports it), plus cards from small Lua plugins: exchange rates, crypto
 prices, weather, an internet speed test, internet latency, a clock, uptime,
-or anything you write yourself. It uses about 9 MB of memory without
+or anything you write yourself. It uses about 8 MB of memory without
 plugins and about 12 MB with the seven default plugins, and almost no CPU
 on the static theme. Settings live in a commented `telemetrix.toml` that a
 wrong value can never break.
@@ -372,9 +372,8 @@ What keeps it small on Windows:
   crept up by about 1 MB an hour with the default plugins, although the
   memory in use stayed flat: the heap kept freed space committed and never
   gave it back. The segment heap gives it back, so private memory stays
-  flat over hours, and the total is about 0.5 MB lower. The price is about
-  1 MB more working set for the dashboard without plugins (shared system
-  pages; its private memory does not change).
+  flat over hours, and the total is about 0.5 MB lower. The dashboard
+  without plugins measures the same with either heap.
 
 ### Before every release: `selftest --memory`
 
@@ -392,8 +391,8 @@ fail, which is fine for this test.
 ```
 memory selftest: 30 s per run, one run after the other, hidden consoles
             final      peak   private  budget  result
-total     11.8 MB   12.2 MB    3.8 MB   14 MB  ok  (7 plugins)
-core       8.8 MB    8.8 MB    2.0 MB   10 MB  ok  (0 plugins)
+total     11.7 MB   12.2 MB    3.7 MB   14 MB  ok  (7 plugins)
+core       7.8 MB    7.8 MB    2.1 MB   10 MB  ok  (0 plugins)
 ```
 
 Run it before every release. Agents should run it after any change to the
