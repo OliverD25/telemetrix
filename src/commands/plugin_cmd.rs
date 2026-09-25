@@ -202,6 +202,11 @@ fn list(cfg: &Config, settings_path: &Path) -> ExitCode {
     let files = discover(&dir);
     if files.is_empty() {
         println!("  (none)");
+        if dir == bundled::home(settings_path) {
+            println!(
+                "  The dashboard installs the built-in plugins here when it starts; telemetrix plugin install does it now."
+            );
+        }
     }
     for (path, _) in files {
         let stop = Arc::new(AtomicBool::new(false));
