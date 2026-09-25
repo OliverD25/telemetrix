@@ -5,7 +5,7 @@
 
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,6 +20,70 @@ const WIND_DOWN: Duration = Duration::from_millis(1500);
 const STREAM_STACK: usize = 256 * 1024;
 const BUFFER: usize = 64 * 1024;
 pub const MAX_STREAMS: usize = 16;
+
+/// Whether a speed test runs anywhere in the process, and when the last
+/// one ended. The memory-budget warning pauses around tests, because a
+/// test briefly needs a few MB for its connections.
+pub struct Activity {
+    running: AtomicUsize,
+    /// Milliseconds after `epoch()` plus one; 0 = no test ended yet.
+    last_end: AtomicU64,
+}
+
+pub static ACTIVITY: Activity = Activity::new();
+
+fn epoch() -> Instant {
+    static START: OnceLock<Instant> = OnceLock::new();
+    *START.get_or_init(Instant::now)
+}
+
+impl Activity {
+    pub const fn new() -> Self {
+        Self {
+            running: AtomicUsize::new(0),
+            last_end: AtomicU64::new(0),
+        }
+    }
+
+    /// Counts a test as running until the guard is dropped, also on an
+    /// error or a panic.
+    pub fn start(&'static self) -> TestGuard {
+        epoch();
+        self.running.fetch_add(1, Ordering::SeqCst);
+        TestGuard(self)
+    }
+
+    pub fn running(&self) -> bool {
+        self.running.load(Ordering::SeqCst) > 0
+    }
+
+    /// Time since the last test ended, `None` if none has.
+    pub fn since_last_end(&self) -> Option<Duration> {
+        match self.last_end.load(Ordering::SeqCst) {
+            0 => None,
+            end => {
+                let now = epoch().elapsed().as_millis() as u64 + 1;
+                Some(Duration::from_millis(now.saturating_sub(end)))
+            }
+        }
+    }
+}
+
+impl Default for Activity {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct TestGuard(&'static Activity);
+
+impl Drop for TestGuard {
+    fn drop(&mut self) {
+        let now = epoch().elapsed().as_millis() as u64 + 1;
+        self.0.last_end.store(now, Ordering::SeqCst);
+        self.0.running.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Multi {
@@ -227,6 +291,7 @@ pub fn run(
     cap: Option<Duration>,
     progress: impl FnMut(f64, f64) -> Result<(), String>,
 ) -> Result<Transfer, String> {
+    let _running = ACTIVITY.start();
     spec.check()?;
     let mut seconds = Duration::from_secs_f64(spec.seconds);
     if let Some(cap) = cap {
@@ -279,6 +344,42 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_guard_counts_running_tests_and_their_end() {
+        static LOCAL: Activity = Activity::new();
+        assert!(!LOCAL.running() && LOCAL.since_last_end().is_none());
+        let a = LOCAL.start();
+        let b = LOCAL.start();
+        assert!(LOCAL.running());
+        drop(a);
+        assert!(LOCAL.running(), "one is still running");
+        drop(b);
+        assert!(!LOCAL.running());
+        assert!(LOCAL.since_last_end().unwrap() < Duration::from_secs(1));
+        let failed = std::panic::catch_unwind(|| {
+            let _g = LOCAL.start();
+            panic!("a test that fails hard");
+        });
+        assert!(failed.is_err());
+        assert!(!LOCAL.running(), "a panic cannot leave it set");
+    }
+
+    #[test]
+    fn an_error_still_records_the_end_of_the_test() {
+        let bad = Multi {
+            upload: false,
+            url: "http://plain/".into(),
+            streams: 1,
+            seconds: 1.0,
+            warmup: 0.0,
+            piece_bytes: 1,
+        };
+        assert!(run(&bad, None, |_, _| Ok(())).is_err());
+        // Other tests may run speed functions at the same time, so only
+        // the end time is checked here, not the count.
+        assert!(ACTIVITY.since_last_end().unwrap() < Duration::from_secs(5));
+    }
 
     #[test]
     fn cache_buster_respects_an_existing_query() {

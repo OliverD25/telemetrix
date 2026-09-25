@@ -229,6 +229,7 @@ fn speed_download(
     max_seconds: f64,
     callback: Option<Function>,
 ) -> Result<Transfer, String> {
+    let _running = speed::ACTIVITY.start();
     check_speed_args(url, max_seconds)?;
     let limit = cap(Duration::from_secs_f64(max_seconds), deadline);
     let start = Instant::now();
@@ -309,6 +310,7 @@ fn speed_upload(
     max_seconds: f64,
     callback: Option<Function>,
 ) -> Result<Transfer, String> {
+    let _running = speed::ACTIVITY.start();
     check_speed_args(url, max_seconds)?;
     let limit = cap(Duration::from_secs_f64(max_seconds), deadline);
     let sent = Rc::new(Cell::new(0u64));

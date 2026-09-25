@@ -325,6 +325,8 @@ local r, err = telemetrix.speed_multi({
   and never runs past the plugin's `call_timeout`.
 - Only `https://` addresses are accepted. The connections are closed when
   the call ends.
+- The dashboard's memory-budget warning pauses while any speed-test
+  function runs and for 10 seconds after it.
 - An upload counts the bytes handed to the network connection. The
   computer may still hold a few of them in its send buffer, so an upload
   result can read a few percent high.

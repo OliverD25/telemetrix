@@ -311,7 +311,10 @@ Keeping telemetrix small is a main goal. There are two budgets:
 The dashboard reads its own memory every 5 seconds. The status bar shows it
 ("self 7.4 MB") and turns amber above the budget. The log (`l`) shows the
 peak, the private bytes and each plugin's Lua memory. Going over a budget
-only writes a warning to the log; nothing is stopped. The separate Lua limit
+only writes a warning to the log; nothing is stopped. The warning and the
+amber colour pause while a speed test runs and for 10 seconds after it,
+because a test briefly needs a few MB for its connections; the status bar
+then shows `(speed test)` next to the number. The separate Lua limit
 (`plugins.memory_limit_mb`) still stops a runaway plugin.
 
 ### Measured numbers

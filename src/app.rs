@@ -256,6 +256,9 @@ pub struct AppState {
     /// The last reading of this program's own memory.
     pub self_memory: Option<SelfMemory>,
     pub over_budget: bool,
+    /// Over the budget, but a speed test runs or ended moments ago: no
+    /// warning and no amber until the grace period is over.
+    pub memory_paused: bool,
     plugins_over_budget: BTreeSet<String>,
     /// While the theme picker is open: the theme that Esc goes back to.
     pub picker_original: usize,
@@ -300,6 +303,7 @@ impl AppState {
             plugins_running: 0,
             self_memory: None,
             over_budget: false,
+            memory_paused: false,
             plugins_over_budget: BTreeSet::new(),
             picker_original: theme_idx,
             network: None,
@@ -472,13 +476,37 @@ impl AppState {
 
     /// Stores a reading of the program's own memory; logs once per budget crossing.
     pub fn record_self_memory(&mut self, m: SelfMemory) {
+        let a = &crate::plugins::speed::ACTIVITY;
+        self.record_memory_with(m, a.running(), a.since_last_end());
+    }
+
+    /// Amber and the warning, unless a speed test pauses them.
+    pub fn memory_alarm(&self) -> bool {
+        self.over_budget && !self.memory_paused
+    }
+
+    pub fn record_memory_with(
+        &mut self,
+        m: SelfMemory,
+        test_running: bool,
+        since_test: Option<Duration>,
+    ) {
         let shown = |m: &SelfMemory| (selfmem::mb(m.working_set) * 10.0).round() as i64;
         if self.self_memory.as_ref().map(shown) != Some(shown(&m)) {
             self.dirty = true;
         }
         self.self_memory = Some(m);
         let budget = self.config.memory.budget_mb;
-        let over = m.working_set > budget * MB;
+        let state = budget_state(m.working_set > budget * MB, test_running, since_test);
+        let paused = state == Budget::Paused;
+        if paused != self.memory_paused {
+            self.memory_paused = paused;
+            self.dirty = true;
+        }
+        if paused {
+            return;
+        }
+        let over = state == Budget::Over;
         if over != self.over_budget {
             self.over_budget = over;
             self.dirty = true;
@@ -508,6 +536,28 @@ impl AppState {
                 None => format!("config error: {message} - using last good settings"),
             }),
         }
+    }
+}
+
+/// How long after a speed test the budget warning still waits: the working
+/// set shrinks slowly after the test's connections close.
+pub const SPEED_TEST_GRACE: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Budget {
+    Under,
+    Over,
+    /// Over, during a speed test or its grace period.
+    Paused,
+}
+
+pub fn budget_state(over: bool, test_running: bool, since_test: Option<Duration>) -> Budget {
+    if !over {
+        Budget::Under
+    } else if test_running || since_test.is_some_and(|d| d < SPEED_TEST_GRACE) {
+        Budget::Paused
+    } else {
+        Budget::Over
     }
 }
 
@@ -719,6 +769,43 @@ mod tests {
         data.lua_bytes = Some(1000);
         state.apply(AppEvent::Plugin(data));
         assert_eq!(lines(&state), start + 4);
+    }
+
+    #[test]
+    fn budget_state_pauses_during_a_speed_test_and_10_s_after() {
+        let s = Duration::from_secs;
+        assert_eq!(budget_state(false, true, None), Budget::Under);
+        assert_eq!(budget_state(true, false, None), Budget::Over);
+        assert_eq!(budget_state(true, true, None), Budget::Paused);
+        assert_eq!(budget_state(true, false, Some(s(9))), Budget::Paused);
+        assert_eq!(budget_state(true, false, Some(s(10))), Budget::Over);
+        assert_eq!(budget_state(true, false, Some(s(600))), Budget::Over);
+    }
+
+    #[test]
+    fn a_speed_test_pauses_the_memory_warning() {
+        let mut state = AppState::new(Config::default(), ConfigStatus::Ok);
+        let over = SelfMemory {
+            working_set: (state.config.memory.budget_mb + 1) * MB,
+            peak_working_set: Some((state.config.memory.budget_mb + 2) * MB),
+            private: Some(5 * MB),
+        };
+        let lines = state.log.len();
+        state.record_memory_with(over, true, None);
+        assert!(state.memory_paused && !state.memory_alarm());
+        assert_eq!(state.log.len(), lines, "no warning while the test runs");
+        assert_eq!(state.self_memory, Some(over), "the real values are kept");
+        state.record_memory_with(over, false, Some(Duration::from_secs(3)));
+        assert!(state.memory_paused);
+        assert_eq!(state.log.len(), lines, "nor in the grace period");
+        state.record_memory_with(over, false, Some(Duration::from_secs(11)));
+        assert!(!state.memory_paused && state.memory_alarm());
+        assert_eq!(
+            state.log.len(),
+            lines + 1,
+            "still over afterwards: one warning"
+        );
+        assert_eq!(state.log.back().unwrap().level, Level::Warn);
     }
 
     #[test]

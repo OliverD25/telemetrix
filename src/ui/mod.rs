@@ -65,7 +65,12 @@ pub fn draw(frame: &mut Frame, state: &AppState, theme: &mut dyn Theme) {
 fn draw_status(frame: &mut Frame, area: Rect, state: &AppState) {
     let paused = if state.paused { " · PAUSED" } else { "" };
     let memory = state.self_memory.map_or(String::new(), |m| {
-        format!(" self {:.1} MB ·", selfmem::mb(m.working_set))
+        let note = if state.memory_paused {
+            " (speed test)"
+        } else {
+            ""
+        };
+        format!(" self {:.1} MB{note} ·", selfmem::mb(m.working_set))
     });
     let rest = format!(
         " {} · {} fps{paused} ",
@@ -90,7 +95,7 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &AppState) {
     ]);
     frame.render_widget(Paragraph::new(left).style(base), left_area);
     let strong = base.fg(Color::White).add_modifier(Modifier::BOLD);
-    let memory_style = if state.over_budget {
+    let memory_style = if state.memory_alarm() {
         strong.fg(ACCENT)
     } else {
         strong
@@ -368,6 +373,37 @@ mod tests {
         assert!(!t.contains("Bad: run now"));
         s.apply(AppEvent::PluginRemoved("speedtest".into()));
         assert!(!text(&render(&s, 80, 30)).contains("run now"));
+    }
+
+    #[test]
+    fn status_bar_notes_a_speed_test_in_the_normal_colour() {
+        use crate::selfmem::{MB, SelfMemory};
+        use std::time::Duration;
+        let mut s = state("minimalist");
+        let over = SelfMemory {
+            working_set: 14 * MB + MB / 5,
+            peak_working_set: None,
+            private: None,
+        };
+        s.record_memory_with(over, true, None);
+        let buf = render(&s, 120, 30);
+        let t = text(&buf);
+        assert!(t.contains(" self 14.2 MB (speed test) ·"), "{t}");
+        let color_of_self = |buf: &Buffer| {
+            let cells = buf.content();
+            let chars: Vec<&str> = cells.iter().map(|c| c.symbol()).collect();
+            let pos = chars.windows(4).position(|w| w.concat() == "self").unwrap();
+            cells[pos].fg
+        };
+        assert_ne!(color_of_self(&buf), ACCENT, "not amber during the test");
+        s.record_memory_with(over, false, Some(Duration::from_secs(30)));
+        let buf = render(&s, 120, 30);
+        assert!(!text(&buf).contains("(speed test)"));
+        assert_eq!(
+            color_of_self(&buf),
+            ACCENT,
+            "amber once the grace period is over"
+        );
     }
 
     #[test]

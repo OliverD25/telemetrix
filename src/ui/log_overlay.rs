@@ -62,10 +62,12 @@ fn memory_header(state: &AppState) -> Vec<Line<'static>> {
         }
         None => "memory: not measured yet".to_string(),
     };
-    if state.over_budget {
+    if state.memory_paused {
+        own.push_str(" (speed test)");
+    } else if state.over_budget {
         own.push_str(" (over budget)");
     }
-    let own_color = if state.over_budget { ACCENT } else { MUTED };
+    let own_color = if state.memory_alarm() { ACCENT } else { MUTED };
     let plugins: Vec<String> = state
         .plugins
         .values()
