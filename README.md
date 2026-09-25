@@ -6,8 +6,8 @@ Windows 11 and Linux, written in Rust.
 It shows CPU, memory, swap, disks and CPU temperature (where the computer
 reports it), plus cards from small Lua plugins: exchange rates, crypto
 prices, weather, an internet speed test, internet latency, a clock, uptime,
-or anything you write yourself. It uses about 7.5 MB of memory without
-plugins and about 12.5 MB with the seven default plugins, and almost no CPU
+or anything you write yourself. It uses about 9 MB of memory without
+plugins and about 12 MB with the seven default plugins, and almost no CPU
 on the static theme. Settings live in a commented `telemetrix.toml` that a
 wrong value can never break.
 
@@ -364,6 +364,14 @@ What keeps it small on Windows:
 - DLLs that are rarely needed are loaded on first use, not at start.
 - All plugins share one HTTP client, which is dropped after a minute without
   requests.
+- The program uses the Windows **segment heap**, chosen in its embedded
+  manifest (`telemetrix.manifest`). With the default heap, private memory
+  crept up by about 1 MB an hour with the default plugins, although the
+  memory in use stayed flat: the heap kept freed space committed and never
+  gave it back. The segment heap gives it back, so private memory stays
+  flat over hours, and the total is about 0.5 MB lower. The price is about
+  1 MB more working set for the dashboard without plugins (shared system
+  pages; its private memory does not change).
 
 ### Before every release: `selftest --memory`
 
@@ -381,12 +389,33 @@ fail, which is fine for this test.
 ```
 memory selftest: 30 s per run, one run after the other, hidden consoles
             final      peak   private  budget  result
-total     12.5 MB   12.6 MB    4.5 MB   14 MB  ok  (7 plugins)
-core       7.6 MB    7.7 MB    2.0 MB   10 MB  ok  (0 plugins)
+total     11.8 MB   12.2 MB    3.8 MB   14 MB  ok  (7 plugins)
+core       8.8 MB    8.8 MB    2.0 MB   10 MB  ok  (0 plugins)
 ```
 
 Run it before every release. Agents should run it after any change to the
 code or the plugins.
+
+### Memory growth over time: `selftest --memory --soak <minutes>`
+
+```
+telemetrix selftest --memory --soak 60
+```
+
+A short run cannot show a slow leak. The soak runs one hidden dashboard
+with the default plugins (without the speed test, whose test would hide
+everything else) for 10 minutes of warm-up plus the given minutes. The
+dashboard notes its private bytes (memory that belongs to this program
+alone) once a minute. After the warm-up, the command fits a straight line
+through those numbers and fails with exit code 1 when private memory grows
+faster than 0.2 MB per hour. It also fails when the peak is over the
+budget. `--json` prints every minute's number.
+
+For a deeper look, build with `cargo build --release --features
+alloc-stats`. That build counts the bytes the program holds on its heap,
+Lua included, and writes a `heap:` line to the log every minute. Heap bytes
+that climb mean a leak in the program; flat heap bytes under rising private
+bytes mean the memory is held outside the program's own allocations.
 
 ## Linux
 
