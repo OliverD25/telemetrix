@@ -392,9 +392,10 @@ const PLUGIN_DEFAULTS: &str = r#"
 [plugin.weather]
 enabled = true
 interval = 600
-city = "Kyiv"                 # looked up once per change; or set lat and lon below
-# lat = 50.45                 # optional: an exact place, used instead of the city
+# city = "Kyiv"               # type it in the s box; looked up once per change
+# lat = 50.45                 # an exact place, used only when city is not set
 # lon = 30.52
+# label = "Home"              # the card title for lat/lon
 
 [plugin.crypto]
 interval = 60
@@ -994,6 +995,13 @@ fn read_plugin_tables(
                 line,
                 message: format!("plugin.{id}.{key} = {} {what}, ignored", shown(value)),
             };
+            let coordinate = key == "lat" || (key == "lon" && !table.contains_key("lat"));
+            if id == "weather" && coordinate && table.contains_key("city") {
+                problems.push(Problem {
+                    line,
+                    message: "plugin.weather has both city and lat/lon; lat/lon are ignored".into(),
+                });
+            }
             match key {
                 "enabled" => match value.as_bool() {
                     Some(b) => cfg.enabled = b,
@@ -1353,6 +1361,27 @@ mod tests {
             Some("Lviv")
         );
         assert!(!c.plugin_cfg["crypto"].enabled);
+    }
+
+    #[test]
+    fn weather_city_with_coordinates_is_a_warning() {
+        let both =
+            parse_text("[plugin.weather]\ncity = \"Lviv\"\nlat = 50.45\nlon = 30.52\n").unwrap();
+        assert_eq!(both.problems.len(), 1, "{:?}", both.problems);
+        assert_eq!(both.problems[0].line, Some(3));
+        assert_eq!(
+            both.problems[0].message,
+            "plugin.weather has both city and lat/lon; lat/lon are ignored"
+        );
+        let old =
+            parse_text("[plugin.weather]\nlat = 50.45\nlon = 30.52\nlabel = \"Kyiv\"\n").unwrap();
+        assert!(old.problems.is_empty(), "coordinates alone are fine");
+        assert!(
+            !Config::default().plugin_cfg["weather"]
+                .settings
+                .contains_key("city"),
+            "no built-in city, so old lat/lon still apply"
+        );
     }
 
     #[test]

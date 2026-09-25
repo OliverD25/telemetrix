@@ -157,7 +157,7 @@ line with a cursor:
   and `End` work as usual;
 - `Enter` saves the text to `[plugin.<id>]` in the settings file, and the
   plugin runs at once (its trigger is `"key"`); an empty text removes the
-  key, so the default applies again;
+  key, so the default applies again (an empty text shows as `(not set)`);
 - `Esc` closes the input and saves nothing.
 
 While the input is open, every key goes to it: `q` does not quit and `t`
@@ -381,7 +381,7 @@ only shows its stored result. With `--run` it really runs.
 | `network_ping.lua` | time to connect to a host | `host`, `port` | yes |
 | `currency.lua` | hryvnia rates from Monobank and PrivatBank, NBU graphs | `primary_bank`, `show_month`, `compact`; file only: `currencies` | yes |
 | `crypto.lua` | coin prices from Binance, 7- and 30-day graphs | `quote`; file only: `coins` | yes |
-| `weather.lua` | now, tomorrow and the day after (Open-Meteo) | `city`; file only: `lat`, `lon` | yes |
+| `weather.lua` | now, tomorrow and the day after (Open-Meteo) | `city`; file only: `lat`, `lon`, `label` | yes |
 | `speedtest.lua` | download, upload and ping (Cloudflare), key `g` | `download_mb`, `upload_mb`, `max_seconds` | yes, about 35 MB per run |
 
 The README describes each data source and its free limits.
@@ -393,7 +393,13 @@ The README describes each data source and its free limits.
   30-day graphs.
 - **weather:** temperatures are always °C. The plugin does not see
   `units.temperature`, because telemetrix passes only the plugin's own
-  section to it. `lat` and `lon` in the file are used instead of the city;
-  remove them to use the typed city.
+  section to it. A city in the file (typed in the `s` box or written by
+  hand) wins over `lat` and `lon`. The coordinates are used only when no
+  city is set, and then `label` is the card title. Old v0.1 settings files
+  have exactly that: `lat`, `lon` and `label`, no city. Whenever `lat` or
+  `lon` exist, the plugin writes one line to the log saying which one it
+  uses, and `config check` warns about a section with both. The city's
+  schema default is empty, which the `s` box shows as `(not set)`; without
+  a city and without coordinates the card shows Kyiv.
 - **crypto:** old settings files list CoinGecko names (`"bitcoin"`); they
   still work.

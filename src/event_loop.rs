@@ -248,7 +248,7 @@ impl Loop {
                 let row = &rows[sel[s.settings_cursor.min(sel.len() - 1)]];
                 if let Some((id, key)) = settings_overlay::text_row(row) {
                     if dir > 0 {
-                        let text = settings_overlay::value_text(row, &s.config);
+                        let text = settings_overlay::text_value(row, &s.config);
                         s.text_input = Some(TextInput::new(id, key, &text));
                         s.dirty = true;
                     }

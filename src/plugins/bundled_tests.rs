@@ -475,13 +475,51 @@ mod weather {
     }
 
     #[test]
-    fn lat_lon_in_the_file_skip_the_lookup() {
+    fn lat_lon_apply_only_without_a_city() {
         let h = Harness::new("weather", "lat = 49.84\nlon = 24.03", &routes());
         let d = h.run(Trigger::Start);
         assert_eq!(h.asked_for("geocoding"), 0);
-        assert_eq!(d.title, "Weather · Kyiv");
+        assert_eq!(d.title, "Weather · 49.84, 24.03");
         assert_eq!(d.metrics[0].value, "49.84, 24.03 from lat/lon");
         assert!(h.asked.borrow()[0].contains("latitude=49.84&longitude=24.03"));
+        assert_eq!(
+            *h.log.borrow(),
+            ["using lat/lon 49.84, 24.03; city is not set"]
+        );
+    }
+
+    #[test]
+    fn a_v01_settings_file_keeps_working_until_a_city_is_typed() {
+        // What `config init` wrote in v0.1.
+        let mut h = Harness::new(
+            "weather",
+            "lat = 50.45\nlon = 30.52\nlabel = \"Kyiv\"",
+            &[
+                ("name=Lviv", Answer::File("geo_kyiv.json")),
+                ("geocoding-api", Answer::File("geo_none.json")),
+                (
+                    "api.open-meteo.com/v1/forecast",
+                    Answer::File("forecast.json"),
+                ),
+            ],
+        );
+        let d = h.run(Trigger::Start);
+        assert_eq!(d.title, "Weather · Kyiv", "label names the coordinates");
+        h.run(Trigger::Interval);
+        assert_eq!(h.log.borrow().len(), 1, "the note is logged once");
+        h.set("city", "'Lviv'");
+        let d = h.run(Trigger::Key);
+        assert_eq!(d.error, None);
+        assert_eq!(h.asked_for("name=Lviv"), 1, "the typed city wins");
+        assert!(!d.metrics.iter().any(|m| m.label == "place"));
+        assert_eq!(
+            d.title, "Weather · Kyiv, UA",
+            "label is not used for a city"
+        );
+        assert_eq!(
+            h.log.borrow().last().map(String::as_str),
+            Some("using city Lviv; lat/lon are ignored")
+        );
     }
 
     #[test]

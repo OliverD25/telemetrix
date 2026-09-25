@@ -60,9 +60,10 @@ show_sparklines = true      # history graphs under CPU and RAM
 [plugin.weather]
 enabled = true
 interval = 600
-city = "Kyiv"                 # looked up once per change; or set lat and lon below
-# lat = 50.45                 # optional: an exact place, used instead of the city
+# city = "Kyiv"               # type it in the s box; looked up once per change
+# lat = 50.45                 # an exact place, used only when city is not set
 # lon = 30.52
+# label = "Home"              # the card title for lat/lon
 
 [plugin.crypto]
 interval = 60

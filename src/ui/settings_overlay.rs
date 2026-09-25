@@ -70,6 +70,14 @@ pub fn rows(plugin_ids: &[String], schemas: &BTreeMap<String, Vec<SchemaEntry>>)
     rows
 }
 
+/// The text a `text` row holds, for the input to start with.
+pub fn text_value(row: &Row, cfg: &Config) -> String {
+    match row {
+        Row::PluginSetting { id, entry } => schema_value(cfg, id, entry).as_str().to_string(),
+        _ => String::new(),
+    }
+}
+
 /// The plugin id and schema key of a `text` row, which Enter edits inline.
 pub fn text_row(row: &Row) -> Option<(&str, &str)> {
     match row {
@@ -124,6 +132,7 @@ pub fn value_text(row: &Row, cfg: &Config) -> String {
         },
         Row::PluginSetting { id, entry } => match schema_value(cfg, id, entry) {
             Value::Bool(b) => on_off(b),
+            Value::Str(text) if text.is_empty() => "(not set)".into(),
             Value::Str(text) => text.into_owned(),
             v => v.to_string(),
         },
@@ -619,6 +628,17 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(value_text(find("city"), &cfg), "Kyiv");
+        let no_city = Row::PluginSetting {
+            id: "fx".into(),
+            entry: SchemaEntry {
+                key: "city".into(),
+                label: "city".into(),
+                kind: SchemaKind::Text,
+                default: Value::Str("".into()),
+            },
+        };
+        assert_eq!(value_text(&no_city, &cfg), "(not set)");
+        assert_eq!(text_value(&no_city, &cfg), "", "the input starts empty");
         assert_eq!(value_text(find("month"), &cfg), "on");
         assert_eq!(value_text(find("mb"), &cfg), "25");
         assert_eq!(text_row(find("city")), Some(("fx", "city")));

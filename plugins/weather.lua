@@ -1,7 +1,9 @@
 -- Weather from Open-Meteo (free, no key): now, tomorrow and the day after.
 -- Settings in [plugin.weather]:
 --   city = "Kyiv"          (type it in the s overlay; looked up once per change)
---   lat, lon               (file only, optional: an exact place, used instead of the city)
+--   lat, lon, label        (file only, optional: an exact place and its name,
+--                           used only when city is not set)
+-- Without city and without lat/lon the card shows Kyiv.
 -- Temperatures are always °C: telemetrix does not pass units.temperature to
 -- plugins.
 
@@ -12,6 +14,9 @@ local FORECAST_URL = "https://api.open-meteo.com/v1/forecast?latitude=%s&longitu
   .. "precipitation_probability_max,wind_speed_10m_max"
   .. "&forecast_days=3&timezone=auto"
 local WEEKDAYS = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" }
+local DEFAULT_CITY = "Kyiv"
+-- The last "which place" note, so it is logged once per change, not every update.
+local last_note
 
 local function urlencode(text)
   return (text:gsub("[^%w%-_.~]", function(c)
@@ -111,19 +116,36 @@ return {
   title = "Weather",
   interval = 600,
   settings_schema = {
-    city = { kind = "text", label = "city", default = "Kyiv" },
+    -- Empty means "not set", so lat/lon from old settings files can still apply.
+    city = { kind = "text", label = "city", default = "" },
   },
   update = function()
     local s = telemetrix.settings
     local city = ((s.city or ""):gsub("^%s+", ""):gsub("%s+$", ""))
-    if city == "" then
-      city = "Kyiv"
-    end
     local lat, lon = tonumber(s.lat), tonumber(s.lon)
+    local use_coordinates = city == "" and lat and lon
+    if s.lat ~= nil or s.lon ~= nil then
+      local note
+      if use_coordinates then
+        note = string.format("using lat/lon %s, %s; city is not set", lat, lon)
+      elseif city ~= "" then
+        note = "using city " .. city .. "; lat/lon are ignored"
+      else
+        note = "lat/lon need both numbers; using " .. DEFAULT_CITY
+      end
+      if note ~= last_note then
+        telemetrix.log(note)
+        last_note = note
+      end
+    end
+    if city == "" then
+      city = DEFAULT_CITY
+    end
     local title, metrics = nil, {}
-    if lat and lon then
-      title = "Weather · " .. (s.label or city)
-      metrics[1] = { label = "place", value = string.format("%.2f, %.2f from lat/lon", lat, lon) }
+    if use_coordinates then
+      local where = string.format("%.2f, %.2f", lat, lon)
+      title = "Weather · " .. (type(s.label) == "string" and s.label or where)
+      metrics[1] = { label = "place", value = where .. " from lat/lon" }
     else
       local place = find_place(city, telemetrix.store_get() or {})
       if not place.lat then

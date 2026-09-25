@@ -157,8 +157,13 @@ Settings you can change in the `s` box:
   the file.
 - **Crypto:** the quote currency (default `USDT`). The coins
   (`coins = ["BTC", "ETH", "SOL"]`) are set in the file.
-- **Weather:** the city. Exact `lat` and `lon` in the file are used instead
-  of the city. Temperatures are always °C.
+- **Weather:** the city. A city wins over `lat` and `lon`. The coordinates
+  (with `label` as the card title) are used only when no city is set in the
+  file. Settings files from v0.1 have `lat`, `lon` and `label` but no city,
+  so they keep showing the same place until you type a city. Without a city
+  and without coordinates the card shows Kyiv. The log says which one is
+  used, and `config check` warns when a file has both. Temperatures are
+  always °C.
 - **Speed test:** `download_mb` (5..100), `upload_mb` (1..50) and
   `max_seconds` per direction (3..15).
 
