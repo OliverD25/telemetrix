@@ -1,12 +1,13 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::io::Read;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use mlua::{Lua, LuaSerdeExt, Table, Value};
+use mlua::{Function, Lua, LuaSerdeExt, Table, Value};
 use ureq::Agent;
 
 use super::PluginData;
@@ -17,6 +18,11 @@ use super::store;
 const BODY_LIMIT: u64 = 1 << 20;
 const AGENT_IDLE: Duration = Duration::from_secs(60);
 const PING_TIMEOUT: Duration = Duration::from_secs(2);
+/// Speed tests report progress at most this often.
+const PROGRESS_EVERY: Duration = Duration::from_millis(250);
+/// Extra time for connecting and the response, on top of `max_seconds`.
+const SPEED_GRACE: Duration = Duration::from_secs(5);
+const CHUNK: usize = 16 * 1024;
 const USER_AGENT: &str = concat!("telemetrix/", env!("CARGO_PKG_VERSION"));
 
 pub type LogFn = Rc<dyn Fn(&str)>;
@@ -129,6 +135,178 @@ fn http_get(
     Ok((body, status))
 }
 
+/// What one speed-test direction moved, and how fast.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Transfer {
+    pub bytes: u64,
+    pub seconds: f64,
+}
+
+impl Transfer {
+    pub fn mbps(&self) -> f64 {
+        if self.seconds > 0.0 {
+            self.bytes as f64 * 8.0 / self.seconds / 1_000_000.0
+        } else {
+            0.0
+        }
+    }
+}
+
+/// Calls the Lua progress callback with `(bytes, seconds)`, at most every
+/// `PROGRESS_EVERY`. An error in the callback stops the transfer.
+struct Progress {
+    callback: Option<Function>,
+    last: Option<Instant>,
+    start: Instant,
+}
+
+impl Progress {
+    fn new(callback: Option<Function>, start: Instant) -> Self {
+        Self {
+            callback,
+            last: None,
+            start,
+        }
+    }
+
+    fn tick(&mut self, bytes: u64) -> mlua::Result<()> {
+        let Some(f) = &self.callback else {
+            return Ok(());
+        };
+        if self.last.is_some_and(|t| t.elapsed() < PROGRESS_EVERY) {
+            return Ok(());
+        }
+        self.last = Some(Instant::now());
+        f.call::<()>((bytes, self.start.elapsed().as_secs_f64()))
+    }
+}
+
+fn check_speed_args(url: &str, max_seconds: f64) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("speed tests accept only https:// addresses".into());
+    }
+    if !(max_seconds > 0.0 && max_seconds.is_finite()) {
+        return Err("max_seconds must be above 0".into());
+    }
+    Ok(())
+}
+
+/// Reads up to `max_bytes` for up to `max_seconds`, 16 KB at a time, and
+/// throws the data away: nothing is kept in memory.
+fn speed_download(
+    deadline: &Deadline,
+    url: &str,
+    max_bytes: u64,
+    max_seconds: f64,
+    callback: Option<Function>,
+) -> Result<Transfer, String> {
+    check_speed_args(url, max_seconds)?;
+    let limit = cap(Duration::from_secs_f64(max_seconds), deadline);
+    let start = Instant::now();
+    let mut response = shared_agent()
+        .get(url)
+        .config()
+        .timeout_global(Some(cap(limit + SPEED_GRACE, deadline)))
+        .build()
+        .call()
+        .map_err(|e| e.to_string())?;
+    let status = response.status().as_u16();
+    if status != 200 {
+        return Err(format!("the server answered HTTP {status}"));
+    }
+    let mut reader = response.body_mut().with_config().limit(u64::MAX).reader();
+    let mut buf = vec![0u8; CHUNK];
+    let mut bytes = 0u64;
+    let mut progress = Progress::new(callback, start);
+    while bytes < max_bytes && start.elapsed() < limit {
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => bytes += n as u64,
+            Err(_) if bytes > 0 => break,
+            Err(e) => return Err(e.to_string()),
+        }
+        progress.tick(bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(Transfer {
+        bytes,
+        seconds: start.elapsed().as_secs_f64(),
+    })
+}
+
+/// Zeros for an upload body: stops at the byte or time limit, counts what
+/// it handed out, and reports progress on the way.
+pub struct Zeros {
+    remaining: u64,
+    sent: Rc<Cell<u64>>,
+    start: Instant,
+    limit: Duration,
+    progress: Progress,
+}
+
+impl Zeros {
+    pub fn new(bytes: u64, limit: Duration, sent: Rc<Cell<u64>>) -> Self {
+        let start = Instant::now();
+        Self {
+            remaining: bytes,
+            sent,
+            start,
+            limit,
+            progress: Progress::new(None, start),
+        }
+    }
+}
+
+impl Read for Zeros {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 || self.start.elapsed() >= self.limit {
+            return Ok(0);
+        }
+        let n = buf.len().min(CHUNK).min(self.remaining as usize);
+        buf[..n].fill(0);
+        self.remaining -= n as u64;
+        self.sent.set(self.sent.get() + n as u64);
+        self.progress
+            .tick(self.sent.get())
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        Ok(n)
+    }
+}
+
+/// Sends `bytes` zeros (or fewer, when `max_seconds` runs out first).
+fn speed_upload(
+    deadline: &Deadline,
+    url: &str,
+    bytes: u64,
+    max_seconds: f64,
+    callback: Option<Function>,
+) -> Result<Transfer, String> {
+    check_speed_args(url, max_seconds)?;
+    let limit = cap(Duration::from_secs_f64(max_seconds), deadline);
+    let sent = Rc::new(Cell::new(0u64));
+    let mut body = Zeros::new(bytes, limit, sent.clone());
+    body.progress = Progress::new(callback, body.start);
+    let start = body.start;
+    let result = shared_agent()
+        .post(url)
+        .config()
+        .timeout_global(Some(cap(limit + SPEED_GRACE, deadline)))
+        .build()
+        .send(ureq::SendBody::from_owned_reader(body));
+    let transfer = Transfer {
+        bytes: sent.get(),
+        seconds: start.elapsed().as_secs_f64(),
+    };
+    match result {
+        Ok(r) if r.status().as_u16() >= 400 => {
+            Err(format!("the server answered HTTP {}", r.status().as_u16()))
+        }
+        Ok(_) => Ok(transfer),
+        // Stopping at the time limit can end the request early; what was sent still counts.
+        Err(_) if transfer.bytes > 0 && transfer.seconds >= limit.as_secs_f64() => Ok(transfer),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 fn tcp_ping(host: &str, port: u16, timeout: Duration) -> Result<f64, String> {
     let addr = (host, port)
         .to_socket_addrs()
@@ -190,6 +368,44 @@ pub fn install(lua: &Lua, ctx: HostCtx) -> mlua::Result<()> {
     )?;
 
     t.set("now_ms", lua.create_function(|_, ()| Ok(now_ms()))?)?;
+
+    for upload in [false, true] {
+        let deadline = ctx.deadline.clone();
+        let name = if upload {
+            "speed_upload"
+        } else {
+            "speed_download"
+        };
+        t.set(
+            name,
+            lua.create_function(
+                move |lua,
+                      (url, amount, max_seconds, progress): (
+                    String,
+                    f64,
+                    f64,
+                    Option<Function>,
+                )| {
+                    let amount = amount.max(0.0) as u64;
+                    let result = if upload {
+                        speed_upload(&deadline, &url, amount, max_seconds, progress)
+                    } else {
+                        speed_download(&deadline, &url, amount, max_seconds, progress)
+                    };
+                    Ok(match result {
+                        Ok(t) => {
+                            let out = lua.create_table()?;
+                            out.set("bytes", t.bytes)?;
+                            out.set("seconds", t.seconds)?;
+                            out.set("mbps", t.mbps())?;
+                            (Value::Table(out), Value::Nil)
+                        }
+                        Err(e) => (Value::Nil, Value::String(lua.create_string(e)?)),
+                    })
+                },
+            )?,
+        )?;
+    }
 
     let (sink, meta) = (ctx.emit.clone(), ctx.meta.clone());
     let recent: RefCell<VecDeque<Instant>> = RefCell::new(VecDeque::new());
@@ -329,6 +545,46 @@ mod tests {
         };
         install(&lua, ctx).unwrap();
         (lua, lines)
+    }
+
+    #[test]
+    fn zeros_stop_at_the_byte_and_time_limits() {
+        let sent = Rc::new(Cell::new(0));
+        let mut z = Zeros::new(40_000, Duration::from_secs(60), sent.clone());
+        let mut buf = vec![1u8; 64 * 1024];
+        let mut total = 0;
+        loop {
+            let n = z.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            assert!(n <= CHUNK && buf[..n].iter().all(|b| *b == 0));
+            total += n;
+        }
+        assert_eq!((total, sent.get()), (40_000, 40_000));
+        let mut late = Zeros::new(1_000_000, Duration::ZERO, Rc::new(Cell::new(0)));
+        assert_eq!(late.read(&mut buf).unwrap(), 0, "no time left: no bytes");
+        let t = Transfer {
+            bytes: 25_000_000,
+            seconds: 2.0,
+        };
+        assert!((t.mbps() - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn speed_tests_refuse_plain_http() {
+        let (lua, _) = lua_with_host();
+        let ok: bool = lua
+            .load(
+                "local r, e1 = telemetrix.speed_download('http://example.com', 10, 1) \
+                 local u, e2 = telemetrix.speed_upload('ftp://x', 10, 1) \
+                 local z, e3 = telemetrix.speed_download('https://example.com', 10, 0) \
+                 return r == nil and u == nil and z == nil and e1:find('https') ~= nil \
+                 and e2:find('https') ~= nil and e3:find('max_seconds') ~= nil",
+            )
+            .eval()
+            .unwrap();
+        assert!(ok);
     }
 
     #[test]
