@@ -2,6 +2,9 @@ use mlua::{Function, Table, Value};
 
 use super::MetricItem;
 
+/// Trend lines outside this length become an error line.
+pub const TREND_POINTS: std::ops::RangeInclusive<usize> = 2..=400;
+
 /// What a plugin file returns: `{ id?, title, interval?, update = function() ... end }`.
 pub struct PluginManifest {
     pub id: String,
@@ -58,6 +61,19 @@ fn to_text(v: &Value) -> Option<String> {
     }
 }
 
+/// A list of 2..=400 finite numbers, or `None`.
+fn trend_points(t: &Table) -> Option<Vec<f32>> {
+    let points: Option<Vec<f32>> = t
+        .sequence_values::<Value>()
+        .map(|v| match v.ok()? {
+            Value::Integer(n) => Some(n as f32),
+            Value::Number(n) if n.is_finite() => Some(n as f32),
+            _ => None,
+        })
+        .collect();
+    points.filter(|p| TREND_POINTS.contains(&p.len()))
+}
+
 impl CardUpdate {
     pub fn from_value(v: Value) -> Result<Self, String> {
         let Value::Table(t) = v else {
@@ -79,10 +95,29 @@ impl CardUpdate {
             };
             let label = item.get::<Value>("label").ok().as_ref().and_then(to_text);
             let value = item.get::<Value>("value").ok().as_ref().and_then(to_text);
-            match (label, value) {
-                (Some(label), Some(value)) => metrics.push(MetricItem { label, value }),
-                _ => return Err(format!("metrics[{}] needs a label and a value", i + 1)),
+            let (Some(label), Some(value)) = (label, value) else {
+                return Err(format!("metrics[{}] needs a label and a value", i + 1));
+            };
+            let mut metric = MetricItem::text(label, value);
+            match item.get::<Value>("trend").map_err(|e| e.to_string())? {
+                Value::Nil => {}
+                Value::Table(points) => match trend_points(&points) {
+                    Some(points) => metric.trend = Some(points),
+                    None => {
+                        metric.value = format!(
+                            "trend needs {}..{} numbers",
+                            TREND_POINTS.start(),
+                            TREND_POINTS.end()
+                        );
+                        metric.bad = true;
+                    }
+                },
+                _ => {
+                    metric.value = "trend must be a list of numbers".into();
+                    metric.bad = true;
+                }
             }
+            metrics.push(metric);
         }
         Ok(Self { title, metrics })
     }
@@ -142,6 +177,23 @@ mod tests {
             CardUpdate::from_value(v).unwrap().title.as_deref(),
             Some("T")
         );
+        let v: Value = lua
+            .load("return { metrics = { { label = '7d', value = '+1%', trend = { 1, 2.5, 3 } } } }")
+            .eval()
+            .unwrap();
+        let card = CardUpdate::from_value(v).unwrap();
+        assert_eq!(card.metrics[0].trend.as_deref(), Some(&[1.0, 2.5, 3.0][..]));
+        assert!(!card.metrics[0].bad);
+        let v: Value = lua
+            .load("return { metrics = { { label = 'x', value = '1', trend = { 5 } }, { label = 'y', value = 2 } } }")
+            .eval()
+            .unwrap();
+        let card = CardUpdate::from_value(v).unwrap();
+        assert!(
+            card.metrics[0].bad && card.metrics[0].value.contains("2..400"),
+            "one point is too few"
+        );
+        assert!(!card.metrics[1].bad, "the other rows still work");
         let v: Value = lua
             .load("return { metrics = { { label = 'a' } } }")
             .eval()

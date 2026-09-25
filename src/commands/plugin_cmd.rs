@@ -25,7 +25,7 @@ pub fn to_json(d: &PluginData) -> Value {
             let metrics: Vec<Value> = d
                 .metrics
                 .iter()
-                .map(|m| json!({ "label": m.label, "value": m.value }))
+                .map(|m| json!({ "label": m.label, "value": m.value, "trend": m.trend }))
                 .collect();
             json!({ "id": d.id, "title": d.title, "ok": true, "metrics": metrics })
         }

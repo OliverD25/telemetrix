@@ -20,6 +20,8 @@ pub const MIN_H: u16 = 10;
 pub const WARN: Color = Color::Rgb(255, 95, 95);
 pub const ACCENT: Color = Color::Rgb(215, 135, 0);
 pub const MUTED: Color = Color::Rgb(115, 115, 115);
+/// A trend value that went up (falling ones use `WARN`).
+pub const RISE: Color = Color::Rgb(90, 200, 120);
 
 pub struct Palette {
     pub bg: Option<Color>,
@@ -387,10 +389,7 @@ fn plugin_card(card: &PluginCard, pal: &Palette, w: usize) -> Card {
     match &card.status {
         PluginStatus::Ok => Card::new(
             d.title.clone(),
-            d.metrics
-                .iter()
-                .map(|m| kv(&m.label, m.value.clone(), w, pal, pal.value))
-                .collect(),
+            d.metrics.iter().map(|m| metric_line(m, pal, w)).collect(),
         ),
         PluginStatus::Error(msg) => {
             let mut lines: Vec<Line<'static>> = wrap(&format!("Error: {msg}"), w)
@@ -407,6 +406,72 @@ fn plugin_card(card: &PluginCard, pal: &Palette, w: usize) -> Card {
             }
         }
     }
+}
+
+fn metric_line(m: &crate::plugins::MetricItem, pal: &Palette, w: usize) -> Line<'static> {
+    if m.bad {
+        return kv(&m.label, m.value.clone(), w, pal, WARN);
+    }
+    match &m.trend {
+        Some(points) => trend_line(&m.label, points, &m.value, w, pal),
+        None => kv(&m.label, m.value.clone(), w, pal, pal.value),
+    }
+}
+
+/// `label ▁▂▄▆█ +0.8%`: the graph fills the width between label and value.
+pub fn trend_line(
+    label: &str,
+    points: &[f32],
+    value: &str,
+    w: usize,
+    pal: &Palette,
+) -> Line<'static> {
+    let (first, last) = (points.first().copied(), points.last().copied());
+    let color = match (first, last) {
+        (Some(a), Some(b)) if b > a => RISE,
+        (Some(a), Some(b)) if b < a => WARN,
+        _ => pal.value,
+    };
+    let label = fit(label, w.saturating_sub(value.chars().count() + 1));
+    let room = w.saturating_sub(label.chars().count() + value.chars().count() + 2);
+    let graph = trend_glyphs(points, room);
+    let pad = w
+        .saturating_sub(label.chars().count() + graph.chars().count() + value.chars().count() + 1)
+        .max(1);
+    Line::from(vec![
+        Span::styled(label, fg(pal.label)),
+        Span::raw(" "),
+        Span::styled(graph, fg(pal.spark)),
+        Span::raw(" ".repeat(pad)),
+        Span::styled(value.to_string(), fg(color)),
+    ])
+}
+
+/// Scales the points to their own min..max and resamples them to `width`.
+pub fn trend_glyphs(points: &[f32], width: usize) -> String {
+    if points.len() < 2 || width == 0 {
+        return String::new();
+    }
+    let (lo, hi) = points
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+    let span = hi - lo;
+    let sampled: Vec<f32> = (0..width)
+        .map(|i| {
+            let idx = if width == 1 {
+                points.len() - 1
+            } else {
+                (i * (points.len() - 1) + (width - 1) / 2) / (width - 1)
+            };
+            let p = points[idx];
+            if span > 0.0 {
+                (p - lo) / span * 100.0
+            } else {
+                50.0
+            }
+        })
+        .collect();
+    format::sparkline(&sampled, width)
 }
 
 pub fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -430,6 +495,29 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trends_fill_the_width_and_colour_the_direction() {
+        let pal = minimalist_palette();
+        assert_eq!(trend_glyphs(&[1.0, 2.0], 4), "▁▁██");
+        assert_eq!(
+            trend_glyphs(&[3.0, 3.0, 3.0], 3),
+            "▅▅▅",
+            "a flat line sits in the middle"
+        );
+        assert_eq!(trend_glyphs(&[1.0], 5), "");
+        let points: Vec<f32> = (0..400).map(|i| i as f32).collect();
+        let line = trend_line("30d", &points, "+4.1%", 30, &pal);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text.chars().count(), 30, "{text}");
+        assert!(
+            text.starts_with("30d ▁") && text.ends_with(" +4.1%"),
+            "{text}"
+        );
+        assert_eq!(line.spans.last().unwrap().style.fg, Some(RISE));
+        let falling = trend_line("7d", &[5.0, 4.0, 1.0], "-2.0%", 30, &pal);
+        assert_eq!(falling.spans.last().unwrap().style.fg, Some(WARN));
+    }
 
     #[test]
     fn long_titles_are_cut_so_the_value_stays_visible() {

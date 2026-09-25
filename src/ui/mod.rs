@@ -149,7 +149,7 @@ mod tests {
     use crate::config::{Config, ConfigStatus};
     use crate::metrics::{DiskMetric, SystemSnapshot};
     use crate::themes;
-    use crate::themes::common::WARN;
+    use crate::themes::common::{RISE, WARN};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
@@ -261,6 +261,57 @@ mod tests {
             !text(&render(&s, 120, 40)).contains(" Network "),
             "hidden without drives"
         );
+    }
+
+    #[test]
+    fn plugin_trend_rows_render_in_both_themes() {
+        use crate::plugins::{MetricItem, PluginCard, PluginData, PluginStatus};
+        for theme in ["minimalist", "matrix"] {
+            let mut s = state(theme);
+            let mut up = MetricItem::text("7d", "+0.8%");
+            up.trend = Some(vec![1.0, 1.5, 1.2, 2.0, 2.4]);
+            let mut down = MetricItem::text("30d", "-1.2%");
+            down.trend = Some(vec![3.0, 2.0, 1.0]);
+            let mut bad = MetricItem::text("1d", "trend needs 2..400 numbers");
+            bad.bad = true;
+            let data = PluginData {
+                id: "fx".into(),
+                title: "FX".into(),
+                metrics: vec![MetricItem::text("USD", "44.80"), up, down, bad],
+                error: None,
+                lua_bytes: None,
+            };
+            s.plugins.insert(
+                "fx".into(),
+                PluginCard {
+                    data,
+                    status: PluginStatus::Ok,
+                },
+            );
+            // One column at this width: the plugin card comes after the system cards.
+            let buf = render(&s, 45, 70);
+            let t = text(&buf);
+            assert!(
+                t.contains("7d ") && t.contains("+0.8%") && t.contains("-1.2%"),
+                "{theme}"
+            );
+            assert!(
+                t.contains('▁') && t.contains('█'),
+                "{theme}: a sparkline is drawn"
+            );
+            let color_of = |needle: &str| {
+                let cells = buf.content();
+                let chars: Vec<&str> = cells.iter().map(|c| c.symbol()).collect();
+                let pos = chars
+                    .windows(needle.len())
+                    .position(|w| w.concat() == needle)
+                    .unwrap();
+                cells[pos].fg
+            };
+            assert_eq!(color_of("+0.8%"), RISE, "{theme}");
+            assert_eq!(color_of("-1.2%"), WARN, "{theme}");
+            assert_eq!(color_of("trend needs"), WARN, "{theme}");
+        }
     }
 
     #[test]

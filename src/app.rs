@@ -518,10 +518,7 @@ mod tests {
         let good = PluginData {
             id: "w".into(),
             title: "W".into(),
-            metrics: vec![MetricItem {
-                label: "t".into(),
-                value: "1".into(),
-            }],
+            metrics: vec![MetricItem::text("t", "1")],
             error: None,
             lua_bytes: None,
         };

@@ -8,6 +8,21 @@ pub mod sandbox;
 pub struct MetricItem {
     pub label: String,
     pub value: String,
+    /// Points for a sparkline between the label and the value (2..=400).
+    pub trend: Option<Vec<f32>>,
+    /// The plugin sent something invalid for this row; the value explains it.
+    pub bad: bool,
+}
+
+impl MetricItem {
+    pub fn text(label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            value: value.into(),
+            trend: None,
+            bad: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
