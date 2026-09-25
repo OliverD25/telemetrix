@@ -13,6 +13,8 @@ pub enum AppEvent {
     /// Sent once after a plugin file loaded: what the main loop must know about it.
     PluginMeta {
         id: String,
+        /// The title from the file, for the help overlay.
+        title: String,
         run_key: Option<char>,
         schema: Vec<SchemaEntry>,
     },

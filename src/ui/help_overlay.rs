@@ -24,7 +24,10 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState) {
     let plugin_rows: Vec<(String, String)> = state
         .plugin_keys
         .iter()
-        .map(|(key, id)| (key.to_string(), format!("run the {id} plugin now")))
+        .map(|(key, id)| {
+            let title = state.plugin_titles.get(id).unwrap_or(id);
+            (key.to_string(), format!("{title}: run now"))
+        })
         .collect();
     let height = u16::try_from(KEYS.len() + plugin_rows.len() + 2).unwrap_or(u16::MAX);
     let inner = super::overlay_frame(frame, super::popup(area, 72, height), "keys");

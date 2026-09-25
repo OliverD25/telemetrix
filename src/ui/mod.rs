@@ -346,6 +346,31 @@ mod tests {
     }
 
     #[test]
+    fn help_lists_the_accepted_plugin_run_keys() {
+        use crate::event::AppEvent;
+        let mut s = state("minimalist");
+        let meta = |id: &str, title: &str, key| AppEvent::PluginMeta {
+            id: id.into(),
+            title: title.into(),
+            run_key: Some(key),
+            schema: Vec::new(),
+        };
+        s.apply(meta("speedtest", "Speed test", 'g'));
+        s.apply(meta("other", "Other", 'g'));
+        s.apply(meta("bad", "Bad", 's'));
+        s.overlay = Overlay::Help;
+        let t = text(&render(&s, 80, 30));
+        assert!(
+            t.contains(&format!("  {:<20}Speed test: run now", "g")),
+            "{t}"
+        );
+        assert!(!t.contains("Other: run now"), "a refused key is not listed");
+        assert!(!t.contains("Bad: run now"));
+        s.apply(AppEvent::PluginRemoved("speedtest".into()));
+        assert!(!text(&render(&s, 80, 30)).contains("run now"));
+    }
+
+    #[test]
     fn overlays_banner_and_toast_render_at_all_sizes() {
         for theme in ["minimalist", "matrix"] {
             let mut s = state(theme);

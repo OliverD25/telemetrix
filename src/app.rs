@@ -258,6 +258,8 @@ pub struct AppState {
     pub picker_original: usize,
     /// Run keys of plugins: key → plugin id.
     pub plugin_keys: BTreeMap<char, String>,
+    /// Plugin titles from their files, by id, for the help overlay.
+    pub plugin_titles: BTreeMap<String, String>,
     /// Each plugin's `settings_schema`, by plugin id. Kept when a plugin
     /// stops, so a disabled plugin's settings stay editable.
     pub plugin_schemas: BTreeMap<String, Vec<SchemaEntry>>,
@@ -297,6 +299,7 @@ impl AppState {
             picker_original: theme_idx,
             network: None,
             plugin_keys: BTreeMap::new(),
+            plugin_titles: BTreeMap::new(),
             plugin_schemas: BTreeMap::new(),
             text_input: None,
             log_sink: None,
@@ -375,9 +378,11 @@ impl AppState {
             }
             AppEvent::PluginMeta {
                 id,
+                title,
                 run_key,
                 schema,
             } => {
+                self.plugin_titles.insert(id.clone(), title);
                 self.plugin_keys.retain(|_, owner| *owner != id);
                 if let Some(key) = run_key {
                     self.register_run_key(&id, key);
@@ -386,6 +391,7 @@ impl AppState {
             }
             AppEvent::PluginRemoved(id) => {
                 self.plugin_keys.retain(|_, owner| *owner != id);
+                self.plugin_titles.remove(&id);
                 self.plugins.remove(&id);
                 self.plugins_over_budget.remove(&id);
             }
@@ -715,6 +721,7 @@ mod tests {
         let mut state = AppState::new(Config::default(), ConfigStatus::Ok);
         let meta = |id: &str, key| AppEvent::PluginMeta {
             id: id.into(),
+            title: id.into(),
             run_key: Some(key),
             schema: Vec::new(),
         };

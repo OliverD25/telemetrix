@@ -331,6 +331,7 @@ fn run(
     }
     let _ = tx.send(AppEvent::PluginMeta {
         id: plugin.id().to_string(),
+        title: plugin.title().to_string(),
         run_key: plugin.run_key(),
         schema: plugin.schema().to_vec(),
     });
