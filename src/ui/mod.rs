@@ -371,6 +371,20 @@ mod tests {
     }
 
     #[test]
+    fn empty_plugins_card_names_the_folder() {
+        let mut s = state("minimalist");
+        let long = "/home/someone-with-a-long-name/.config/telemetrix/plugins";
+        s.plugins_dir = std::path::PathBuf::from(long);
+        let t = text(&render(&s, 45, 70));
+        assert!(t.contains("no plugins found in:"));
+        assert!(t.contains("press l for the log"));
+        let joined: String = t.split('│').map(str::trim).collect();
+        assert!(joined.contains(long), "the whole path, wrapped: {t}");
+        s.plugins_running = 2;
+        assert!(text(&render(&s, 45, 70)).contains("starting plugins"));
+    }
+
+    #[test]
     fn overlays_banner_and_toast_render_at_all_sizes() {
         for theme in ["minimalist", "matrix"] {
             let mut s = state(theme);

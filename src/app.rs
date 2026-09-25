@@ -250,6 +250,9 @@ pub struct AppState {
     pub settings_footer: Option<Result<String, String>>,
     /// Plugin files found when the settings overlay was opened.
     pub plugin_ids: Vec<String>,
+    /// The plugin folder of the last scan, and how many plugins run from it.
+    pub plugins_dir: std::path::PathBuf,
+    pub plugins_running: usize,
     /// The last reading of this program's own memory.
     pub self_memory: Option<SelfMemory>,
     pub over_budget: bool,
@@ -293,6 +296,8 @@ impl AppState {
             settings_cursor: 0,
             settings_footer: None,
             plugin_ids: Vec::new(),
+            plugins_dir: std::path::PathBuf::new(),
+            plugins_running: 0,
             self_memory: None,
             over_budget: false,
             plugins_over_budget: BTreeSet::new(),

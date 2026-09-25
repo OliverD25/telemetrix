@@ -378,10 +378,29 @@ fn plugin_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
         .map(|p| plugin_card(p, pal, w))
         .collect();
     if cards.is_empty() {
-        let hint = Line::styled("no plugins yet", fg(pal.label));
-        cards.push(Card::new("Plugins", vec![hint]));
+        let lines = if state.plugins_running > 0 {
+            vec![Line::styled("starting plugins…", fg(pal.label))]
+        } else {
+            let mut lines = vec![Line::styled("no plugins found in:", fg(pal.label))];
+            let path = state.plugins_dir.display().to_string();
+            for part in wrap_chars(&path, w) {
+                lines.push(Line::styled(part, fg(pal.value)));
+            }
+            lines.push(Line::styled("press l for the log", fg(pal.label)));
+            lines
+        };
+        cards.push(Card::new("Plugins", lines));
     }
     cards
+}
+
+/// Cuts text without spaces, like a path, into lines of at most `width` characters.
+pub fn wrap_chars(text: &str, width: usize) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    chars
+        .chunks(width.max(1))
+        .map(|c| c.iter().collect())
+        .collect()
 }
 
 fn plugin_card(card: &PluginCard, pal: &Palette, w: usize) -> Card {

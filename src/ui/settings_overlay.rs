@@ -499,7 +499,7 @@ mod tests {
         assert_eq!(value_text(find_row(&rows, "general.theme"), &cfg), "matrix");
         assert_eq!(
             value_text(find_row(&rows, "general.plugins_dir"), &cfg),
-            "\"plugins\""
+            "\"\""
         );
         assert_eq!(
             value_text(find_row(&rows, "theme.minimalist.show_sparklines"), &cfg),

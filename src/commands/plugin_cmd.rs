@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use crate::cli::{Flags, PluginCmd};
 use crate::config::{self, Config, Value as ConfigValue};
 use crate::plugins::PluginData;
+use crate::plugins::bundled;
 use crate::plugins::host_api::Trigger;
 use crate::plugins::manager::{discover, plugins_dir};
 use crate::plugins::runner::{self, Plugin, RunnerSettings};
@@ -35,11 +36,51 @@ pub fn to_json(d: &PluginData) -> Value {
 }
 
 pub fn run(cmd: PluginCmd, flags: &Flags) -> ExitCode {
-    let (_, cfg, _) = config::load_effective(flags);
+    let (path, cfg, _) = config::load_effective(flags);
     match cmd {
         PluginCmd::Check { file, json, run } => check(&file, json, run, &cfg),
-        PluginCmd::List => list(&cfg),
+        PluginCmd::List => list(&cfg, &path),
+        PluginCmd::Install { force, names } => {
+            let home = bundled::home(&path);
+            println!("built-in plugins in {}", home.display());
+            match install(&home, force, &names) {
+                Ok(lines) => {
+                    for line in lines {
+                        println!("  {line}");
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
     }
+}
+
+/// `plugin install`: the start-up rules, limited to `names` when given;
+/// `force` also replaces edited files and restores deleted ones.
+fn install(home: &Path, force: bool, names: &[String]) -> Result<Vec<String>, String> {
+    let mut files = Vec::new();
+    for name in names {
+        match bundled::file_name(name) {
+            Some(file) => files.push(file),
+            None => {
+                let known: Vec<&str> = bundled::FILES
+                    .iter()
+                    .filter_map(|(f, _)| f.strip_suffix(".lua"))
+                    .collect();
+                return Err(format!(
+                    "{name} is not a built-in plugin; the built-in ones are {}",
+                    known.join(", ")
+                ));
+            }
+        }
+    }
+    let report = bundled::sync(home, &files, force)
+        .map_err(|e| format!("cannot write to {}: {e}", home.display()))?;
+    Ok(report.iter().map(|(f, o)| o.describe(f)).collect())
 }
 
 fn schema_json(schema: &[SchemaEntry]) -> Value {
@@ -153,9 +194,10 @@ fn check(file: &Path, json: bool, run: bool, cfg: &Config) -> ExitCode {
     }
 }
 
-fn list(cfg: &Config) -> ExitCode {
-    let dir = plugins_dir(cfg);
+fn list(cfg: &Config, settings_path: &Path) -> ExitCode {
+    let dir = plugins_dir(cfg, settings_path);
     let settings = RunnerSettings::from_config(cfg);
+    println!("plugin home: {}", bundled::home(settings_path).display());
     println!("plugins in {}", dir.display());
     let files = discover(&dir);
     if files.is_empty() {
@@ -178,9 +220,10 @@ fn list(cfg: &Config) -> ExitCode {
                 };
                 let interval = p.interval(&settings).as_secs();
                 println!(
-                    "  {:<16} {:>6} s  {enabled:<8}  {}",
+                    "  {:<16} {:>6} s  {enabled:<8}  {:<15}  {}",
                     p.id(),
                     interval,
+                    bundled::origin(&path).label(),
                     path.display()
                 );
             }
@@ -195,12 +238,12 @@ fn list(cfg: &Config) -> ExitCode {
 }
 
 /// Runs every enabled plugin once, in parallel, for `snapshot --plugins`.
-pub fn run_all_once(cfg: &Config) -> Vec<Value> {
+pub fn run_all_once(cfg: &Config, settings_path: &Path) -> Vec<Value> {
     if !cfg.plugins.enabled {
         return Vec::new();
     }
     let settings = RunnerSettings::from_config(cfg);
-    let files: Vec<PathBuf> = discover(&plugins_dir(cfg))
+    let files: Vec<PathBuf> = discover(&plugins_dir(cfg, settings_path))
         .into_iter()
         .map(|(p, _)| p)
         .filter(|p| settings.enabled(&runner::stem(p)))
@@ -248,6 +291,34 @@ pub fn run_all_once(cfg: &Config) -> Vec<Value> {
 mod tests {
     use super::*;
     use crate::config::Value as V;
+
+    #[test]
+    fn install_force_replaces_and_names_must_be_built_in() {
+        let home = std::env::temp_dir().join(format!("telemetrix-install-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let lines = install(&home, false, &[]).unwrap();
+        assert_eq!(lines.len(), 7);
+        assert!(
+            lines.iter().all(|l| l.ends_with(": installed")),
+            "{lines:?}"
+        );
+        std::fs::write(home.join("weather.lua"), "-- mine").unwrap();
+        std::fs::remove_file(home.join("clock.lua")).unwrap();
+        let lines = install(&home, false, &["weather".into()]).unwrap();
+        assert!(lines[0].starts_with("weather.lua was changed by you"));
+        assert_eq!(
+            std::fs::read_to_string(home.join("weather.lua")).unwrap(),
+            "-- mine"
+        );
+        let lines = install(&home, true, &["weather".into()]).unwrap();
+        assert_eq!(lines, ["weather.lua: replaced with the built-in version"]);
+        assert!(!home.join("clock.lua").exists(), "not named: stays deleted");
+        let lines = install(&home, true, &[]).unwrap();
+        assert!(lines.contains(&"clock.lua: replaced with the built-in version".to_string()));
+        assert!(home.join("clock.lua").is_file());
+        assert!(install(&home, true, &["nope".into()]).is_err());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
 
     #[test]
     fn schema_prints_one_line_per_key() {

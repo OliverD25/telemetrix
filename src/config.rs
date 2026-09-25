@@ -164,9 +164,9 @@ pub static SETTINGS: &[Setting] = &[
     setting(
         "general.plugins_dir",
         Kind::Path,
-        text("plugins"),
+        text(""),
         false,
-        "relative to the executable, or an absolute path",
+        "empty = the plugins folder next to this file; relative paths start there",
     ),
     setting(
         "general.log_file",
@@ -1231,7 +1231,9 @@ pub fn apply_flags(cfg: &mut Config, flags: &Flags) {
         cfg.general.fps = fps;
     }
     if let Some(dir) = &flags.plugins_dir {
-        cfg.general.plugins_dir = dir.clone();
+        // Relative to the current folder, as usual for a command-line path;
+        // a relative value in the file is relative to the file's folder.
+        cfg.general.plugins_dir = std::path::absolute(dir).unwrap_or_else(|_| dir.clone());
     }
     if flags.no_plugins {
         cfg.plugins.enabled = false;

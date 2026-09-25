@@ -3,24 +3,15 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::time::SystemTime;
 
+use super::bundled;
 use super::runner::{self, RunnerHandle, RunnerSettings};
 use crate::config::Config;
 use crate::event::{AppEvent, WorkerCmd};
 
-/// An absolute path as is; a relative one next to the executable when that
-/// folder exists, else in the current folder.
-pub fn plugins_dir(cfg: &Config) -> PathBuf {
-    let dir = &cfg.general.plugins_dir;
-    if dir.is_absolute() {
-        return dir.clone();
-    }
-    let beside_exe = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|p| p.join(dir)));
-    match beside_exe {
-        Some(p) if p.is_dir() => p,
-        _ => std::env::current_dir().map_or_else(|_| dir.clone(), |cwd| cwd.join(dir)),
-    }
+/// `--plugins-dir`, else `general.plugins_dir` (relative to the settings
+/// file's folder), else the plugin home next to the settings file.
+pub fn plugins_dir(cfg: &Config, settings_path: &Path) -> PathBuf {
+    bundled::plugins_dir(&cfg.general.plugins_dir, settings_path)
 }
 
 /// Every `*.lua` file in `dir`, sorted, with its modification time.
@@ -53,6 +44,7 @@ pub struct Manager {
     enabled: bool,
     max: usize,
     dir: PathBuf,
+    settings_path: PathBuf,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -63,14 +55,15 @@ pub struct ScanReport {
 }
 
 impl Manager {
-    pub fn new(cfg: &Config, tx: Sender<AppEvent>) -> Self {
+    pub fn new(cfg: &Config, settings_path: &Path, tx: Sender<AppEvent>) -> Self {
         Self {
             tx,
             running: BTreeMap::new(),
             settings: RunnerSettings::from_config(cfg),
             enabled: cfg.plugins.enabled,
             max: cfg.plugins.max_plugins,
-            dir: plugins_dir(cfg),
+            dir: plugins_dir(cfg, settings_path),
+            settings_path: settings_path.to_path_buf(),
         }
     }
 
@@ -84,7 +77,7 @@ impl Manager {
         self.settings = RunnerSettings::from_config(cfg);
         self.enabled = cfg.plugins.enabled;
         self.max = cfg.plugins.max_plugins;
-        let dir = plugins_dir(cfg);
+        let dir = plugins_dir(cfg, &self.settings_path);
         if dir != self.dir {
             self.stop_all();
             self.dir = dir;
@@ -181,6 +174,34 @@ mod tests {
     const PLUGIN: &str = "return { title = 'T', update = function() return { metrics = {} } end }";
 
     #[test]
+    fn folder_rules_keep_the_v01_value_and_the_dev_flag_working() {
+        let settings = temp_dir("home-rules").join("telemetrix.toml");
+        let home = bundled::home(&settings);
+        // The user's real file, written by the v0.1 template.
+        let legacy = crate::config::parse_text(
+            "[general]
+plugins_dir = \"plugins\"
+",
+        )
+        .unwrap();
+        assert!(legacy.problems.is_empty());
+        assert_eq!(plugins_dir(&legacy.config, &settings), home);
+        assert_eq!(plugins_dir(&Config::default(), &settings), home);
+        let mut cfg = Config::default();
+        let flags = crate::cli::Flags {
+            plugins_dir: Some("plugins".into()),
+            ..Default::default()
+        };
+        crate::config::apply_flags(&mut cfg, &flags);
+        assert_eq!(
+            plugins_dir(&cfg, &settings),
+            std::env::current_dir().unwrap().join("plugins"),
+            "--plugins-dir is relative to the current folder"
+        );
+        std::fs::remove_dir_all(settings.parent().unwrap()).unwrap();
+    }
+
+    #[test]
     fn discovers_only_lua_files() {
         let dir = temp_dir("discover");
         std::fs::write(dir.join("b.lua"), PLUGIN).unwrap();
@@ -205,7 +226,7 @@ mod tests {
         cfg.general.plugins_dir = dir.clone();
         cfg.plugins.max_plugins = 2;
         let (tx, rx) = mpsc::channel();
-        let mut m = Manager::new(&cfg, tx);
+        let mut m = Manager::new(&cfg, &dir.join("telemetrix.toml"), tx);
         let r = m.rescan();
         assert_eq!((r.started, r.running), (2, 2), "the cap holds");
 

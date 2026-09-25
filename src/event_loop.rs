@@ -13,7 +13,8 @@ use crate::event::{AppEvent, WorkerCmd};
 use crate::metrics::network::{self, NetworkCmd, NetworkSettings};
 use crate::metrics::worker::{self, MetricsCmd, MetricsIntervals};
 use crate::plugins::PluginStatus;
-use crate::plugins::manager::{self, Manager};
+use crate::plugins::bundled;
+use crate::plugins::manager::{self, Manager, ScanReport};
 use crate::plugins::runner;
 use crate::selfmem;
 use crate::term::TerminalGuard;
@@ -56,7 +57,9 @@ pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags) -> io::Result<()> {
     crate::term::install_signal_handling();
     let path = config::resolve_path(flags.config.as_deref());
     let (tx, rx) = mpsc::channel::<AppEvent>();
-    let plugins = Manager::new(&cfg, tx.clone());
+    let home = bundled::home(&path);
+    let synced = bundled::sync(&home, &[], false);
+    let plugins = Manager::new(&cfg, &path, tx.clone());
     let network = network::spawn(NetworkSettings::from_config(&cfg), tx.clone());
     let (metrics, _metrics_thread) = worker::spawn(MetricsIntervals::from_config(&cfg), tx);
     let mut state = AppState::new(cfg, status);
@@ -69,6 +72,17 @@ pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags) -> io::Result<()> {
         for w in warnings {
             state.log(&format!("warning: config: {w}"));
         }
+    }
+    match synced {
+        Ok(report) => {
+            for (file, outcome) in report.iter().filter(|(_, o)| o.worth_logging()) {
+                state.log(&outcome.describe(file));
+            }
+        }
+        Err(e) => state.log(&format!(
+            "warning: cannot install the built-in plugins into {}: {e}",
+            home.display()
+        )),
     }
     let mut guard = TerminalGuard::new();
     let mut lp = Loop {
@@ -329,9 +343,17 @@ impl Loop {
         s.dirty = true;
     }
 
+    /// What the empty Plugins card needs: the folder and whether anything runs.
+    fn note_scan(&mut self, report: &ScanReport) {
+        self.state.plugins_dir = self.plugins.dir().to_path_buf();
+        self.state.plugins_running = report.running;
+        self.state.dirty = true;
+    }
+
     fn rescan_plugins(&mut self, announce: bool) {
         self.last_rescan = Instant::now();
         let report = self.plugins.rescan();
+        self.note_scan(&report);
         let errors = self
             .state
             .plugins
@@ -365,10 +387,13 @@ impl Loop {
         if every > 0 && self.last_rescan.elapsed() >= Duration::from_secs(every) {
             self.last_rescan = Instant::now();
             let report = self.plugins.rescan();
+            self.note_scan(&report);
             if report.started + report.stopped > 0 {
                 self.state.log(&format!(
-                    "plugins: {} started, {} stopped",
-                    report.started, report.stopped
+                    "plugins: {} started, {} stopped in {}",
+                    report.started,
+                    report.stopped,
+                    self.plugins.dir().display()
                 ));
             }
         }
@@ -436,7 +461,8 @@ impl Loop {
             || old.plugin_cfg != new.plugin_cfg
             || old.general.plugins_dir != new.general.plugins_dir
         {
-            self.plugins.reconfigure(new);
+            let report = self.plugins.reconfigure(new);
+            self.note_scan(&report);
         }
         if old.general.log_file != self.state.config.general.log_file {
             self.state.open_log_file();
@@ -466,6 +492,7 @@ mod tests {
         fn for_test(cfg: Config, flags: Flags, path: std::path::PathBuf) -> Self {
             let mut quiet = cfg.clone();
             quiet.plugins.enabled = false;
+            let plugin_settings = path.clone();
             Self {
                 state: AppState::new(cfg, ConfigStatus::Ok),
                 flags,
@@ -475,7 +502,7 @@ mod tests {
                 quit: false,
                 metrics: mpsc::channel().0,
                 themes: themes::all(),
-                plugins: Manager::new(&quiet, mpsc::channel().0),
+                plugins: Manager::new(&quiet, &plugin_settings, mpsc::channel().0),
                 last_rescan: Instant::now(),
                 network: mpsc::channel().0,
             }

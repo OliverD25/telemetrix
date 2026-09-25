@@ -13,6 +13,9 @@ Usage:
                                           load a plugin, run update() once, print the card
                                           (--run: as if its run key was pressed)
   telemetrix plugin list                  list the plugins that would run
+  telemetrix plugin install [--force] [name...]
+                                          install or update the built-in plugins
+                                          (--force: also over your edits and deletions)
   telemetrix selftest --memory [--seconds N] [--json]
                                           measure memory against the budgets, exit 1 if over
   telemetrix themes                       list theme names
@@ -71,6 +74,11 @@ pub enum PluginCmd {
         run: bool,
     },
     List,
+    /// Built-in plugin names, or none for all of them.
+    Install {
+        force: bool,
+        names: Vec<String>,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -213,6 +221,10 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
             run: sw.run,
         }),
         ["plugin", "list"] => Command::Plugin(PluginCmd::List),
+        ["plugin", "install", names @ ..] => Command::Plugin(PluginCmd::Install {
+            force: sw.force,
+            names: names.iter().map(|n| n.to_string()).collect(),
+        }),
         ["snapshot"] => Command::Snapshot {
             json: sw.json,
             plugins: sw.plugins,
@@ -240,8 +252,13 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
     if sw.json && !takes_json {
         return Err("--json does not apply to this command".into());
     }
-    if sw.force && !matches!(cmd, Command::Config(ConfigCmd::Init { .. })) {
-        return Err("--force only applies to config init".into());
+    if sw.force
+        && !matches!(
+            cmd,
+            Command::Config(ConfigCmd::Init { .. }) | Command::Plugin(PluginCmd::Install { .. })
+        )
+    {
+        return Err("--force only applies to config init and plugin install".into());
     }
     Ok(cmd)
 }
@@ -274,6 +291,15 @@ mod tests {
         assert_eq!(cli.flags.config, Some(PathBuf::from("x.toml")));
         assert_eq!(run(&["probe-temps"]).unwrap().command, Command::ProbeTemps);
         assert_eq!(
+            run(&["plugin", "install", "--force", "weather", "clock"])
+                .unwrap()
+                .command,
+            Command::Plugin(PluginCmd::Install {
+                force: true,
+                names: vec!["weather".into(), "clock".into()]
+            })
+        );
+        assert_eq!(
             run(&["plugin", "check", "a.lua", "--run"]).unwrap().command,
             Command::Plugin(PluginCmd::Check {
                 file: PathBuf::from("a.lua"),
@@ -304,6 +330,7 @@ mod tests {
         assert!(run(&["plugin", "check"]).is_err());
         assert!(run(&["selftest"]).is_err());
         assert!(run(&["snapshot", "--run"]).is_err());
+        assert!(run(&["plugin", "list", "--force"]).is_err());
         assert!(run(&["selftest", "--memory", "--seconds", "1"]).is_err());
         assert!(run(&["--bogus"]).is_err());
     }

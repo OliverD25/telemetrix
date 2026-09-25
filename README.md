@@ -21,8 +21,10 @@ cargo build --release
 ```
 
 The program is `target/release/telemetrix` (`telemetrix.exe` on Windows),
-about 2.8 MB. Put the `plugins` folder next to it, or start it from the
-project folder.
+about 2.8 MB. It is all you need: the seven default plugins are built into
+it, and it installs them on its first start (see
+[Where plugins live](#where-plugins-live)). It works the same from any
+folder.
 
 ```
 telemetrix                        # the dashboard
@@ -83,7 +85,8 @@ These need no terminal window, so scripts and agents can use them.
 | `telemetrix config show` | print every setting, its value and where it came from (default, file or flag) |
 | `telemetrix config reference` | print the settings table below |
 | `telemetrix plugin check <file> [--json] [--run]` | run a plugin once and print its card, its settings and any error; exit 1 on error. `--run` acts like the plugin's key, so the speed test really runs |
-| `telemetrix plugin list` | list the plugins that would run |
+| `telemetrix plugin list` | list the plugins that would run, the plugin home, and whether each one is built-in, built-in-edited or yours |
+| `telemetrix plugin install [--force] [name...]` | install or update the built-in plugins now; `--force` also replaces your edits and restores deleted ones (all, or only the named ones) |
 | `telemetrix themes` | list the theme names |
 | `telemetrix selftest --memory [--seconds N] [--json]` | measure memory against the budgets; exit 1 if over (see below) |
 
@@ -121,6 +124,47 @@ readings there; protecting against that is planned after v0.1.
 
 **Roadmap:** the original brief lists eight more themes. They are planned for
 later versions.
+
+## Where plugins live
+
+Plugins are `.lua` files in one folder, the **plugin home**: the `plugins`
+folder next to the settings file.
+
+- Windows: `%APPDATA%\telemetrix\plugins`
+- Linux: `~/.config/telemetrix/plugins` (or `$XDG_CONFIG_HOME/telemetrix/plugins`)
+- Portable mode (a `telemetrix.toml` next to the program): the `plugins`
+  folder next to that file.
+
+telemetrix looks in this order: `--plugins-dir <dir>` (relative to the
+current folder), then `general.plugins_dir` in the settings file (relative
+to the settings file's folder; empty means the home), then the home. The
+old default `plugins_dir = "plugins"` from v0.1 settings files means the
+home too. The folder in use is written to the log (`l`) on every rescan,
+and an empty Plugins card shows it.
+
+**Built-in plugins.** The seven default plugins are built into the program.
+On every start, telemetrix copies them into the home and remembers what it
+wrote in `.bundled.json` there:
+
+- a built-in plugin that was never installed is installed;
+- one you have not changed is updated when a new telemetrix brings a new
+  version;
+- one you changed is never touched; the log says so once per start and
+  names the command that would replace it;
+- one you deleted stays deleted.
+
+Files that are not built in are never touched.
+
+**To change a built-in plugin,** edit its file in the home. telemetrix
+keeps your version from then on. To go back to the built-in version, run
+`telemetrix plugin install --force weather`. To restore a plugin you
+deleted, run the same command with its name. **To add your own plugin,**
+put a new `.lua` file into the home and press `r`; see
+[PLUGINS.md](PLUGINS.md).
+
+**For development,** start telemetrix from the repository with
+`--plugins-dir plugins`. It then reads the plugins from the repository
+folder, so a change to `plugins/weather.lua` shows after `r`.
 
 ## Plugins and where their data comes from
 
@@ -209,7 +253,7 @@ no longer matches the program.
 | `general.theme` | `"matrix"` | minimalist \| matrix | yes | minimalist \| matrix |
 | `general.fps` | `15` | 1..60 | yes | frames per second for animated themes, 1..60 |
 | `general.exit_on_any_key` | `false` | true \| false | yes | true = screensaver mode: any key quits |
-| `general.plugins_dir` | `"plugins"` | a file or folder path | no, edit the file | relative to the executable, or an absolute path |
+| `general.plugins_dir` | `""` | a file or folder path | no, edit the file | empty = the plugins folder next to this file; relative paths start there |
 | `general.log_file` | `""` | a file or folder path | no, edit the file | "" = off, otherwise a file path |
 | `general.log_lines` | `200` | 50..2000 | yes | lines kept for the l overlay, 50..2000 |
 | `units.temperature` | `"celsius"` | celsius \| fahrenheit | yes | celsius \| fahrenheit |
@@ -332,8 +376,9 @@ and a C compiler (gcc or clang) for the Lua interpreter.
 cargo install --path .
 ```
 
-This puts `telemetrix` in `~/.cargo/bin`. Copy the `plugins` folder next to
-it, or set `general.plugins_dir` to an absolute path.
+This puts `telemetrix` in `~/.cargo/bin`. Nothing else needs copying: the
+default plugins are built in and go to `~/.config/telemetrix/plugins` on
+the first start.
 
 - **Settings file:** `~/.config/telemetrix/telemetrix.toml`, or
   `$XDG_CONFIG_HOME/telemetrix/telemetrix.toml` when that variable is set.

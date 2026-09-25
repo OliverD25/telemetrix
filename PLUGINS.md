@@ -5,14 +5,29 @@ to build or restart anything.
 
 ## Where plugin files go
 
-telemetrix looks for `*.lua` files in the plugins folder:
+telemetrix looks for `*.lua` files in one folder:
 
-1. the folder given with `--plugins-dir <dir>`, or
-2. `general.plugins_dir` from `telemetrix.toml` (default `plugins`). A relative
-   path is taken next to the executable when that folder exists, otherwise in
-   the current folder.
+1. the folder given with `--plugins-dir <dir>` (relative to the current
+   folder), or
+2. `general.plugins_dir` from `telemetrix.toml`, relative to the folder of
+   the settings file, or
+3. the **plugin home**: the `plugins` folder next to the settings file.
+   That is `%APPDATA%\telemetrix\plugins` on Windows and
+   `~/.config/telemetrix/plugins` on Linux. An empty `general.plugins_dir`
+   (the default) and the old v0.1 value `"plugins"` both mean the home.
 
-Run `telemetrix plugin list` to see which folder is used and what it finds.
+Run `telemetrix plugin list` to see the home, the folder in use, and
+whether each plugin is `built-in`, `built-in-edited` or `yours`.
+
+The default plugins are built into telemetrix and copied into the home on
+every start. telemetrix never overwrites a built-in plugin you edited and
+never restores one you deleted; `telemetrix plugin install --force <name>`
+does both on request. So you can edit a built-in plugin in place, or copy
+it under a new name and change the copy. Files with other names are always
+yours; telemetrix never writes them.
+
+To work on the plugins of this repository, start telemetrix from the
+repository folder with `--plugins-dir plugins`.
 
 ## The smallest plugin
 
@@ -384,7 +399,9 @@ only shows its stored result. With `--run` it really runs.
 | `weather.lua` | now, tomorrow and the day after (Open-Meteo) | `city`; file only: `lat`, `lon`, `label` | yes |
 | `speedtest.lua` | download, upload and ping (Cloudflare), key `g` | `download_mb`, `upload_mb`, `max_seconds` | yes, about 35 MB per run |
 
-The README describes each data source and its free limits.
+These files live in `plugins/` in the repository and are built into the
+program, which installs them into the plugin home. The README describes
+each data source and its free limits.
 
 - **currency:** `compact = true` shows only the primary bank. Use it when
   the cards are narrower than about 42 characters: the full row

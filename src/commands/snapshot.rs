@@ -144,7 +144,7 @@ pub fn host_name() -> String {
 }
 
 pub fn run(json: bool, with_plugins: bool, flags: &Flags) -> ExitCode {
-    let (_, cfg, _) = config::load_effective(flags);
+    let (path, cfg, _) = config::load_effective(flags);
     let snapshot = worker::read_once();
     let d = &cfg.disks;
     let drives = if !d.show_network {
@@ -158,7 +158,7 @@ pub fn run(json: bool, with_plugins: bool, flags: &Flags) -> ExitCode {
     let host = host_name();
     let timestamp = format::utc_timestamp(SystemTime::now());
     if json {
-        let plugins = with_plugins.then(|| super::plugin_cmd::run_all_once(&cfg));
+        let plugins = with_plugins.then(|| super::plugin_cmd::run_all_once(&cfg, &path));
         println!(
             "{:#}",
             to_json(&snapshot, &network, &host, &timestamp, plugins)
