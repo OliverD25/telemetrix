@@ -319,3 +319,76 @@ mod currency {
         assert_eq!(d.metrics.len(), 6);
     }
 }
+
+mod crypto {
+    use super::*;
+
+    fn routes() -> Vec<(&'static str, Answer)> {
+        vec![
+            ("ticker/price", Answer::File("binance_price.json")),
+            ("symbol=BTCUSDT", Answer::File("klines_BTC.json")),
+            ("symbol=ETHUSDT", Answer::File("klines_ETH.json")),
+            ("symbol=SOLUSDT", Answer::File("klines_SOL.json")),
+        ]
+    }
+
+    #[test]
+    fn prices_and_graphs_from_binance() {
+        let h = Harness::new("crypto", "", &routes());
+        let d = h.run(Trigger::Start);
+        assert_eq!(d.error, None, "{:?}", h.log.borrow());
+        let rows: Vec<(&str, &str)> = d
+            .metrics
+            .iter()
+            .map(|m| (m.label.as_str(), m.value.as_str()))
+            .collect();
+        assert_eq!(rows[0], ("BTC", "84,853 USDT"));
+        assert_eq!(rows[3], ("ETH", "2,725 USDT"));
+        assert_eq!(rows[6], ("SOL", "121 USDT"));
+        assert_eq!((rows[1].0, rows[2].0), ("7d", "30d"));
+        assert_eq!(d.metrics[2].trend.as_ref().map(Vec::len), Some(30));
+        assert_eq!(
+            d.metrics[2].trend.as_ref().and_then(|t| t.last().copied()),
+            Some(84853.17),
+            "the graph ends at the current price"
+        );
+        let asked = h.asked.borrow();
+        assert!(
+            asked[0].ends_with("symbols=%5B%22BTCUSDT%22%2C%22ETHUSDT%22%2C%22SOLUSDT%22%5D"),
+            "{}",
+            asked[0]
+        );
+        drop(asked);
+        println!("{}", render_card(&d, 45));
+    }
+
+    #[test]
+    fn history_once_an_hour_and_stale_prices_on_failure() {
+        let h = Harness::new("crypto", "", &routes());
+        h.run(Trigger::Start);
+        h.run(Trigger::Interval);
+        assert_eq!(h.asked_for("ticker/price"), 2);
+        assert_eq!(h.asked_for("klines"), 3, "one per coin, then cached");
+        h.age_store("for _, x in pairs(s.history) do x.ts = x.ts - 3600 end");
+        h.route("ticker/price", Answer::Status(429));
+        let d = h.run(Trigger::Interval);
+        assert_eq!(h.asked_for("klines"), 6, "an hour later: fetched again");
+        assert_eq!(d.error, None);
+        assert_eq!(d.metrics[0].value, "84,853 USDT (stale)");
+    }
+
+    #[test]
+    fn old_coingecko_ids_and_other_quotes() {
+        let mut h = Harness::new(
+            "crypto",
+            "coins = ['bitcoin', 'doge']",
+            &[("", Answer::Status(400))],
+        );
+        let d = h.run(Trigger::Start);
+        assert_eq!(d.error.as_deref(), Some("no prices yet: HTTP 400"));
+        assert!(h.asked.borrow()[0].contains("%22BTCUSDT%22%2C%22DOGEUSDT%22"));
+        h.set("quote", "'usdc'");
+        h.run(Trigger::Settings);
+        assert!(h.asked.borrow().last().unwrap().contains("DOGEUSDC"));
+    }
+}

@@ -397,8 +397,9 @@ lon = 30.52
 label = "Kyiv"
 
 [plugin.crypto]
-interval = 120
-coins = ["bitcoin", "ethereum", "solana"]
+interval = 60
+coins = ["BTC", "ETH", "SOL"]  # Binance symbols
+quote = "USDT"
 
 [plugin.currency]
 interval = 300                # Monobank allows one request per 5 minutes
@@ -1277,7 +1278,7 @@ mod tests {
         assert!(text.contains("\ntheme = \"matrix\"            # minimalist | matrix\n"));
         assert!(text.contains("\nfps = 15                    # frames per second"));
         assert!(text.contains("\n[theme.matrix]\ndensity = 0.5"));
-        assert!(text.contains("\n[plugin.crypto]\ninterval = 120\n"));
+        assert!(text.contains("\n[plugin.crypto]\ninterval = 60\n"));
         assert!(text.contains("\n[memory]\nbudget_mb = 13 "));
         assert!(text.contains("\nplugin_budget_mb = 1 "));
     }

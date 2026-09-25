@@ -65,8 +65,9 @@ lon = 30.52
 label = "Kyiv"
 
 [plugin.crypto]
-interval = 120
-coins = ["bitcoin", "ethereum", "solana"]
+interval = 60
+coins = ["BTC", "ETH", "SOL"]  # Binance symbols
+quote = "USDT"
 
 [plugin.currency]
 interval = 300                # Monobank allows one request per 5 minutes
