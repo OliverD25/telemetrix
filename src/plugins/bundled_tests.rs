@@ -392,3 +392,113 @@ mod crypto {
         assert!(h.asked.borrow().last().unwrap().contains("DOGEUSDC"));
     }
 }
+
+mod weather {
+    use super::*;
+
+    fn routes() -> Vec<(&'static str, Answer)> {
+        vec![
+            ("geocoding-api", Answer::File("geo_kyiv.json")),
+            (
+                "api.open-meteo.com/v1/forecast",
+                Answer::File("forecast.json"),
+            ),
+        ]
+    }
+
+    #[test]
+    fn now_and_two_days_for_the_typed_city() {
+        let h = Harness::new("weather", "", &routes());
+        let d = h.run(Trigger::Start);
+        assert_eq!(d.error, None, "{:?}", h.log.borrow());
+        assert_eq!(d.title, "Weather · Kyiv, UA");
+        let rows: Vec<(&str, &str)> = d
+            .metrics
+            .iter()
+            .map(|m| (m.label.as_str(), m.value.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("now", "15.9 °C  wind 9 km/h  cloudy"),
+                ("Sat", "10..19 °C  cloudy  rain 0%"),
+                ("Sun", "10..19 °C  cloudy  rain 0%"),
+            ]
+        );
+        assert!(h.asked.borrow()[1].contains("latitude=50.45466&longitude=30.5238"));
+        println!("{}", render_card(&d, 45));
+    }
+
+    #[test]
+    fn geocoding_runs_once_per_city() {
+        let mut h = Harness::new("weather", "", &routes());
+        h.run(Trigger::Start);
+        h.run(Trigger::Interval);
+        assert_eq!(
+            h.asked_for("geocoding"),
+            1,
+            "the place comes from the store"
+        );
+        h.set("city", "'Київ'");
+        h.run(Trigger::Key);
+        assert_eq!(h.asked_for("geocoding"), 2);
+        assert!(
+            h.asked_for("name=%D0%9A%D0%B8%D1%97%D0%B2&") == 1,
+            "UTF-8 is percent-encoded: {:?}",
+            h.asked.borrow()
+        );
+    }
+
+    #[test]
+    fn unknown_city_is_a_card_error() {
+        let mut h = Harness::new("weather", "", &routes());
+        h.route("geocoding-api", Answer::File("geo_none.json"));
+        h.set("city", "'Qwxzzy'");
+        let d = h.run(Trigger::Key);
+        assert_eq!(d.error.as_deref(), Some("place not found: Qwxzzy"));
+        println!("{}", render_card(&d, 45));
+        h.run(Trigger::Interval);
+        assert_eq!(h.asked_for("geocoding"), 1, "a miss is cached too");
+    }
+
+    #[test]
+    fn lat_lon_in_the_file_skip_the_lookup() {
+        let h = Harness::new("weather", "lat = 49.84\nlon = 24.03", &routes());
+        let d = h.run(Trigger::Start);
+        assert_eq!(h.asked_for("geocoding"), 0);
+        assert_eq!(d.title, "Weather · Kyiv");
+        assert_eq!(d.metrics[0].value, "49.84, 24.03 from lat/lon");
+        assert!(h.asked.borrow()[0].contains("latitude=49.84&longitude=24.03"));
+    }
+
+    #[test]
+    fn wmo_codes_and_weekdays() {
+        let h = Harness::new("weather", "", &routes());
+        h.run(Trigger::Start);
+        let lua = h.plugin.lua();
+        lua.globals()
+            .set("UPDATE", h.plugin.update_fn().clone())
+            .unwrap();
+        let words: String = lua
+            .load(
+                "local w = {} \
+                 for _, c in ipairs({ 0, 1, 2, 3, 45, 48, 51, 57, 61, 65, 66, 67, 71, 77, 80, 82, 85, 86, 95, 99 }) do \
+                   local t = { current = { temperature_2m = 1, wind_speed_10m = 1, weather_code = c }, \
+                     daily = { time = { '2026-09-25', '2000-02-29', '2026-01-01' }, weather_code = { 0, 0, 0 }, \
+                     temperature_2m_min = { 0, 0, 0 }, temperature_2m_max = { 1, 1, 1 } } } \
+                   telemetrix.json_decode = function() return t end \
+                   local card = UPDATE() \
+                   w[#w + 1] = card.metrics[1].value:match('km/h  (.*)$') \
+                   if c == 0 then w[#w + 1] = card.metrics[2].label .. ' ' .. card.metrics[3].label end \
+                 end \
+                 return table.concat(w, ',')",
+            )
+            .eval()
+            .unwrap();
+        assert_eq!(
+            words,
+            "clear,Tue Thu,mostly clear,cloudy,cloudy,fog,fog,drizzle,drizzle,rain,rain,\
+             freezing rain,freezing rain,snow,snow,showers,showers,snow showers,snow showers,storm,storm"
+        );
+    }
+}

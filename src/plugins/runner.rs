@@ -221,6 +221,11 @@ impl Plugin {
         &self.sandbox.lua
     }
 
+    #[cfg(test)]
+    pub fn update_fn(&self) -> &mlua::Function {
+        &self.manifest.update
+    }
+
     pub fn lua_bytes(&self) -> usize {
         self.sandbox.lua.used_memory()
     }

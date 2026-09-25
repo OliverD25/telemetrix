@@ -392,9 +392,9 @@ const PLUGIN_DEFAULTS: &str = r#"
 [plugin.weather]
 enabled = true
 interval = 600
-lat = 50.45
-lon = 30.52
-label = "Kyiv"
+city = "Kyiv"                 # looked up once per change; or set lat and lon below
+# lat = 50.45                 # optional: an exact place, used instead of the city
+# lon = 30.52
 
 [plugin.crypto]
 interval = 60
