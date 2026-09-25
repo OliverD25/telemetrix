@@ -427,14 +427,48 @@ fn plugin_card(card: &PluginCard, pal: &Palette, w: usize) -> Card {
     }
 }
 
-fn metric_line(m: &crate::plugins::MetricItem, pal: &Palette, w: usize) -> Line<'static> {
+pub fn metric_line(m: &crate::plugins::MetricItem, pal: &Palette, w: usize) -> Line<'static> {
+    use crate::plugins::MetricStyle;
     if m.bad {
         return kv(&m.label, m.value.clone(), w, pal, WARN);
     }
-    match &m.trend {
-        Some(points) => trend_line(&m.label, points, &m.value, w, pal),
-        None => kv(&m.label, m.value.clone(), w, pal, pal.value),
+    if let Some(points) = &m.trend {
+        return trend_line(&m.label, points, &m.value, w, pal);
     }
+    match m.style {
+        None => kv(&m.label, m.value.clone(), w, pal, pal.value),
+        Some(MetricStyle::Good) => kv(&m.label, m.value.clone(), w, pal, RISE),
+        Some(MetricStyle::Bad) => kv(&m.label, m.value.clone(), w, pal, WARN),
+        Some(MetricStyle::Header) => {
+            let style = fg(pal.label).add_modifier(Modifier::BOLD);
+            styled_kv(&m.label, &m.value, w, style, style)
+        }
+        Some(MetricStyle::Dim) => {
+            // A secondary row: when both parts do not fit, the value goes.
+            let fits = m.label.chars().count() + 1 + m.value.chars().count() <= w;
+            let value = if fits { m.value.as_str() } else { "" };
+            styled_kv(&m.label, value, w, fg(MUTED), fg(MUTED))
+        }
+    }
+}
+
+/// Like `kv`, with a style for each part.
+fn styled_kv(
+    label: &str,
+    value: &str,
+    w: usize,
+    label_style: Style,
+    value_style: Style,
+) -> Line<'static> {
+    let label = fit(label, w.saturating_sub(value.chars().count() + 1));
+    let pad = w
+        .saturating_sub(label.chars().count() + value.chars().count())
+        .max(1);
+    Line::from(vec![
+        Span::styled(label, label_style),
+        Span::raw(" ".repeat(pad)),
+        Span::styled(value.to_string(), value_style),
+    ])
 }
 
 /// `label ▁▂▄▆█ +0.8%`: the graph fills the width between label and value.

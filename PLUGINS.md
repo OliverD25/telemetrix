@@ -99,6 +99,30 @@ its own lowest and highest number. The value is green when the last number
 is higher than the first one, and red when it is lower. A `trend` that is
 not a list of 2..400 numbers turns only that row into a red error line.
 
+### How a row looks
+
+Add `style` to a metric to change how its row looks:
+
+| `style` | Looks like | Use it for |
+|---|---|---|
+| `"header"` | bold, in the label colour | a column header, like `buy  sell` above the rates |
+| `"dim"` | grey, quieter than the other rows | extra details under a main row |
+| `"good"` | the value in green | a value that is fine |
+| `"bad"` | the value in red | a value that needs attention, like old data |
+
+```lua
+{ label = "", value = "     buy      sell", style = "header" },
+{ label = "USD", value = "   44.63     45.03" },
+{ label = "  7d ▁▂▃▅▇▆█ +0.69%", value = "30d ▂▃▄▃▅▆█ +0.96%", style = "dim" },
+```
+
+- An unknown `style` is ignored, so the row looks normal.
+- A `dim` row that is too narrow for both its label and its value shows
+  only the label.
+- A row with a `trend` graph ignores `style`.
+- The value of a row is right-aligned. Give values the same width (pad them
+  with spaces) and they line up as columns.
+
 ## Settings for your plugin
 
 Each plugin can have its own section in `telemetrix.toml`:

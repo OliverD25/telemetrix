@@ -320,6 +320,75 @@ mod tests {
     }
 
     #[test]
+    fn metric_styles_render_in_both_themes() {
+        use crate::plugins::{MetricItem, MetricStyle, PluginCard, PluginData, PluginStatus};
+        use crate::themes::common::{MUTED, RISE};
+        use ratatui::style::Modifier;
+        let styled = |label: &str, value: &str, style| {
+            let mut m = MetricItem::text(label, value);
+            m.style = style;
+            m
+        };
+        for theme in ["minimalist", "matrix"] {
+            let mut s = state(theme);
+            let data = PluginData {
+                id: "fx".into(),
+                title: "FX".into(),
+                metrics: vec![
+                    styled("", "buyhead", Some(MetricStyle::Header)),
+                    styled("plain", "valueplain", None),
+                    styled("7d quiet", "30d quiet", Some(MetricStyle::Dim)),
+                    styled("up", "risegood", Some(MetricStyle::Good)),
+                    styled("stale", "sincebad", Some(MetricStyle::Bad)),
+                ],
+                error: None,
+                lua_bytes: None,
+            };
+            s.plugins.insert(
+                "fx".into(),
+                PluginCard {
+                    data,
+                    status: PluginStatus::Ok,
+                },
+            );
+            let buf = render(&s, 45, 70);
+            let cell = |needle: &str| {
+                let cells = buf.content();
+                let chars: Vec<&str> = cells.iter().map(|c| c.symbol()).collect();
+                let pos = chars
+                    .windows(needle.len())
+                    .position(|w| w.concat() == needle)
+                    .unwrap_or_else(|| panic!("{theme}: {needle} not drawn"));
+                cells[pos].clone()
+            };
+            let plain = cell("valueplain").fg;
+            let header = cell("buyhead");
+            assert!(header.modifier.contains(Modifier::BOLD), "{theme}");
+            assert_ne!(header.fg, plain, "{theme}: the header is not a value");
+            assert_eq!(cell("7d quiet").fg, MUTED, "{theme}");
+            assert_eq!(cell("30d quiet").fg, MUTED, "{theme}");
+            assert_eq!(cell("risegood").fg, RISE, "{theme}");
+            assert_eq!(cell("sincebad").fg, WARN, "{theme}");
+        }
+        // Too narrow for both parts: a dim row keeps its label and drops the value.
+        let pal = crate::themes::common::minimalist_palette();
+        let m = styled(
+            "7d ▁▂▃▅▇▆█ +0.69%",
+            "30d ▂▃▄▃▅▆█ +0.96%",
+            Some(MetricStyle::Dim),
+        );
+        let narrow: String = crate::themes::common::metric_line(&m, &pal, 30)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(
+            narrow.starts_with("7d ▁▂▃▅▇▆█ +0.69%") && !narrow.contains("30d"),
+            "{narrow}"
+        );
+    }
+
+    #[test]
     fn tiny_terminal_shows_the_notice() {
         assert!(text(&render(&state("minimalist"), 30, 5)).contains("terminal too small"));
         assert!(text(&render(&state("matrix"), 39, 20)).contains(TOO_SMALL));

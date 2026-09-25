@@ -1,7 +1,7 @@
 use mlua::{Function, Table, Value};
 
-use super::MetricItem;
 use super::schema::{self, SchemaEntry};
+use super::{MetricItem, MetricStyle};
 
 /// Trend lines outside this length become an error line.
 pub const TREND_POINTS: std::ops::RangeInclusive<usize> = 2..=400;
@@ -137,6 +137,9 @@ impl CardUpdate {
                 return Err(format!("metrics[{}] needs a label and a value", i + 1));
             };
             let mut metric = MetricItem::text(label, value);
+            if let Ok(Value::String(style)) = item.get::<Value>("style") {
+                metric.style = MetricStyle::parse(&style.to_string_lossy());
+            }
             match item.get::<Value>("trend").map_err(|e| e.to_string())? {
                 Value::Nil => {}
                 Value::Table(points) => match trend_points(&points) {
@@ -256,6 +259,17 @@ mod tests {
             "one point is too few"
         );
         assert!(!card.metrics[1].bad, "the other rows still work");
+        let v: Value = lua
+            .load(
+                "return { metrics = { { label = '', value = 'buy', style = 'header' }, \
+                 { label = 'x', value = 1, style = 'sparkly' }, { label = 'y', value = 2, style = 5 } } }",
+            )
+            .eval()
+            .unwrap();
+        let card = CardUpdate::from_value(v).unwrap();
+        assert_eq!(card.metrics[0].style, Some(MetricStyle::Header));
+        assert_eq!(card.metrics[1].style, None, "unknown styles are ignored");
+        assert_eq!(card.metrics[2].style, None);
         let v: Value = lua
             .load("return { metrics = { { label = 'a' } } }")
             .eval()
