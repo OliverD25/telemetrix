@@ -1,9 +1,9 @@
 -- Internet speed test against Cloudflare (speed.cloudflare.com, free, no key):
--- ping, download and upload, every 6 hours or when you press g.
+-- ping, download and upload, every 30 minutes or when you press g.
 -- Settings in [plugin.speedtest]: download_mb (5..100, default 25),
 -- upload_mb (1..50, default 10), max_seconds per direction (3..15, default 8).
--- Data use: about 35 MB per run with the defaults, so about 140 MB a day at
--- the 6-hour interval. Starting the dashboard never runs a test: the card
+-- Data use: about 35 MB per run with the defaults, so about 1.7 GB a day at
+-- the 30-minute interval. Starting the dashboard never runs a test: the card
 -- shows the last stored result until the interval or the g key.
 
 local HOST = "speed.cloudflare.com"
@@ -99,7 +99,7 @@ end
 
 return {
   title = "Speed test",
-  interval = 21600,
+  interval = 1800,
   run_key = "g",
   call_timeout = 40,
   settings_schema = {

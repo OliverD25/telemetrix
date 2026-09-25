@@ -181,13 +181,13 @@ cards are not empty after a restart.
 | Currency | USD, EUR, GBP to hryvnia from two banks, 7- and 30-day graphs | Monobank `api.monobank.ua/bank/currency`; PrivatBank card rate `api.privatbank.ua/p24api/pubinfo`; NBU official rate `bank.gov.ua/NBU_Exchange` | Monobank: 1 request per 5 minutes. PrivatBank and NBU publish no limit. | Monobank and PrivatBank every 5 minutes (Monobank never sooner, even after a restart). NBU history once a day, one request per currency. |
 | Crypto | BTC, ETH, SOL in USDT, 7- and 30-day graphs | Binance `api.binance.com/api/v3/ticker/price` and `/klines` | Binance counts a request weight of 6000 per minute per IP address. | Prices every minute (one request). Daily history once an hour, one request per coin. |
 | Weather | now, tomorrow and the day after | Open-Meteo `api.open-meteo.com` and its geocoding service | 10 000 requests per day for non-commercial use. | Every 10 minutes. The city is looked up once per change. |
-| Speed test | download, upload, ping | Cloudflare `speed.cloudflare.com` | No published limit. | Every 6 hours, and when you press `g`. Never at start. |
+| Speed test | download, upload, ping | Cloudflare `speed.cloudflare.com` | No published limit. | Every 30 minutes, and when you press `g`. Never at start. |
 | Internet latency | time to connect to 1.1.1.1:443 | a TCP connection, no service | none | every 30 seconds |
 | Clock, Uptime | time and date; computer name and uptime | this computer | none | every second; every 30 seconds |
 
 **The speed test uses data.** One run downloads 25 MB and uploads 10 MB with
-the default settings, about 35 MB. At the 6-hour interval that is about
-140 MB a day, or about 4.2 GB a month. On a metered connection, raise the
+the default settings, about 35 MB. At the 30-minute interval that is about
+1.7 GB a day, or about 50 GB a month. On a metered connection, raise the
 interval, lower `download_mb` and `upload_mb` in the `s` box, or set
 `enabled = false` under `[plugin.speedtest]`.
 

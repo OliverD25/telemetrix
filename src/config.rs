@@ -410,7 +410,7 @@ show_month = true             # the 30-day graph
 compact = false               # true = only the primary bank, for narrow cards
 
 [plugin.speedtest]
-interval = 21600              # every 6 hours; press g to test now
+interval = 1800               # every 30 minutes; press g to test now
 download_mb = 25              # 5..100; about 35 MB per run with upload_mb
 upload_mb = 10                # 1..50
 max_seconds = 8               # per direction, 3..15
