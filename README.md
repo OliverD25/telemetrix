@@ -178,12 +178,15 @@ cards are not empty after a restart.
 
 | Plugin | Shows | Data source | Free limit | How often telemetrix asks |
 |---|---|---|---|---|
-| Currency | USD, EUR, GBP to hryvnia from one bank (the other as backup), 7- and 30-day graphs | Monobank `api.monobank.ua/bank/currency`; PrivatBank card rate `api.privatbank.ua/p24api/pubinfo`; NBU official rate `bank.gov.ua/NBU_Exchange` | Monobank: 1 request per 5 minutes. PrivatBank and NBU publish no limit. | Monobank and PrivatBank every 5 minutes (Monobank never sooner, even after a restart). NBU history once a day, one request per currency. |
-| Crypto | BTC, ETH, SOL in USDT, 7- and 30-day graphs | Binance `api.binance.com/api/v3/ticker/price` and `/klines` | Binance counts a request weight of 6000 per minute per IP address. | Prices every minute (one request). Daily history once an hour, one request per coin. |
-| Weather | now, tomorrow and the day after | Open-Meteo `api.open-meteo.com` and its geocoding service | 10 000 requests per day for non-commercial use. | Every 10 minutes. The city is looked up once per change. |
+| Currency | USD, EUR, GBP to hryvnia from one bank (the other as backup), 7- and 30-day graphs | Monobank `api.monobank.ua/bank/currency`; PrivatBank card rate `api.privatbank.ua/p24api/pubinfo`; NBU official rate `bank.gov.ua/NBU_Exchange` | Monobank: 1 request per 5 minutes; the answer is cached on their side. PrivatBank and NBU publish no limit. | Monobank and PrivatBank every 5 minutes (Monobank never sooner, even after a restart). NBU history once a day, one request per currency. |
+| Crypto | BTC, ETH, SOL in USDT, 7- and 30-day graphs | Binance `api.binance.com/api/v3/ticker/price` and `/klines` | A request weight of 6000 per minute per IP address (Binance's `exchangeInfo`, checked 2026-09-26). An address that keeps asking after HTTP 429 is banned for 2 minutes up to 3 days, so after a 429 or 418 the plugin stops asking until the next interval and shows its stored prices. | Prices every minute (one request). Daily history once an hour, one request per coin. |
+| Weather | now, tomorrow and the day after | Open-Meteo `api.open-meteo.com` and its geocoding service | Free for non-commercial use: 600 requests a minute, 5,000 an hour, 10,000 a day (open-meteo.com/en/terms, checked 2026-09-26). The data is licensed CC BY 4.0, which requires attribution. | Every 10 minutes. The city is looked up once per change. |
 | Speed test | download, upload, ping, server | the nearest Ookla speed-test server; Cloudflare `speed.cloudflare.com` as the backup | No published limit. | Every 30 minutes, and when you press `g`. Never at start. The server list once a day. |
 | Internet latency | time to connect to 1.1.1.1:443 | a TCP connection, no service | none | every 30 seconds |
 | Clock, Uptime | time and date; computer name and uptime | this computer | none | every second; every 30 seconds |
+
+Weather data by Open-Meteo.com (CC BY 4.0). The weather card says so in its
+last line, `data: Open-Meteo.com`.
 
 **The speed test uses a lot of data.** It runs for a fixed time, not a
 fixed size: 3 seconds per direction over 2 connections. So each test moves

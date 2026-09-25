@@ -439,11 +439,35 @@ mod crypto {
         assert_eq!(h.asked_for("ticker/price"), 2);
         assert_eq!(h.asked_for("klines"), 3, "one per coin, then cached");
         h.age_store("for _, x in pairs(s.history) do x.ts = x.ts - 3600 end");
-        h.route("ticker/price", Answer::Status(429));
+        h.route("ticker/price", Answer::Status(500));
         let d = h.run(Trigger::Interval);
         assert_eq!(h.asked_for("klines"), 6, "an hour later: fetched again");
         assert_eq!(d.error, None);
         assert_eq!(d.metrics[0].value, "84,853 USDT (stale)");
+    }
+
+    #[test]
+    fn a_429_or_418_stops_all_requests_until_the_next_update() {
+        for status in [429, 418] {
+            let h = Harness::new("crypto", "", &routes());
+            h.run(Trigger::Start);
+            h.age_store("for _, x in pairs(s.history) do x.ts = x.ts - 3600 end");
+            h.route("ticker/price", Answer::Status(status));
+            let before = h.asked.borrow().len();
+            let d = h.run(Trigger::Interval);
+            assert_eq!(
+                h.asked.borrow().len(),
+                before + 1,
+                "{status}: no klines after it"
+            );
+            assert_eq!(d.metrics[0].value, "84,853 USDT (stale)", "{status}");
+            assert!(h.log.borrow().last().unwrap().contains("slow down"));
+            // A klines 429 stops the other coins' klines too.
+            let h = Harness::new("crypto", "", &routes());
+            h.route("symbol=BTCUSDT", Answer::Status(status));
+            h.run(Trigger::Start);
+            assert_eq!(h.asked_for("klines"), 1, "{status}: ETH and SOL wait");
+        }
     }
 
     #[test]

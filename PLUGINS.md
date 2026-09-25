@@ -494,7 +494,10 @@ each data source and its free limits.
   so two of them fit on one line; the engine's `trend` graph always fills
   the whole row. On a narrow card the `dim` line drops its value, which is
   the 30-day part.
-- **weather:** temperatures follow `telemetrix.units.temperature`. A city in the file (typed in the `s` box or written by
+- **weather:** Weather data by Open-Meteo.com (CC BY 4.0). The license
+  requires attribution, so the card ends with a dim `data: Open-Meteo.com`
+  line; keep it when you change the plugin. Temperatures follow
+  `telemetrix.units.temperature`. A city in the file (typed in the `s` box or written by
   hand) wins over `lat` and `lon`. The coordinates are used only when no
   city is set, and then `label` is the card title. Old v0.1 settings files
   have exactly that: `lat`, `lon` and `label`, no city. Whenever `lat` or
@@ -503,4 +506,6 @@ each data source and its free limits.
   schema default is empty, which the `s` box shows as `(not set)`; without
   a city and without coordinates the card shows Kyiv.
 - **crypto:** old settings files list CoinGecko names (`"bitcoin"`); they
-  still work.
+  still work. After an HTTP 429 or 418 from Binance the plugin sends no
+  more requests until the next interval, because Binance bans addresses
+  that keep asking.

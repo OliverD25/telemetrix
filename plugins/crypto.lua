@@ -4,6 +4,10 @@
 --   coins = { "BTC", "ETH", "SOL" }   (file only; old CoinGecko ids like "bitcoin" also work)
 --   quote = "USDT"                    (the currency prices are in)
 -- A failed request keeps the last prices, marked "(stale)".
+-- Binance allows a request weight of 6000 per minute per IP address and
+-- bans an address that keeps asking after HTTP 429 (2 minutes up to
+-- 3 days). After a 429 or 418 the plugin sends nothing more until the next
+-- interval and shows the stored prices.
 
 local PRICE_URL = "https://api.binance.com/api/v3/ticker/price?symbols="
 local KLINES_URL = "https://api.binance.com/api/v3/klines?symbol=%s&interval=1d&limit=31"
@@ -16,13 +20,17 @@ local function urlencode(text)
   end))
 end
 
+-- 429: too many requests; 418: the address is banned for a while.
+local SLOW_DOWN = { [429] = true, [418] = true }
+
+-- The decoded answer, or nil, the error and whether Binance said slow down.
 local function get_json(url)
   local body, status = telemetrix.http_get(url)
   if not body then
     return nil, status
   end
   if status ~= 200 then
-    return nil, "HTTP " .. status
+    return nil, "HTTP " .. status, SLOW_DOWN[status] or false
   end
   local data = telemetrix.json_decode(body)
   if type(data) ~= "table" then
@@ -105,7 +113,7 @@ return {
     for i, coin in ipairs(coins) do
       symbols[i] = '"' .. coin .. quote .. '"'
     end
-    local list, err = get_json(PRICE_URL .. urlencode("[" .. table.concat(symbols, ",") .. "]"))
+    local list, err, slow = get_json(PRICE_URL .. urlencode("[" .. table.concat(symbols, ",") .. "]"))
     local fresh = {}
     for _, p in ipairs(list or {}) do
       local price = tonumber(p.price)
@@ -120,13 +128,17 @@ return {
 
     for _, coin in ipairs(coins) do
       local h = store.history[coin]
-      if not h or now - (h.ts or 0) >= HISTORY_EVERY then
-        local klines = get_json(string.format(KLINES_URL, coin .. quote))
+      if not slow and (not h or now - (h.ts or 0) >= HISTORY_EVERY) then
+        local klines, _, told = get_json(string.format(KLINES_URL, coin .. quote))
+        slow = told
         local points = klines and closes(klines)
         if points and #points >= 2 then
           store.history[coin] = { ts = now, closes = points }
         end
       end
+    end
+    if slow then
+      telemetrix.log("Binance asked to slow down; no more requests until the next interval")
     end
     local ok, store_err = telemetrix.store_set(store)
     if not ok then
