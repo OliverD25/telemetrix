@@ -493,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn values_read_like_the_mockup() {
+    fn values_read_like_the_file() {
         let cfg = Config::default();
         let rows = rows(&["clock".into()], &BTreeMap::new());
         assert_eq!(value_text(find_row(&rows, "general.theme"), &cfg), "matrix");
@@ -517,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn integer_steps_match_the_mockup_and_wrap() {
+    fn integer_steps_are_round_and_wrap() {
         assert_eq!(step_int(15, 1, 60, 1, false), 20);
         assert_eq!(step_int(15, 1, 60, -1, false), 10);
         assert_eq!(step_int(60, 1, 60, 1, false), 1);

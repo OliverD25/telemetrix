@@ -1,5 +1,4 @@
-//! Cards, bars and the column layout shared by every theme (ported from the
-//! approved `examples/mockup`).
+//! Cards, bars and the column layout shared by every theme.
 
 use std::collections::VecDeque;
 
