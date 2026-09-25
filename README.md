@@ -234,7 +234,7 @@ no longer matches the program.
 | `plugins.memory_limit_mb` | `8` | 1..64 | yes | per plugin, 1..64 |
 | `plugins.rescan_interval_s` | `60` | 0..86400 | yes | 0 = rescan only on the r key |
 | `plugins.max_plugins` | `16` | 1..64 | yes | at most this many plugins run, 1..64 |
-| `memory.budget_mb` | `13` | 5..1024 | yes | whole program, above it the status bar turns amber |
+| `memory.budget_mb` | `14` | 5..1024 | yes | whole program, above it the status bar turns amber |
 | `memory.plugin_budget_mb` | `1` | 1..64 | yes | Lua memory per plugin, above it one log warning |
 | `theme.matrix.density` | `0.5` | 0.0..1.0 | yes | 0.0..1.0 |
 | `theme.matrix.speed` | `1.0` | 0.1..5.0 | yes | 0.1..5.0 |
@@ -249,7 +249,7 @@ Keeping telemetrix small is a main goal. There are two budgets:
 - **Core** (the dashboard without plugins): under **10 MB** working set. This
   limit is fixed.
 - **Total** (the default setup, Matrix and the seven plugins): under
-  `memory.budget_mb`, **13 MB** by default. Each plugin gets an allowance of
+  `memory.budget_mb`, **14 MB** by default. Each plugin gets an allowance of
   about 1 MB (`memory.plugin_budget_mb` for its Lua memory).
 
 The dashboard reads its own memory every 5 seconds. The status bar shows it
@@ -316,7 +316,7 @@ fail, which is fine for this test.
 ```
 memory selftest: 30 s per run, one run after the other, hidden consoles
             final      peak   private  budget  result
-total     12.5 MB   12.6 MB    4.5 MB   13 MB  ok  (7 plugins)
+total     12.5 MB   12.6 MB    4.5 MB   14 MB  ok  (7 plugins)
 core       7.6 MB    7.7 MB    2.0 MB   10 MB  ok  (0 plugins)
 ```
 

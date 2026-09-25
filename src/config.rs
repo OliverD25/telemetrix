@@ -18,9 +18,9 @@ pub const THEME_NAMES: &[&str] = &["minimalist", "matrix"];
 pub const MATRIX_COLORS: &[&str] = &["green", "amber", "cyan", "white"];
 const FILE_NAME: &str = "telemetrix.toml";
 const PLUGIN_MIN_INTERVAL: i64 = 5;
-/// The default setup (Matrix + 5 plugins) measured 11.1-11.3 MB working set
-/// in step 9 (`selftest --memory`); 13 MB leaves about 15 % headroom.
-const DEFAULT_BUDGET_MB: i64 = 13;
+/// The v0.2 default setup (Matrix + 7 plugins) peaked at 12.5-12.7 MB working set
+/// (`selftest --memory`, 3 runs); 14 MB leaves about 10 % headroom (user choice, 2026-09-25).
+const DEFAULT_BUDGET_MB: i64 = 14;
 /// The core (no plugins) must stay under this (decision 30, fixed).
 pub const CORE_BUDGET_MB: u64 = 10;
 
@@ -1293,7 +1293,7 @@ mod tests {
         assert!(text.contains("\nfps = 15                    # frames per second"));
         assert!(text.contains("\n[theme.matrix]\ndensity = 0.5"));
         assert!(text.contains("\n[plugin.crypto]\ninterval = 60\n"));
-        assert!(text.contains("\n[memory]\nbudget_mb = 13 "));
+        assert!(text.contains("\n[memory]\nbudget_mb = 14 "));
         assert!(text.contains("\nplugin_budget_mb = 1 "));
     }
 
