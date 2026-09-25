@@ -457,13 +457,14 @@ the first start.
 - **`selftest --memory`** needs the `script` command from util-linux (part
   of every common distribution); it gives each run a pseudo-terminal.
 
-Measured in WSL 2 (Ubuntu 24.04, release build, 30 seconds after the start,
-resident memory; Linux has no cheap "private bytes" figure):
+Measured in WSL 2 with `selftest --memory` (Ubuntu 24.04, release build,
+30 seconds after the start, peak resident memory; Linux has no cheap
+"private bytes" figure):
 
 | Setup | Resident memory |
 |---|---|
-| no plugins | 4.0 MB |
-| 5 plugins, matrix (v0.1 default) | 5.6 MB |
+| no plugins | 4.4 MB |
+| 7 plugins, matrix (default) | 6.6 MB |
 
 These are WSL numbers: Linux shares library pages differently from Windows,
 so they are not comparable with the Windows table above.
