@@ -321,6 +321,31 @@ mod tests {
     }
 
     #[test]
+    fn settings_overlay_shows_schema_rows_and_the_text_input() {
+        use crate::plugins::schema::{SchemaEntry, SchemaKind};
+        let mut s = state("minimalist");
+        s.plugin_ids = vec!["weather".into()];
+        let city = SchemaEntry {
+            key: "city".into(),
+            label: "city".into(),
+            kind: SchemaKind::Text,
+            default: crate::config::Value::Str("Kyiv".into()),
+        };
+        s.plugin_schemas.insert("weather".into(), vec![city]);
+        s.overlay = Overlay::Settings;
+        let rows = settings_overlay::rows(&s.plugin_ids, &s.plugin_schemas);
+        s.settings_cursor = settings_overlay::selectable(&rows).len() - 1;
+        let t = text(&render(&s, 80, 60));
+        assert!(t.contains("Kyiv  (Enter to edit)"), "the selected text row");
+        s.text_input = Some(crate::app::TextInput::new("weather", "city", "Lviv"));
+        for (w, h) in [(80, 60), (40, 10)] {
+            let t = text(&render(&s, w, h));
+            assert!(t.contains("Esc cancel"), "{w}x{h}: the input footer");
+        }
+        assert!(text(&render(&s, 80, 60)).contains("Lviv "));
+    }
+
+    #[test]
     fn overlays_banner_and_toast_render_at_all_sizes() {
         for theme in ["minimalist", "matrix"] {
             let mut s = state(theme);

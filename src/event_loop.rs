@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime};
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use ratatui::layout::Size;
 
-use crate::app::{self, Action, AppState, Overlay};
+use crate::app::{self, Action, AppState, InputKey, Overlay, TextInput};
 use crate::cli::Flags;
 use crate::config::{self, Config, ConfigStatus, LoadOutcome, THEME_NAMES, Value};
 use crate::event::{AppEvent, WorkerCmd};
@@ -123,11 +123,15 @@ fn event_loop(
         if event::poll(deadline.saturating_duration_since(Instant::now()))? {
             match event::read() {
                 Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                    let action = app::key_action(
-                        &key,
-                        lp.state.overlay,
-                        lp.state.config.general.exit_on_any_key,
-                    );
+                    let action = if lp.state.text_input.is_some() {
+                        app::input_key_action(&key)
+                    } else {
+                        app::key_action(
+                            &key,
+                            lp.state.overlay,
+                            lp.state.config.general.exit_on_any_key,
+                        )
+                    };
                     lp.act(action);
                 }
                 Ok(Event::Resize(..)) => lp.state.dirty = true,
@@ -233,17 +237,40 @@ impl Loop {
                 s.dirty = true;
             }
             Action::SettingsDown => {
-                let rows = settings_overlay::rows(&s.plugin_ids);
+                let rows = settings_overlay::rows(&s.plugin_ids, &s.plugin_schemas);
                 let last = settings_overlay::selectable(&rows).len().saturating_sub(1);
                 s.settings_cursor = (s.settings_cursor + 1).min(last);
                 s.dirty = true;
             }
             Action::SettingsStep { dir, big } => {
-                let rows = settings_overlay::rows(&s.plugin_ids);
+                let rows = settings_overlay::rows(&s.plugin_ids, &s.plugin_schemas);
                 let sel = settings_overlay::selectable(&rows);
                 let row = &rows[sel[s.settings_cursor.min(sel.len() - 1)]];
-                if let Some(change) = settings_overlay::step(row, &s.config, dir, big) {
+                if let Some((id, key)) = settings_overlay::text_row(row) {
+                    if dir > 0 {
+                        let text = settings_overlay::value_text(row, &s.config);
+                        s.text_input = Some(TextInput::new(id, key, &text));
+                        s.dirty = true;
+                    }
+                } else if let Some(change) = settings_overlay::step(row, &s.config, dir, big) {
                     self.change(change);
+                }
+            }
+            Action::Input(InputKey::Cancel) => {
+                s.text_input = None;
+                s.dirty = true;
+            }
+            Action::Input(InputKey::Save) => {
+                if let Some(input) = s.text_input.take() {
+                    self.change(settings_overlay::text_change(&input));
+                    // The plugin runs at once with trigger "key" (the settings change merges into it).
+                    self.plugins.run_now(&input.id);
+                }
+            }
+            Action::Input(key) => {
+                if let Some(input) = &mut s.text_input {
+                    input.edit(key);
+                    s.dirty = true;
                 }
             }
             Action::FpsStep(dir) => {
@@ -548,6 +575,130 @@ mod tests {
             "minimalist",
             "Esc goes back to the file's theme"
         );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    fn press(lp: &mut Loop, code: ratatui::crossterm::event::KeyCode) {
+        let key = ratatui::crossterm::event::KeyEvent::new(
+            code,
+            ratatui::crossterm::event::KeyModifiers::NONE,
+        );
+        let action = if lp.state.text_input.is_some() {
+            app::input_key_action(&key)
+        } else {
+            app::key_action(&key, lp.state.overlay, false)
+        };
+        lp.act(action);
+    }
+
+    fn weather_schema() -> Vec<crate::plugins::schema::SchemaEntry> {
+        use crate::plugins::schema::{SchemaEntry, SchemaKind};
+        vec![
+            SchemaEntry {
+                key: "city".into(),
+                label: "city".into(),
+                kind: SchemaKind::Text,
+                default: Value::Str("Kyiv".into()),
+            },
+            SchemaEntry {
+                key: "days".into(),
+                label: "days".into(),
+                kind: SchemaKind::Int {
+                    min: 1,
+                    max: 3,
+                    step: 1,
+                },
+                default: Value::Int(3),
+            },
+        ]
+    }
+
+    /// Opens the overlay with the cursor on the weather plugin's `key` row.
+    fn open_on(lp: &mut Loop, key: &str) {
+        lp.state
+            .plugin_schemas
+            .insert("weather".into(), weather_schema());
+        lp.state.overlay = Overlay::Settings;
+        lp.state.plugin_ids = vec!["weather".into()];
+        let rows = settings_overlay::rows(&lp.state.plugin_ids, &lp.state.plugin_schemas);
+        let sel = settings_overlay::selectable(&rows);
+        lp.state.settings_cursor = sel
+            .iter()
+            .position(|i| {
+                matches!(&rows[*i], settings_overlay::Row::PluginSetting { entry, .. } if entry.key == key)
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn text_setting_is_typed_saved_and_keys_are_captured() {
+        use ratatui::crossterm::event::KeyCode;
+        let path = temp_file("text-input");
+        let mut lp = Loop::for_test(Config::default(), Flags::default(), path.clone());
+        open_on(&mut lp, "city");
+        press(&mut lp, KeyCode::Enter);
+        let input = lp.state.text_input.as_ref().expect("Enter opens the input");
+        assert_eq!(input.text, "Kyiv", "it starts with the current value");
+        for _ in 0..4 {
+            press(&mut lp, KeyCode::Backspace);
+        }
+        for c in "Lviv qts".chars() {
+            press(&mut lp, KeyCode::Char(c));
+        }
+        assert!(!lp.quit, "q does not quit while typing");
+        assert_eq!(lp.state.overlay, Overlay::Settings, "t and s do nothing");
+        for _ in 0..4 {
+            press(&mut lp, KeyCode::Backspace);
+        }
+        press(&mut lp, KeyCode::Enter);
+        assert!(lp.state.text_input.is_none());
+        let text = std::fs::read_to_string(&path).unwrap();
+        let saved = config::parse_text(&text).unwrap().config;
+        assert_eq!(
+            saved.plugin_cfg["weather"].settings["city"].as_str(),
+            Some("Lviv")
+        );
+        assert_eq!(
+            lp.state.config.plugin_cfg["weather"].settings["city"].as_str(),
+            Some("Lviv"),
+            "the running settings have it too"
+        );
+
+        press(&mut lp, KeyCode::Enter);
+        press(&mut lp, KeyCode::Char('x'));
+        press(&mut lp, KeyCode::Esc);
+        assert!(lp.state.text_input.is_none());
+        assert_eq!(
+            lp.state.overlay,
+            Overlay::Settings,
+            "Esc only closes the input"
+        );
+        assert_eq!(
+            lp.state.config.plugin_cfg["weather"].settings["city"].as_str(),
+            Some("Lviv"),
+            "Esc saves nothing"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn int_setting_steps_and_saves() {
+        use ratatui::crossterm::event::KeyCode;
+        let path = temp_file("schema-int");
+        let mut lp = Loop::for_test(Config::default(), Flags::default(), path.clone());
+        open_on(&mut lp, "days");
+        press(&mut lp, KeyCode::Right);
+        assert!(
+            lp.state.text_input.is_none(),
+            "only text rows open the input"
+        );
+        assert_eq!(
+            lp.state.config.plugin_cfg["weather"].settings["days"].as_integer(),
+            Some(1),
+            "3 wraps to 1"
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("days = 1"), "{text}");
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

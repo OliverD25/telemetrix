@@ -10,10 +10,12 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::cli::{Flags, PluginCmd};
-use crate::config::{self, Config};
+use crate::config::{self, Config, Value as ConfigValue};
 use crate::plugins::PluginData;
+use crate::plugins::host_api::Trigger;
 use crate::plugins::manager::{discover, plugins_dir};
 use crate::plugins::runner::{self, Plugin, RunnerSettings};
+use crate::plugins::schema::{SchemaEntry, SchemaKind};
 
 /// `snapshot --plugins` waits at most this long for all plugins together.
 const ALL_PLUGINS_CAP: Duration = Duration::from_secs(10);
@@ -35,12 +37,67 @@ pub fn to_json(d: &PluginData) -> Value {
 pub fn run(cmd: PluginCmd, flags: &Flags) -> ExitCode {
     let (_, cfg, _) = config::load_effective(flags);
     match cmd {
-        PluginCmd::Check { file, json } => check(&file, json, &cfg),
+        PluginCmd::Check { file, json, run } => check(&file, json, run, &cfg),
         PluginCmd::List => list(&cfg),
     }
 }
 
-fn check(file: &Path, json: bool, cfg: &Config) -> ExitCode {
+fn schema_json(schema: &[SchemaEntry]) -> Value {
+    let entries: Vec<Value> = schema
+        .iter()
+        .map(|e| {
+            let mut v = json!({
+                "key": e.key,
+                "label": e.label,
+                "kind": e.kind_name(),
+                "default": match &e.default {
+                    ConfigValue::Str(s) => json!(s),
+                    ConfigValue::Int(n) => json!(n),
+                    ConfigValue::Bool(b) => json!(b),
+                    other => json!(other.to_string()),
+                },
+            });
+            match &e.kind {
+                SchemaKind::Enum(options) => v["options"] = json!(options),
+                SchemaKind::Int { min, max, step } => {
+                    v["min"] = json!(min);
+                    v["max"] = json!(max);
+                    v["step"] = json!(step);
+                }
+                SchemaKind::Text | SchemaKind::Bool => {}
+            }
+            v
+        })
+        .collect();
+    Value::Array(entries)
+}
+
+/// One line per schema key: `city  text  default "Kyiv"  City`.
+fn schema_lines(schema: &[SchemaEntry]) -> Vec<String> {
+    let width = schema.iter().map(|e| e.key.len()).max().unwrap_or(0);
+    schema
+        .iter()
+        .map(|e| {
+            let range = match &e.kind {
+                SchemaKind::Enum(options) => format!(" ({})", options.join(" | ")),
+                SchemaKind::Int { min, max, step } if *step > 1 => {
+                    format!(" ({min}..{max} step {step})")
+                }
+                SchemaKind::Int { min, max, .. } => format!(" ({min}..{max})"),
+                SchemaKind::Text | SchemaKind::Bool => String::new(),
+            };
+            format!(
+                "  {:<width$}  {}{range}, default {}  \"{}\"",
+                e.key,
+                e.kind_name(),
+                e.default,
+                e.label
+            )
+        })
+        .collect()
+}
+
+fn check(file: &Path, json: bool, run: bool, cfg: &Config) -> ExitCode {
     let settings = RunnerSettings::from_config(cfg);
     let progress = Rc::new(|d: crate::plugins::PluginData| {
         let rows: Vec<String> = d
@@ -50,14 +107,25 @@ fn check(file: &Path, json: bool, cfg: &Config) -> ExitCode {
             .collect();
         eprintln!("progress: {}", rows.join(", "));
     });
-    let data = runner::run_once(
-        file,
-        &settings,
-        Rc::new(|msg: &str| eprintln!("log: {msg}")),
-        progress,
-    );
+    let trigger = if run { Trigger::Manual } else { Trigger::Start };
+    let log = Rc::new(|msg: &str| eprintln!("log: {msg}"));
+    let stop = Arc::new(AtomicBool::new(false));
+    let (data, schema) = match Plugin::load(file, &settings, stop, log, progress) {
+        Ok(p) => {
+            let data = p
+                .update(&settings, trigger)
+                .unwrap_or_else(|e| runner::error_data(p.id(), p.title(), e));
+            (data, p.schema().to_vec())
+        }
+        Err(e) => {
+            let stem = runner::stem(file);
+            (runner::error_data(&stem, &stem, e), Vec::new())
+        }
+    };
     if json {
-        println!("{:#}", to_json(&data));
+        let mut doc = to_json(&data);
+        doc["settings_schema"] = schema_json(&schema);
+        println!("{doc:#}");
     } else if let Some(error) = &data.error {
         println!("{} ({}): error: {error}", data.title, data.id);
     } else {
@@ -70,6 +138,12 @@ fn check(file: &Path, json: bool, cfg: &Config) -> ExitCode {
             .unwrap_or(0);
         for m in &data.metrics {
             println!("  {:<width$}  {}", m.label, m.value);
+        }
+    }
+    if !json && !schema.is_empty() {
+        println!("settings_schema:");
+        for line in schema_lines(&schema) {
+            println!("{line}");
         }
     }
     if data.error.is_some() {
@@ -136,7 +210,14 @@ pub fn run_all_once(cfg: &Config) -> Vec<Value> {
     for (i, path) in files.iter().enumerate() {
         let (tx, path, settings) = (tx.clone(), path.clone(), settings.clone());
         thread::spawn(move || {
-            let data = runner::run_once(&path, &settings, Rc::new(|_: &str| {}), runner::no_emit());
+            // A fresh process that runs each plugin once is a start, not a key press.
+            let data = runner::run_once(
+                &path,
+                &settings,
+                Trigger::Start,
+                Rc::new(|_: &str| {}),
+                runner::no_emit(),
+            );
             let _ = tx.send((i, data));
         });
     }
@@ -161,4 +242,45 @@ pub fn run_all_once(cfg: &Config) -> Vec<Value> {
             to_json(&data)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Value as V;
+
+    #[test]
+    fn schema_prints_one_line_per_key() {
+        let schema = vec![
+            SchemaEntry {
+                key: "city".into(),
+                label: "City".into(),
+                kind: SchemaKind::Text,
+                default: V::Str("Kyiv".into()),
+            },
+            SchemaEntry {
+                key: "download_mb".into(),
+                label: "Download MB".into(),
+                kind: SchemaKind::Int {
+                    min: 5,
+                    max: 100,
+                    step: 5,
+                },
+                default: V::Int(25),
+            },
+        ];
+        let lines = schema_lines(&schema);
+        assert_eq!(lines[0], "  city         text, default \"Kyiv\"  \"City\"");
+        assert_eq!(
+            lines[1],
+            "  download_mb  int (5..100 step 5), default 25  \"Download MB\""
+        );
+        let j = schema_json(&schema);
+        assert_eq!(j[1]["step"], 5);
+        assert_eq!(j[0]["kind"], "text");
+        assert_eq!(
+            (j[0]["default"].as_str(), j[1]["default"].as_i64()),
+            (Some("Kyiv"), Some(25))
+        );
+    }
 }

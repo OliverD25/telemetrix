@@ -1,17 +1,18 @@
-use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::PluginData;
-use super::host_api::{self, EmitFn, HostCtx, Http, LogFn, PluginMeta};
+use super::host_api::{self, EmitFn, HostCtx, Http, LogFn, PluginMeta, Trigger};
 use super::manifest::{CardUpdate, PluginManifest};
 use super::sandbox::Sandbox;
+use super::schema::{self, SchemaEntry};
 use crate::config::{Config, PluginConfig};
 use crate::event::{AppEvent, WorkerCmd};
 
@@ -77,11 +78,19 @@ fn short(e: &mlua::Error) -> String {
         .to_string()
 }
 
+/// A settings change waits this long for more changes, and for the `RunNow`
+/// that follows a saved text setting, so they end in one `update()`.
+const SETTLE: Duration = Duration::from_millis(300);
+
 /// One loaded plugin: its sandbox, its manifest and its HTTP client.
 pub struct Plugin {
     sandbox: Sandbox,
     manifest: PluginManifest,
     http: Rc<RefCell<Http>>,
+    trigger: Rc<Cell<Trigger>>,
+    log: LogFn,
+    /// Settings warnings already logged, so each is logged once.
+    warned: RefCell<BTreeSet<String>>,
 }
 
 /// An emit sink for callers that show no progress.
@@ -101,18 +110,20 @@ impl Plugin {
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let sandbox = Sandbox::new(s.memory_limit, stop).map_err(|e| short(&e))?;
         let http = Rc::new(RefCell::new(Http::new(s.http_timeout)));
+        let trigger = Rc::new(Cell::new(Trigger::Start));
         let stem = stem(path);
         let meta = Rc::new(RefCell::new(PluginMeta {
             id: stem.clone(),
             title: stem.clone(),
         }));
         let ctx = HostCtx {
-            log,
+            log: log.clone(),
             emit,
             meta: meta.clone(),
             data_dir: s.data_dir.clone(),
             http: http.clone(),
             deadline: sandbox.deadline.clone(),
+            trigger: trigger.clone(),
         };
         host_api::install(&sandbox.lua, ctx).map_err(|e| short(&e))?;
         if let Some(cfg) = s.for_id(&stem) {
@@ -130,6 +141,9 @@ impl Plugin {
             sandbox,
             manifest,
             http,
+            trigger,
+            log,
+            warned: RefCell::new(BTreeSet::new()),
         })
     }
 
@@ -153,6 +167,10 @@ impl Plugin {
         self.manifest.run_key
     }
 
+    pub fn schema(&self) -> &[SchemaEntry] {
+        &self.manifest.settings_schema
+    }
+
     /// The plugin's own `call_timeout`, else `plugins.call_timeout_s`.
     pub fn call_timeout(&self, s: &RunnerSettings) -> Duration {
         self.manifest
@@ -165,10 +183,25 @@ impl Plugin {
         self.http.borrow_mut().timeout = s.http_timeout;
     }
 
-    pub fn update(&self, s: &RunnerSettings) -> Result<PluginData, String> {
+    /// The plugin's settings with its schema applied; logs each wrong value once.
+    fn checked_settings(&self, s: &RunnerSettings) -> toml_edit::Table {
         let empty = toml_edit::Table::new();
-        let settings = s.for_id(self.id()).map_or(&empty, |c| &c.settings);
-        host_api::set_settings(&self.sandbox.lua, settings).map_err(|e| short(&e))?;
+        let file = s.for_id(self.id()).map_or(&empty, |c| &c.settings);
+        let mut now = BTreeSet::new();
+        let table = schema::apply(self.schema(), file, |w| {
+            now.insert(w);
+        });
+        for w in now.difference(&self.warned.borrow()) {
+            (self.log)(&format!("warning: {w}"));
+        }
+        *self.warned.borrow_mut() = now;
+        table
+    }
+
+    pub fn update(&self, s: &RunnerSettings, trigger: Trigger) -> Result<PluginData, String> {
+        let settings = self.checked_settings(s);
+        host_api::set_settings(&self.sandbox.lua, &settings).map_err(|e| short(&e))?;
+        self.trigger.set(trigger);
         self.sandbox.arm(self.call_timeout(s));
         let result = self.manifest.update.call::<mlua::Value>(());
         self.sandbox.disarm();
@@ -192,11 +225,17 @@ impl Plugin {
 }
 
 /// Loads a plugin and runs `update()` once on the calling thread.
-pub fn run_once(path: &Path, s: &RunnerSettings, log: LogFn, emit: EmitFn) -> PluginData {
+pub fn run_once(
+    path: &Path,
+    s: &RunnerSettings,
+    trigger: Trigger,
+    log: LogFn,
+    emit: EmitFn,
+) -> PluginData {
     let stem = stem(path);
     match Plugin::load(path, s, Arc::new(AtomicBool::new(false)), log, emit) {
         Ok(p) => p
-            .update(s)
+            .update(s, trigger)
             .unwrap_or_else(|e| error_data(p.id(), p.title(), e)),
         Err(e) => error_data(&stem, &stem, e),
     }
@@ -257,7 +296,11 @@ fn run(
     let log_tx = tx.clone();
     let log_name = stem.clone();
     let log: LogFn = Rc::new(move |msg: &str| {
-        let _ = log_tx.send(AppEvent::Log(format!("plugin {log_name}: {msg}")));
+        let line = match msg.strip_prefix("warning: ") {
+            Some(rest) => format!("warning: plugin {log_name}: {rest}"),
+            None => format!("plugin {log_name}: {msg}"),
+        };
+        let _ = log_tx.send(AppEvent::Log(line));
     });
     let emit_tx = tx.clone();
     let emit: EmitFn = Rc::new(move |data| {
@@ -278,6 +321,7 @@ fn run(
     let _ = tx.send(AppEvent::PluginMeta {
         id: plugin.id().to_string(),
         run_key: plugin.run_key(),
+        schema: plugin.schema().to_vec(),
     });
     let _ = tx.send(AppEvent::Log(format!(
         "plugin {} loaded from {}",
@@ -285,12 +329,13 @@ fn run(
         path.display()
     )));
     let mut last_error: Option<String> = None;
+    let mut trigger = Trigger::Start;
     loop {
         if stop.load(Ordering::Relaxed) {
             return;
         }
         if settings.enabled(plugin.id()) {
-            let data = match plugin.update(&settings) {
+            let data = match plugin.update(&settings, trigger) {
                 Ok(data) => {
                     last_error = None;
                     data
@@ -311,13 +356,40 @@ fn run(
             }
         }
         plugin.drop_idle_http();
-        match cmds.recv_timeout(plugin.interval(&settings)) {
-            Ok(WorkerCmd::Stop) | Err(RecvTimeoutError::Disconnected) => return,
+        trigger = match wait(&plugin, &mut settings, cmds) {
+            Some(t) => t,
+            None => return,
+        };
+    }
+}
+
+/// Sleeps until the next `update()` is due and says why it is due; `None`
+/// means stop. A change to other plugins' settings only updates the limits
+/// and keeps the timer; a change to this plugin's own settings runs it soon.
+fn wait(
+    plugin: &Plugin,
+    settings: &mut RunnerSettings,
+    cmds: &mpsc::Receiver<WorkerCmd<RunnerSettings>>,
+) -> Option<Trigger> {
+    let ran = Instant::now();
+    let mut due = ran + plugin.interval(settings);
+    let mut changed = false;
+    loop {
+        match cmds.recv_timeout(due.saturating_duration_since(Instant::now())) {
+            Ok(WorkerCmd::Stop) | Err(RecvTimeoutError::Disconnected) => return None,
             Ok(WorkerCmd::Reconfigure(new)) => {
-                settings = new;
-                plugin.apply_limits(&settings);
+                changed |= new.for_id(plugin.id()) != settings.for_id(plugin.id());
+                *settings = new;
+                plugin.apply_limits(settings);
+                due = if changed {
+                    Instant::now() + SETTLE
+                } else {
+                    ran + plugin.interval(settings)
+                };
             }
-            Ok(WorkerCmd::RunNow) | Err(RecvTimeoutError::Timeout) => {}
+            Ok(WorkerCmd::RunNow) => return Some(Trigger::Key),
+            Err(RecvTimeoutError::Timeout) if changed => return Some(Trigger::Settings),
+            Err(RecvTimeoutError::Timeout) => return Some(Trigger::Interval),
         }
     }
 }
@@ -354,16 +426,117 @@ mod tests {
     fn store_survives_between_runs() {
         let mut s = settings();
         s.data_dir = temp_data("store");
-        let first = run_once(&fixture("store.lua"), &s, quiet(), no_emit());
+        let first = run_once(
+            &fixture("store.lua"),
+            &s,
+            Trigger::Start,
+            quiet(),
+            no_emit(),
+        );
         assert_eq!(first.error, None);
         assert_eq!(first.metrics[0].value, "1");
-        let second = run_once(&fixture("store.lua"), &s, quiet(), no_emit());
+        let second = run_once(
+            &fixture("store.lua"),
+            &s,
+            Trigger::Start,
+            quiet(),
+            no_emit(),
+        );
         assert_eq!(
             second.metrics[0].value, "2",
             "the count came back from the store"
         );
         assert!(s.data_dir.join("plugins").join("store.json").is_file());
         std::fs::remove_dir_all(&s.data_dir).unwrap();
+    }
+
+    fn with_settings(s: &mut RunnerSettings, id: &str, toml: &str) {
+        let doc: toml_edit::DocumentMut = toml.parse().unwrap();
+        s.plugin_cfg.insert(
+            id.into(),
+            PluginConfig {
+                enabled: true,
+                interval: None,
+                settings: doc.as_table().clone(),
+            },
+        );
+    }
+
+    #[test]
+    fn schema_checks_settings_and_warns_once() {
+        let mut s = settings();
+        with_settings(&mut s, "schema", "bank = 'sber'\n");
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let sink = lines.clone();
+        let log: LogFn = Rc::new(move |m: &str| sink.borrow_mut().push(m.to_string()));
+        let p = Plugin::load(
+            &fixture("schema.lua"),
+            &s,
+            Arc::new(AtomicBool::new(false)),
+            log,
+            no_emit(),
+        )
+        .unwrap();
+        let keys: Vec<&str> = p.schema().iter().map(|e| e.key.as_str()).collect();
+        assert_eq!(keys, ["bank", "city"]);
+        for _ in 0..3 {
+            let data = p.update(&s, Trigger::Interval).unwrap();
+            assert_eq!(data.metrics[1].value, "Kyiv", "missing: the default");
+            assert_eq!(data.metrics[2].value, "mono", "wrong: the default");
+        }
+        assert_eq!(
+            *lines.borrow(),
+            ["warning: bank = 'sber' is not one of mono, privat, using \"mono\""],
+            "one warning, not one per update"
+        );
+    }
+
+    #[test]
+    fn trigger_says_why_update_runs() {
+        let mut s = settings();
+        with_settings(&mut s, "schema", "city = 'Kyiv'\n");
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn(fixture("schema.lua"), s.clone(), tx);
+        let next = |wait| loop {
+            match rx.recv_timeout(wait) {
+                Ok(AppEvent::Plugin(d)) => return Some((d.metrics[0].value.clone(), d)),
+                Ok(_) => {}
+                Err(_) => return None,
+            }
+        };
+        let (t, _) = next(Duration::from_secs(5)).unwrap();
+        assert_eq!(t, "start");
+        handle.run_now();
+        assert_eq!(next(Duration::from_secs(2)).unwrap().0, "key");
+
+        with_settings(&mut s, "other", "x = 1\n");
+        let _ = handle.cmd.send(WorkerCmd::Reconfigure(s.clone()));
+        assert!(
+            next(Duration::from_millis(700)).is_none(),
+            "another plugin's change does not run this one"
+        );
+
+        with_settings(&mut s, "schema", "city = 'Lviv'\n");
+        let _ = handle.cmd.send(WorkerCmd::Reconfigure(s.clone()));
+        let (t, d) = next(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            (t.as_str(), d.metrics[1].value.as_str()),
+            ("settings", "Lviv")
+        );
+
+        // A saved text setting: the change and the RunNow end in one "key" run.
+        with_settings(&mut s, "schema", "city = 'Odesa'\n");
+        let _ = handle.cmd.send(WorkerCmd::Reconfigure(s.clone()));
+        handle.run_now();
+        let (t, d) = next(Duration::from_secs(2)).unwrap();
+        assert_eq!((t.as_str(), d.metrics[1].value.as_str()), ("key", "Odesa"));
+        assert!(next(Duration::from_millis(700)).is_none(), "only one run");
+
+        s.plugin_cfg.get_mut("schema").unwrap().interval = Some(1);
+        let _ = handle.cmd.send(WorkerCmd::Reconfigure(s.clone()));
+        assert_eq!(next(Duration::from_secs(2)).unwrap().0, "settings");
+        assert_eq!(next(Duration::from_secs(3)).unwrap().0, "interval");
+        handle.stop();
     }
 
     #[test]
@@ -400,7 +573,13 @@ mod tests {
                 settings: doc.as_table().clone(),
             },
         );
-        let data = run_once(&fixture("static.lua"), &s, quiet(), no_emit());
+        let data = run_once(
+            &fixture("static.lua"),
+            &s,
+            Trigger::Start,
+            quiet(),
+            no_emit(),
+        );
         assert_eq!(data.error, None);
         assert_eq!(data.title, "Static");
         assert_eq!(data.metrics[0].label, "answer");
@@ -423,7 +602,13 @@ mod tests {
 
     #[test]
     fn broken_plugin_reports_the_line() {
-        let data = run_once(&fixture("broken.lua"), &settings(), quiet(), no_emit());
+        let data = run_once(
+            &fixture("broken.lua"),
+            &settings(),
+            Trigger::Start,
+            quiet(),
+            no_emit(),
+        );
         let err = data.error.expect("broken.lua must fail");
         assert_eq!(data.id, "broken");
         assert!(err.contains("broken.lua:"), "{err}");
@@ -432,7 +617,13 @@ mod tests {
     #[test]
     fn slow_plugin_hits_the_deadline() {
         let start = Instant::now();
-        let data = run_once(&fixture("slow.lua"), &settings(), quiet(), no_emit());
+        let data = run_once(
+            &fixture("slow.lua"),
+            &settings(),
+            Trigger::Start,
+            quiet(),
+            no_emit(),
+        );
         assert!(
             data.error
                 .as_deref()
@@ -459,7 +650,13 @@ mod tests {
             assert_eq!(p.id(), name);
         }
         for name in ["clock", "uptime"] {
-            let data = run_once(&dir.join(format!("{name}.lua")), &s, quiet(), no_emit());
+            let data = run_once(
+                &dir.join(format!("{name}.lua")),
+                &s,
+                Trigger::Start,
+                quiet(),
+                no_emit(),
+            );
             assert_eq!(data.error, None, "{name}");
             assert_eq!(data.metrics.len(), 2, "{name}");
         }

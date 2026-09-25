@@ -1,6 +1,7 @@
 use crate::metrics::SystemSnapshot;
 use crate::metrics::network::NetDrive;
 use crate::plugins::PluginData;
+use crate::plugins::schema::SchemaEntry;
 
 /// Messages from worker threads to the main loop.
 #[derive(Debug)]
@@ -13,6 +14,7 @@ pub enum AppEvent {
     PluginMeta {
         id: String,
         run_key: Option<char>,
+        schema: Vec<SchemaEntry>,
     },
     /// One round of the Windows network-drive thread.
     Network(Vec<NetDrive>),

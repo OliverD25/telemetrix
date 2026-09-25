@@ -3,6 +3,7 @@ pub mod manager;
 pub mod manifest;
 pub mod runner;
 pub mod sandbox;
+pub mod schema;
 pub mod store;
 
 #[derive(Clone, Debug, PartialEq)]

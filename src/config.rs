@@ -81,7 +81,7 @@ impl Value {
         matches!(self, Value::Bool(true))
     }
 
-    fn to_toml(&self) -> toml_edit::Value {
+    pub(crate) fn to_toml(&self) -> toml_edit::Value {
         match self {
             Value::Str(s) => toml_edit::Value::from(s.as_ref()),
             Value::Int(i) => toml_edit::Value::from(*i),

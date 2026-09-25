@@ -32,6 +32,33 @@ pub type EmitFn = Rc<dyn Fn(PluginData)>;
 /// More emits than this per second are dropped.
 pub const EMITS_PER_SECOND: usize = 10;
 
+/// Why `update()` runs, for `telemetrix.trigger()`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trigger {
+    /// The first call after the plugin (re)started; also `snapshot --plugins`
+    /// and `plugin check` without `--run`.
+    Start,
+    Interval,
+    /// The plugin's run key, or a text setting saved in the overlay.
+    Key,
+    /// `plugin check --run`.
+    Manual,
+    /// The plugin's own `[plugin.<id>]` settings changed.
+    Settings,
+}
+
+impl Trigger {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Trigger::Start => "start",
+            Trigger::Interval => "interval",
+            Trigger::Key => "key",
+            Trigger::Manual => "manual",
+            Trigger::Settings => "settings",
+        }
+    }
+}
+
 /// The plugin's id and title: the file name until the file has loaded.
 #[derive(Clone, Debug, Default)]
 pub struct PluginMeta {
@@ -89,6 +116,7 @@ pub struct HostCtx {
     pub data_dir: PathBuf,
     pub http: Rc<RefCell<Http>>,
     pub deadline: Deadline,
+    pub trigger: Rc<Cell<Trigger>>,
 }
 
 fn now_ms() -> f64 {
@@ -368,6 +396,11 @@ pub fn install(lua: &Lua, ctx: HostCtx) -> mlua::Result<()> {
     )?;
 
     t.set("now_ms", lua.create_function(|_, ()| Ok(now_ms()))?)?;
+    let trigger = ctx.trigger.clone();
+    t.set(
+        "trigger",
+        lua.create_function(move |_, ()| Ok(trigger.get().as_str()))?,
+    )?;
 
     for upload in [false, true] {
         let deadline = ctx.deadline.clone();
@@ -542,6 +575,7 @@ mod tests {
             data_dir: std::env::temp_dir().join(format!("telemetrix-host-{}", std::process::id())),
             http: Rc::new(RefCell::new(Http::new(Duration::from_secs(1)))),
             deadline: Rc::new(Cell::new(None)),
+            trigger: Rc::new(Cell::new(Trigger::Interval)),
         };
         install(&lua, ctx).unwrap();
         (lua, lines)
@@ -602,6 +636,7 @@ mod tests {
             data_dir: std::env::temp_dir(),
             http: Rc::new(RefCell::new(Http::new(Duration::from_secs(1)))),
             deadline: Rc::new(std::cell::Cell::new(None)),
+            trigger: Rc::new(Cell::new(Trigger::Start)),
         };
         install(&lua, ctx).unwrap();
         let sent: i64 = lua

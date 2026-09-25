@@ -9,7 +9,9 @@ telemetrix (TermSaver): terminal screensaver and live system telemetry dashboard
 Usage:
   telemetrix [flags]                      dashboard
   telemetrix snapshot [--json] [--plugins]  read the metrics once and print them
-  telemetrix plugin check <file> [--json] load a plugin, run update() once, print the card
+  telemetrix plugin check <file> [--json] [--run]
+                                          load a plugin, run update() once, print the card
+                                          (--run: as if its run key was pressed)
   telemetrix plugin list                  list the plugins that would run
   telemetrix selftest --memory [--seconds N] [--json]
                                           measure memory against the budgets, exit 1 if over
@@ -62,7 +64,12 @@ pub enum ConfigCmd {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum PluginCmd {
-    Check { file: PathBuf, json: bool },
+    Check {
+        file: PathBuf,
+        json: bool,
+        /// `update()` sees the trigger "manual" instead of "start".
+        run: bool,
+    },
     List,
 }
 
@@ -98,6 +105,7 @@ struct Switches {
     force: bool,
     plugins: bool,
     memory: bool,
+    run: bool,
     seconds: Option<u64>,
 }
 
@@ -145,6 +153,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
             Long("force") => sw.force = true,
             Long("plugins") => sw.plugins = true,
             Long("memory") => sw.memory = true,
+            Long("run") => sw.run = true,
             Long("seconds") => {
                 let n: u64 = text(parser.value())?
                     .parse()
@@ -201,6 +210,7 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
         ["plugin", "check", file] => Command::Plugin(PluginCmd::Check {
             file: PathBuf::from(file),
             json: sw.json,
+            run: sw.run,
         }),
         ["plugin", "list"] => Command::Plugin(PluginCmd::List),
         ["snapshot"] => Command::Snapshot {
@@ -223,6 +233,9 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
     );
     if sw.plugins && !matches!(cmd, Command::Snapshot { .. }) {
         return Err("--plugins only applies to snapshot".into());
+    }
+    if sw.run && !matches!(cmd, Command::Plugin(PluginCmd::Check { .. })) {
+        return Err("--run only applies to plugin check".into());
     }
     if sw.json && !takes_json {
         return Err("--json does not apply to this command".into());
@@ -260,6 +273,14 @@ mod tests {
         );
         assert_eq!(cli.flags.config, Some(PathBuf::from("x.toml")));
         assert_eq!(run(&["probe-temps"]).unwrap().command, Command::ProbeTemps);
+        assert_eq!(
+            run(&["plugin", "check", "a.lua", "--run"]).unwrap().command,
+            Command::Plugin(PluginCmd::Check {
+                file: PathBuf::from("a.lua"),
+                json: false,
+                run: true
+            })
+        );
         let cli = run(&["selftest", "--memory", "--json"]).unwrap();
         assert_eq!(
             cli.command,
@@ -282,6 +303,7 @@ mod tests {
         assert!(run(&["frobnicate"]).is_err());
         assert!(run(&["plugin", "check"]).is_err());
         assert!(run(&["selftest"]).is_err());
+        assert!(run(&["snapshot", "--run"]).is_err());
         assert!(run(&["selftest", "--memory", "--seconds", "1"]).is_err());
         assert!(run(&["--bogus"]).is_err());
     }

@@ -1,6 +1,7 @@
 use mlua::{Function, Table, Value};
 
 use super::MetricItem;
+use super::schema::{self, SchemaEntry};
 
 /// Trend lines outside this length become an error line.
 pub const TREND_POINTS: std::ops::RangeInclusive<usize> = 2..=400;
@@ -14,6 +15,8 @@ pub struct PluginManifest {
     pub run_key: Option<char>,
     /// Seconds for one `update()` call, capped at `MAX_CALL_TIMEOUT`.
     pub call_timeout: Option<u64>,
+    /// Settings the `s` overlay shows and the runner checks, sorted by key.
+    pub settings_schema: Vec<SchemaEntry>,
     pub update: Function,
 }
 
@@ -55,6 +58,14 @@ impl PluginManifest {
             Value::Number(n) if n >= 1.0 => Some((n as u64).min(MAX_CALL_TIMEOUT)),
             _ => return Err("call_timeout must be a number of seconds, 1 or more".into()),
         };
+        let settings_schema = match t
+            .get::<Value>("settings_schema")
+            .map_err(|e| e.to_string())?
+        {
+            Value::Nil => Vec::new(),
+            Value::Table(s) => schema::parse(&s)?,
+            _ => return Err("settings_schema must be a table".into()),
+        };
         let update = match t.get::<Value>("update").map_err(|e| e.to_string())? {
             Value::Function(f) => f,
             _ => return Err("the returned table needs an update function".into()),
@@ -65,6 +76,7 @@ impl PluginManifest {
             interval,
             run_key,
             call_timeout,
+            settings_schema,
             update,
         })
     }

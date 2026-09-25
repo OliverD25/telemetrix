@@ -1,14 +1,18 @@
-//! The `s` overlay: one row per registry setting plus `enabled` and
-//! `interval` rows for every plugin file. Every change is saved at once.
+//! The `s` overlay: one row per registry setting plus `enabled`,
+//! `interval` and `settings_schema` rows for every plugin file. Every change
+//! is saved at once.
+
+use std::collections::BTreeMap;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::AppState;
+use crate::app::{AppState, TextInput};
 use crate::config::{self, Config, Kind, MATRIX_COLORS, PluginConfig, SETTINGS, Setting, Value};
+use crate::plugins::schema::{self, SchemaEntry, SchemaKind, TEXT_MAX};
 use crate::themes::common::{ACCENT, MUTED, WARN, fg};
 
 const PLUGIN_INTERVALS: [u64; 10] = [5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
@@ -19,6 +23,11 @@ pub enum Row {
     Setting(&'static Setting),
     PluginEnabled(String),
     PluginInterval(String),
+    /// A key from the plugin's `settings_schema`.
+    PluginSetting {
+        id: String,
+        entry: SchemaEntry,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -36,7 +45,7 @@ impl Change {
     }
 }
 
-pub fn rows(plugin_ids: &[String]) -> Vec<Row> {
+pub fn rows(plugin_ids: &[String], schemas: &BTreeMap<String, Vec<SchemaEntry>>) -> Vec<Row> {
     let mut rows = Vec::new();
     let mut section = "";
     for s in SETTINGS.iter().filter(|s| s.path != "schema") {
@@ -51,8 +60,24 @@ pub fn rows(plugin_ids: &[String]) -> Vec<Row> {
         rows.push(Row::Section(format!("plugin.{id}")));
         rows.push(Row::PluginEnabled(id.clone()));
         rows.push(Row::PluginInterval(id.clone()));
+        for entry in schemas.get(id).into_iter().flatten() {
+            rows.push(Row::PluginSetting {
+                id: id.clone(),
+                entry: entry.clone(),
+            });
+        }
     }
     rows
+}
+
+/// The plugin id and schema key of a `text` row, which Enter edits inline.
+pub fn text_row(row: &Row) -> Option<(&str, &str)> {
+    match row {
+        Row::PluginSetting { id, entry } if entry.kind == SchemaKind::Text => {
+            Some((id, &entry.key))
+        }
+        _ => None,
+    }
 }
 
 /// Indices of the rows the cursor can land on (everything but section headers).
@@ -74,7 +99,12 @@ fn key_label(row: &Row) -> &str {
         Row::Setting(s) => s.path.rsplit_once('.').map_or(s.path, |(_, k)| k),
         Row::PluginEnabled(_) => "enabled",
         Row::PluginInterval(_) => "interval",
+        Row::PluginSetting { entry, .. } => &entry.label,
     }
+}
+
+fn schema_value(cfg: &Config, id: &str, entry: &SchemaEntry) -> Value {
+    entry.current(plugin_cfg(cfg, id).map(|c| &c.settings))
 }
 
 pub fn value_text(row: &Row, cfg: &Config) -> String {
@@ -92,6 +122,11 @@ pub fn value_text(row: &Row, cfg: &Config) -> String {
             Some(s) => format!("{s} s"),
             None => "plugin default".into(),
         },
+        Row::PluginSetting { id, entry } => match schema_value(cfg, id, entry) {
+            Value::Bool(b) => on_off(b),
+            Value::Str(text) => text.into_owned(),
+            v => v.to_string(),
+        },
     }
 }
 
@@ -105,7 +140,7 @@ pub fn editable(row: &Row) -> bool {
         Row::Setting(s) => {
             s.tui_editable && !matches!(s.kind, Kind::Path | Kind::Str | Kind::StrList)
         }
-        Row::PluginEnabled(_) | Row::PluginInterval(_) => true,
+        Row::PluginEnabled(_) | Row::PluginInterval(_) | Row::PluginSetting { .. } => true,
     }
 }
 
@@ -219,6 +254,40 @@ pub fn step(row: &Row, cfg: &Config, dir: i32, big: bool) -> Option<Change> {
                 n => Some(Change::Set(key, Value::Int(PLUGIN_INTERVALS[n - 1] as i64))),
             }
         }
+        Row::PluginSetting { id, entry } => {
+            let current = schema_value(cfg, id, entry);
+            let value = match &entry.kind {
+                SchemaKind::Text => return None,
+                SchemaKind::Bool => Value::Bool(!current.as_bool()),
+                SchemaKind::Enum(options) => {
+                    let i = options
+                        .iter()
+                        .position(|o| o == current.as_str())
+                        .unwrap_or(0);
+                    Value::Str(options[cycle(i, options.len(), dir)].clone().into())
+                }
+                SchemaKind::Int { min, max, step } => Value::Int(schema::step_int(
+                    current.as_i64(),
+                    *min,
+                    *max,
+                    *step,
+                    dir,
+                    big,
+                )),
+            };
+            Some(Change::Set(format!("plugin.{id}.{}", entry.key), value))
+        }
+    }
+}
+
+/// The change Enter in the text input makes: an empty text removes the key,
+/// so the default applies again.
+pub fn text_change(input: &TextInput) -> Change {
+    let key = format!("plugin.{}.{}", input.id, input.key);
+    if input.text.is_empty() {
+        Change::Unset(key)
+    } else {
+        Change::Set(key, Value::Str(input.text.clone().into()))
     }
 }
 
@@ -251,7 +320,25 @@ pub fn apply(cfg: &mut Config, change: &Change) {
                 .get(id)
                 .and_then(|c| c.interval);
         }
-        _ => {}
+        (_, Change::Set(_, v)) => {
+            entry
+                .settings
+                .insert(field, toml_edit::Item::Value(v.to_toml()));
+        }
+        (_, Change::Unset(_)) => {
+            let default = Config::default()
+                .plugin_cfg
+                .get(id)
+                .and_then(|c| c.settings.get(field).cloned());
+            match default {
+                Some(item) => {
+                    entry.settings.insert(field, item);
+                }
+                None => {
+                    entry.settings.remove(field);
+                }
+            }
+        }
     }
 }
 
@@ -263,7 +350,7 @@ pub fn save(path: &std::path::Path, change: &Change) -> std::io::Result<()> {
 }
 
 pub fn draw(frame: &mut Frame, area: Rect, state: &AppState) {
-    let rows = rows(&state.plugin_ids);
+    let rows = rows(&state.plugin_ids, &state.plugin_schemas);
     let sel = selectable(&rows);
     let current = sel[state.settings_cursor.min(sel.len() - 1)];
     let height = u16::try_from(rows.len() + 5).unwrap_or(u16::MAX);
@@ -278,7 +365,10 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState) {
         .enumerate()
         .skip(offset)
         .take(visible)
-        .map(|(i, row)| row_line(row, i == current, &state.config, width))
+        .map(|(i, row)| {
+            let input = state.text_input.as_ref().filter(|_| i == current);
+            row_line(row, i == current, &state.config, width, input)
+        })
         .collect();
     frame.render_widget(Paragraph::new(lines), list);
     let status = match &state.settings_footer {
@@ -289,22 +379,60 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState) {
             fg(ACCENT).add_modifier(Modifier::ITALIC),
         ),
     };
-    let footer_lines = vec![
-        Line::styled(
-            "Up/Down move · Enter/Right next · Left back · Esc close",
-            fg(MUTED),
-        ),
-        status,
-    ];
+    let keys = if state.text_input.is_some() {
+        format!("Enter save · Esc cancel · max {TEXT_MAX} characters")
+    } else {
+        "Up/Down move · Enter/Right next · Left back · Esc close".to_string()
+    };
+    let footer_lines = vec![Line::styled(keys, fg(MUTED)), status];
     frame.render_widget(Paragraph::new(footer_lines), footer);
 }
 
-fn row_line(row: &Row, selected: bool, cfg: &Config, width: usize) -> Line<'static> {
+/// The text with a block cursor, scrolled so the cursor stays in `room`.
+fn input_spans(input: &TextInput, room: usize, style: Style) -> Vec<Span<'static>> {
+    let chars: Vec<char> = input.text.chars().collect();
+    let room = room.max(1);
+    let start = (input.cursor + 1).saturating_sub(room);
+    let end = chars.len().min(start + room);
+    let text = |r: std::ops::Range<usize>| chars.get(r).map_or(String::new(), String::from_iter);
+    let under = chars.get(input.cursor).copied().unwrap_or(' ');
+    vec![
+        Span::styled(text(start..input.cursor), style),
+        Span::styled(under.to_string(), style.add_modifier(Modifier::REVERSED)),
+        Span::styled(text(input.cursor + 1..end), style),
+    ]
+}
+
+fn row_line(
+    row: &Row,
+    selected: bool,
+    cfg: &Config,
+    width: usize,
+    input: Option<&TextInput>,
+) -> Line<'static> {
     let highlight = Style::new().bg(Color::Rgb(62, 62, 62)).fg(Color::White);
     if let Row::Section(name) = row {
         return Line::styled(format!("[{name}]"), fg(ACCENT).add_modifier(Modifier::BOLD));
     }
     let key = key_label(row);
+    if let Some(input) = input {
+        let style = highlight.add_modifier(Modifier::BOLD);
+        let head = format!("  {key:<KEY_WIDTH$}  ");
+        let room = width.saturating_sub(head.chars().count() + 1);
+        let mut spans = vec![Span::styled(head, style)];
+        spans.extend(input_spans(input, room, style));
+        let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        spans.push(Span::styled(" ".repeat(width.saturating_sub(used)), style));
+        return Line::from(spans);
+    }
+    if selected && text_row(row).is_some() {
+        let value = value_text(row, cfg);
+        let text = format!("  {key:<KEY_WIDTH$}  {value}  (Enter to edit)");
+        return Line::styled(
+            format!("{text:<width$}"),
+            highlight.add_modifier(Modifier::BOLD),
+        );
+    }
     let value = value_text(row, cfg);
     if !editable(row) {
         let text = format!("  {key:<KEY_WIDTH$}  {value:<12}edit in file");
@@ -343,7 +471,7 @@ mod tests {
 
     #[test]
     fn rows_follow_the_registry_and_plugins() {
-        let rows = rows(&["clock".into()]);
+        let rows = rows(&["clock".into()], &BTreeMap::new());
         assert!(matches!(&rows[0], Row::Section(s) if s == "general"));
         assert!(
             !rows
@@ -358,7 +486,7 @@ mod tests {
     #[test]
     fn values_read_like_the_mockup() {
         let cfg = Config::default();
-        let rows = rows(&["clock".into()]);
+        let rows = rows(&["clock".into()], &BTreeMap::new());
         assert_eq!(value_text(find_row(&rows, "general.theme"), &cfg), "matrix");
         assert_eq!(
             value_text(find_row(&rows, "general.plugins_dir"), &cfg),
@@ -402,7 +530,7 @@ mod tests {
     #[test]
     fn each_kind_steps() {
         let cfg = Config::default();
-        let rows = rows(&["weather".into()]);
+        let rows = rows(&["weather".into()], &BTreeMap::new());
         let set = |path: &str, dir| step(find_row(&rows, path), &cfg, dir, false);
         assert_eq!(
             set("general.theme", 1),
@@ -448,6 +576,123 @@ mod tests {
             back,
             Change::Set("plugin.weather.interval".into(), Value::Int(300))
         );
+    }
+
+    #[test]
+    fn schema_rows_follow_interval_and_step() {
+        let lua = mlua::Lua::new();
+        let t: mlua::Table = lua
+            .load(
+                "return { city = { kind = 'text', label = 'City', default = 'Kyiv' },
+                          bank = { kind = 'enum', options = { 'mono', 'privat' } },
+                          month = { kind = 'bool', default = true },
+                          mb = { kind = 'int', min = 5, max = 100, step = 5, default = 25 } }",
+            )
+            .eval()
+            .unwrap();
+        let schemas = BTreeMap::from([("fx".to_string(), schema::parse(&t).unwrap())]);
+        let rows = rows(&["fx".into(), "clock".into()], &schemas);
+        let labels: Vec<&str> = rows
+            .iter()
+            .skip_while(|r| !matches!(r, Row::Section(s) if s == "plugin.fx"))
+            .map(key_label)
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                "plugin.fx",
+                "enabled",
+                "interval",
+                "bank",
+                "City",
+                "mb",
+                "month",
+                "plugin.clock",
+                "enabled",
+                "interval"
+            ]
+        );
+        let mut cfg = Config::default();
+        let find = |key: &str| {
+            rows.iter()
+                .find(|r| matches!(r, Row::PluginSetting { entry, .. } if entry.key == key))
+                .unwrap()
+        };
+        assert_eq!(value_text(find("city"), &cfg), "Kyiv");
+        assert_eq!(value_text(find("month"), &cfg), "on");
+        assert_eq!(value_text(find("mb"), &cfg), "25");
+        assert_eq!(text_row(find("city")), Some(("fx", "city")));
+        assert_eq!(text_row(find("mb")), None);
+        assert_eq!(
+            step(find("city"), &cfg, 1, false),
+            None,
+            "text rows do not step"
+        );
+        let change = step(find("bank"), &cfg, 1, false).unwrap();
+        assert_eq!(
+            change,
+            Change::Set("plugin.fx.bank".into(), Value::Str("privat".into()))
+        );
+        apply(&mut cfg, &change);
+        assert_eq!(value_text(find("bank"), &cfg), "privat");
+        let change = step(find("mb"), &cfg, -1, false).unwrap();
+        assert_eq!(change, Change::Set("plugin.fx.mb".into(), Value::Int(20)));
+        let change = step(find("month"), &cfg, 1, false).unwrap();
+        apply(&mut cfg, &change);
+        assert_eq!(value_text(find("month"), &cfg), "off");
+        apply(&mut cfg, &Change::Unset("plugin.fx.bank".into()));
+        assert_eq!(
+            value_text(find("bank"), &cfg),
+            "mono",
+            "unset: the default again"
+        );
+    }
+
+    #[test]
+    fn empty_text_unsets_and_plugin_defaults_come_back() {
+        let input = TextInput::new("network_ping", "host", "");
+        let change = text_change(&input);
+        assert_eq!(change, Change::Unset("plugin.network_ping.host".into()));
+        let mut cfg = Config::default();
+        let host = |cfg: &Config| {
+            cfg.plugin_cfg["network_ping"].settings["host"]
+                .as_str()
+                .map(str::to_string)
+        };
+        apply(
+            &mut cfg,
+            &Change::Set(
+                "plugin.network_ping.host".into(),
+                Value::Str("8.8.8.8".into()),
+            ),
+        );
+        assert_eq!(host(&cfg).as_deref(), Some("8.8.8.8"));
+        apply(&mut cfg, &change);
+        assert_eq!(
+            host(&cfg).as_deref(),
+            Some("1.1.1.1"),
+            "the built-in plugin default, as after a reload"
+        );
+    }
+
+    #[test]
+    fn text_input_draws_a_cursor_that_stays_visible() {
+        let mut input = TextInput::new("w", "city", "Kyiv");
+        let spans = input_spans(&input, 10, Style::new());
+        let text: Vec<&str> = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, ["Kyiv", " ", ""], "the cursor sits after the text");
+        input.cursor = 1;
+        let text: Vec<String> = input_spans(&input, 10, Style::new())
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(text, ["K", "y", "iv"]);
+        let long = TextInput::new("w", "city", &"abcdefghij".repeat(3));
+        let text: String = input_spans(&long, 8, Style::new())
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(text, "defghij ", "scrolled to keep the cursor in view");
     }
 
     #[test]

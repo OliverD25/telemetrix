@@ -10,6 +10,7 @@ use crate::event::AppEvent;
 use crate::format;
 use crate::metrics::SystemSnapshot;
 use crate::metrics::network::NetDrive;
+use crate::plugins::schema::{SchemaEntry, TEXT_MAX};
 use crate::plugins::{PluginCard, PluginData, PluginStatus};
 use crate::selfmem::{self, MB, SelfMemory};
 
@@ -55,6 +56,75 @@ impl LogLine {
     }
 }
 
+/// One key press in the settings overlay's text input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputKey {
+    Char(char),
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Home,
+    End,
+    Save,
+    Cancel,
+}
+
+/// The inline text input on a `text` plugin setting row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextInput {
+    pub id: String,
+    pub key: String,
+    pub text: String,
+    /// In characters, 0..=text length.
+    pub cursor: usize,
+}
+
+impl TextInput {
+    pub fn new(id: &str, key: &str, text: &str) -> Self {
+        let text: String = text.chars().take(TEXT_MAX).collect();
+        Self {
+            id: id.to_string(),
+            key: key.to_string(),
+            cursor: text.chars().count(),
+            text,
+        }
+    }
+
+    fn byte_at(&self, cursor: usize) -> usize {
+        self.text
+            .char_indices()
+            .nth(cursor)
+            .map_or(self.text.len(), |(i, _)| i)
+    }
+
+    /// Applies an editing key; `Save` and `Cancel` are for the caller.
+    pub fn edit(&mut self, key: InputKey) {
+        let len = self.text.chars().count();
+        match key {
+            InputKey::Char(c) if len < TEXT_MAX => {
+                let at = self.byte_at(self.cursor);
+                self.text.insert(at, c);
+                self.cursor += 1;
+            }
+            InputKey::Backspace if self.cursor > 0 => {
+                self.cursor -= 1;
+                let at = self.byte_at(self.cursor);
+                self.text.remove(at);
+            }
+            InputKey::Delete if self.cursor < len => {
+                let at = self.byte_at(self.cursor);
+                self.text.remove(at);
+            }
+            InputKey::Left => self.cursor = self.cursor.saturating_sub(1),
+            InputKey::Right => self.cursor = (self.cursor + 1).min(len),
+            InputKey::Home => self.cursor = 0,
+            InputKey::End => self.cursor = len,
+            _ => {}
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     Quit,
@@ -79,7 +149,35 @@ pub enum Action {
     TogglePause,
     Reload,
     CloseOverlay,
+    /// A key while the text input is open.
+    Input(InputKey),
     Nothing,
+}
+
+/// While the text input is open every key goes to it; only Ctrl+C quits.
+pub fn input_key_action(key: &KeyEvent) -> Action {
+    let m = key.modifiers;
+    // AltGr arrives as Ctrl+Alt on Windows and types characters like @.
+    if m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) {
+        return if key.code == KeyCode::Char('c') {
+            Action::Quit
+        } else {
+            Action::Nothing
+        };
+    }
+    let k = match key.code {
+        KeyCode::Char(c) if !c.is_control() => InputKey::Char(c),
+        KeyCode::Backspace => InputKey::Backspace,
+        KeyCode::Delete => InputKey::Delete,
+        KeyCode::Left => InputKey::Left,
+        KeyCode::Right => InputKey::Right,
+        KeyCode::Home => InputKey::Home,
+        KeyCode::End => InputKey::End,
+        KeyCode::Enter => InputKey::Save,
+        KeyCode::Esc => InputKey::Cancel,
+        _ => return Action::Nothing,
+    };
+    Action::Input(k)
 }
 
 pub fn key_action(key: &KeyEvent, overlay: Overlay, exit_on_any_key: bool) -> Action {
@@ -160,6 +258,11 @@ pub struct AppState {
     pub picker_original: usize,
     /// Run keys of plugins: key → plugin id.
     pub plugin_keys: BTreeMap<char, String>,
+    /// Each plugin's `settings_schema`, by plugin id. Kept when a plugin
+    /// stops, so a disabled plugin's settings stay editable.
+    pub plugin_schemas: BTreeMap<String, Vec<SchemaEntry>>,
+    /// The open text input in the settings overlay.
+    pub text_input: Option<TextInput>,
     /// Network drives; `None` until the first answer ("checking...").
     pub network: Option<Vec<NetDrive>>,
     log_sink: Option<LineWriter<File>>,
@@ -194,6 +297,8 @@ impl AppState {
             picker_original: theme_idx,
             network: None,
             plugin_keys: BTreeMap::new(),
+            plugin_schemas: BTreeMap::new(),
+            text_input: None,
             log_sink: None,
         };
         state.open_log_file();
@@ -268,11 +373,16 @@ impl AppState {
                 }
                 self.store_plugin(data);
             }
-            AppEvent::PluginMeta { id, run_key } => {
+            AppEvent::PluginMeta {
+                id,
+                run_key,
+                schema,
+            } => {
                 self.plugin_keys.retain(|_, owner| *owner != id);
                 if let Some(key) = run_key {
                     self.register_run_key(&id, key);
                 }
+                self.plugin_schemas.insert(id, schema);
             }
             AppEvent::PluginRemoved(id) => {
                 self.plugin_keys.retain(|_, owner| *owner != id);
@@ -606,6 +716,7 @@ mod tests {
         let meta = |id: &str, key| AppEvent::PluginMeta {
             id: id.into(),
             run_key: Some(key),
+            schema: Vec::new(),
         };
         state.apply(meta("speedtest", 'g'));
         state.apply(meta("other", 'g'));
@@ -620,6 +731,55 @@ mod tests {
             key_action(&key(KeyCode::Char('g')), Overlay::None, false),
             Action::Key('g')
         );
+    }
+
+    #[test]
+    fn text_input_takes_every_key_but_ctrl_c() {
+        let k = |code| input_key_action(&key(code));
+        assert_eq!(k(KeyCode::Char('q')), Action::Input(InputKey::Char('q')));
+        assert_eq!(k(KeyCode::Char('t')), Action::Input(InputKey::Char('t')));
+        assert_eq!(k(KeyCode::Char('s')), Action::Input(InputKey::Char('s')));
+        assert_eq!(k(KeyCode::Char(' ')), Action::Input(InputKey::Char(' ')));
+        assert_eq!(k(KeyCode::Esc), Action::Input(InputKey::Cancel));
+        assert_eq!(k(KeyCode::Enter), Action::Input(InputKey::Save));
+        assert_eq!(k(KeyCode::Up), Action::Nothing);
+        let shift_k = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT);
+        assert_eq!(
+            input_key_action(&shift_k),
+            Action::Input(InputKey::Char('K'))
+        );
+        let altgr = KeyEvent::new(
+            KeyCode::Char('@'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        assert_eq!(input_key_action(&altgr), Action::Input(InputKey::Char('@')));
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(input_key_action(&ctrl_c), Action::Quit);
+        let ctrl_x = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert_eq!(input_key_action(&ctrl_x), Action::Nothing);
+    }
+
+    #[test]
+    fn text_input_edits_at_the_cursor_and_stops_at_64() {
+        let mut t = TextInput::new("weather", "city", "Kyv");
+        assert_eq!(t.cursor, 3);
+        t.edit(InputKey::Left);
+        t.edit(InputKey::Char('i'));
+        assert_eq!((t.text.as_str(), t.cursor), ("Kyiv", 3));
+        t.edit(InputKey::Home);
+        t.edit(InputKey::Delete);
+        t.edit(InputKey::Char('К'));
+        assert_eq!(t.text, "Кyiv", "non-ASCII letters insert as one character");
+        t.edit(InputKey::End);
+        t.edit(InputKey::Backspace);
+        assert_eq!(t.text, "Кyi");
+        t.edit(InputKey::Home);
+        t.edit(InputKey::Backspace);
+        assert_eq!(t.text, "Кyi", "nothing before the cursor");
+        let mut long = TextInput::new("w", "city", &"x".repeat(70));
+        assert_eq!(long.text.chars().count(), TEXT_MAX);
+        long.edit(InputKey::Char('y'));
+        assert_eq!(long.text.chars().count(), TEXT_MAX);
     }
 
     #[test]
