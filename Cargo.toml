@@ -16,6 +16,11 @@ sysinfo = { version = "0.39", default-features = false, features = ["system", "d
 toml_edit = "0.25.15"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 
+[features]
+# Diagnostics for memory soaks: counts live heap bytes and logs them every
+# minute. Not for normal builds.
+alloc-stats = []
+
 [profile.release]
 opt-level = "z"
 lto = "fat"
@@ -23,7 +28,7 @@ codegen-units = 1
 strip = true
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_Storage_FileSystem", "Win32_System_Memory"] }
 
 [target."cfg(unix)".dependencies]
 libc = "0.2"

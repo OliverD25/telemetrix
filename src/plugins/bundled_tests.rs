@@ -889,3 +889,152 @@ mod speedtest {
         );
     }
 }
+
+/// `cargo test --features alloc-stats soak -- --test-threads=1`: runs each
+/// plugin thousands of times against recorded answers and checks that
+/// neither the Lua heap nor the Rust heap keeps growing.
+#[cfg(feature = "alloc-stats")]
+mod soak {
+    use super::*;
+    use crate::alloc_stats::snapshot;
+
+    fn gc(h: &Harness) -> usize {
+        let lua = h.plugin.lua();
+        lua.gc_collect().unwrap();
+        lua.gc_collect().unwrap();
+        lua.used_memory()
+    }
+
+    fn soak(name: &str, routes: &[(&str, Answer)], trigger: Trigger) {
+        let h = Harness::new(name, "", routes);
+        let mut state =
+            crate::app::AppState::new(Config::default(), crate::config::ConfigStatus::Ok);
+        let mut step = |n: usize| {
+            for _ in 0..n {
+                let d = h.run(trigger);
+                h.emitted.borrow_mut().clear();
+                // The harness records every URL; that list is not the plugin's memory.
+                h.asked.borrow_mut().clear();
+                state.apply(crate::event::AppEvent::Plugin(d));
+            }
+        };
+        step(300);
+        let (lua0, heap0) = (gc(&h), snapshot().0);
+        step(3000);
+        let (lua1, heap1) = (gc(&h), snapshot().0);
+        println!(
+            "{name}: lua {lua0} -> {lua1} ({:+}), heap {heap0} -> {heap1} ({:+}) over 3000 updates",
+            lua1 as i64 - lua0 as i64,
+            heap1 - heap0
+        );
+        assert!(lua1 <= lua0 + 4096, "{name}: Lua heap grows");
+        assert!(heap1 - heap0 < 64 * 1024, "{name}: Rust heap grows");
+    }
+
+    #[test]
+    fn soak_each_plugin() {
+        soak("clock", &[], Trigger::Interval);
+        soak("uptime", &[], Trigger::Interval);
+        soak(
+            "crypto",
+            &[
+                ("ticker/price", Answer::File("binance_price.json")),
+                ("symbol=BTCUSDT", Answer::File("klines_BTC.json")),
+                ("symbol=ETHUSDT", Answer::File("klines_ETH.json")),
+                ("symbol=SOLUSDT", Answer::File("klines_SOL.json")),
+            ],
+            Trigger::Interval,
+        );
+        soak(
+            "currency",
+            &[
+                ("api.monobank.ua", Answer::File("mono.json")),
+                ("api.privatbank.ua", Answer::File("privat.json")),
+                ("valcode=usd", Answer::File("nbu_usd.json")),
+                ("valcode=eur", Answer::File("nbu_eur.json")),
+                ("valcode=gbp", Answer::File("nbu_gbp.json")),
+            ],
+            Trigger::Interval,
+        );
+        soak(
+            "weather",
+            &[
+                ("geocoding-api", Answer::File("geo_kyiv.json")),
+                (
+                    "api.open-meteo.com/v1/forecast",
+                    Answer::File("forecast.json"),
+                ),
+            ],
+            Trigger::Interval,
+        );
+    }
+}
+
+#[cfg(feature = "alloc-stats")]
+mod soak_parts {
+    use super::*;
+    use crate::alloc_stats::snapshot;
+
+    fn measure(h: &Harness, what: &str, code: &str) {
+        let lua = h.plugin.lua();
+        let f: mlua::Function = lua.load(code).eval().unwrap();
+        for _ in 0..200 {
+            f.call::<()>(()).unwrap();
+            h.asked.borrow_mut().clear();
+        }
+        lua.gc_collect().unwrap();
+        let before = snapshot().0;
+        for _ in 0..3000 {
+            f.call::<()>(()).unwrap();
+            h.asked.borrow_mut().clear();
+        }
+        lua.gc_collect().unwrap();
+        lua.gc_collect().unwrap();
+        h.asked.borrow_mut().clear();
+        println!(
+            "{what}: heap {:+} bytes over 3000 calls",
+            snapshot().0 - before
+        );
+    }
+
+    #[test]
+    fn soak_host_functions() {
+        let h = Harness::new(
+            "crypto",
+            "",
+            &[("ticker/price", Answer::File("binance_price.json"))],
+        );
+        h.run(Trigger::Start);
+        measure(&h, "empty", "return function() end");
+        measure(
+            &h,
+            "http_get (fake)",
+            "return function() telemetrix.http_get('https://x/ticker/price') end",
+        );
+        measure(
+            &h,
+            "json_decode",
+            "local t = '[{\"a\":1,\"b\":\"x\"},{\"a\":2}]' return function() telemetrix.json_decode(t) end",
+        );
+        measure(
+            &h,
+            "store_get",
+            "return function() telemetrix.store_get() end",
+        );
+        measure(
+            &h,
+            "store_set",
+            "local s = telemetrix.store_get() return function() telemetrix.store_set(s) end",
+        );
+        measure(
+            &h,
+            "os.time/os.date",
+            "return function() os.date('%H:%M', os.time()) end",
+        );
+        measure(
+            &h,
+            "string.format",
+            "return function() string.format('%.2f', 1.5) end",
+        );
+    }
+}

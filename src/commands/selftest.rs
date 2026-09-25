@@ -23,8 +23,9 @@ use crate::selfmem::{self, MB};
 /// Extra time for start-up and for the report to appear after the run.
 const GRACE: Duration = Duration::from_secs(30);
 
-/// The report a dashboard started with `--selftest-report` writes before it quits.
-pub fn report_json(state: &AppState) -> Value {
+/// The report a dashboard started with `--selftest-report` writes before it
+/// quits. `private_series` holds the private bytes of each minute.
+pub fn report_json(state: &AppState, private_series: &[u64]) -> Value {
     let own = selfmem::read();
     let lua: serde_json::Map<String, Value> = state
         .plugins
@@ -37,7 +38,123 @@ pub fn report_json(state: &AppState) -> Value {
         "private_bytes": own.and_then(|m| m.private),
         "plugins": state.plugins.len(),
         "lua_bytes": lua,
+        "private_series": private_series,
     })
+}
+
+/// Minutes left out at the start of a soak: caches, the TLS code and the
+/// first plugin data settle in this time.
+const SOAK_WARMUP_MIN: u64 = 10;
+/// A soak fails above this private-memory growth.
+const SOAK_LIMIT_MB_PER_HOUR: f64 = 0.2;
+
+/// The least-squares slope of the samples (one per minute), in MB per hour.
+pub fn growth_mb_per_hour(samples: &[u64]) -> Option<f64> {
+    if samples.len() < 2 {
+        return None;
+    }
+    let n = samples.len() as f64;
+    let mean_x = (n - 1.0) / 2.0;
+    let mean_y = samples.iter().map(|&b| b as f64).sum::<f64>() / n;
+    let (mut num, mut den) = (0.0, 0.0);
+    for (i, &b) in samples.iter().enumerate() {
+        let dx = i as f64 - mean_x;
+        num += dx * (b as f64 - mean_y);
+        den += dx * dx;
+    }
+    Some(num / den * 60.0 / MB as f64)
+}
+
+/// `selftest --memory --soak <minutes>`: one dashboard with the default
+/// plugins except the speed test (its test would dominate the numbers), for
+/// the warm-up plus `minutes`. Fails when private bytes grow faster than
+/// `SOAK_LIMIT_MB_PER_HOUR` after the warm-up.
+pub fn soak(minutes: u64, json: bool, flags: &Flags) -> ExitCode {
+    let (_, cfg, _) = config::load_effective(flags);
+    let Ok(exe) = std::env::current_exe() else {
+        eprintln!("selftest: cannot find the telemetrix executable");
+        return ExitCode::FAILURE;
+    };
+    let dir = std::env::temp_dir().join(format!("telemetrix-soak-{}", std::process::id()));
+    let settings = dir.join("soak.toml");
+    let written = std::fs::create_dir_all(&dir)
+        .and_then(|()| std::fs::write(&settings, "[plugin.speedtest]\nenabled = false\n"));
+    if let Err(e) = written {
+        eprintln!("selftest: cannot prepare {}: {e}", dir.display());
+        return ExitCode::FAILURE;
+    }
+    let total = SOAK_WARMUP_MIN + minutes;
+    if !json {
+        println!(
+            "memory soak: {SOAK_WARMUP_MIN} min warm-up + {minutes} min, one hidden dashboard, \
+             limit {SOAK_LIMIT_MB_PER_HOUR} MB/h private growth"
+        );
+    }
+    let report = dir.join("soak.json");
+    let args = vec![
+        "--config".to_string(),
+        settings.display().to_string(),
+        "--selftest-report".to_string(),
+        report.display().to_string(),
+        "--selftest-seconds".to_string(),
+        (total * 60 + 5).to_string(),
+        "--data-dir".to_string(),
+        dir.join("data").display().to_string(),
+    ];
+    let result = match start_hidden(&exe, &args) {
+        Ok(()) => wait_for(
+            &report,
+            Instant::now() + Duration::from_secs(total * 60) + GRACE,
+        ),
+        Err(e) => {
+            eprintln!("selftest: cannot start the soak run: {e}");
+            None
+        }
+    };
+    let _ = std::fs::remove_dir_all(&dir);
+    let Some(rep) = result else {
+        eprintln!("selftest: the soak run wrote no report");
+        return ExitCode::FAILURE;
+    };
+    let series: Vec<u64> = rep["private_series"]
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_u64).collect())
+        .unwrap_or_default();
+    let after = series.get(SOAK_WARMUP_MIN as usize..).unwrap_or(&[]);
+    let growth = growth_mb_per_hour(after);
+    let within_budget = verdict(&rep, cfg.memory.budget_mb);
+    let ok = within_budget && growth.is_some_and(|g| g <= SOAK_LIMIT_MB_PER_HOUR);
+    if json {
+        let doc = json!({
+            "warmup_minutes": SOAK_WARMUP_MIN,
+            "minutes": minutes,
+            "private_series": series,
+            "growth_mb_per_hour": growth,
+            "limit_mb_per_hour": SOAK_LIMIT_MB_PER_HOUR,
+            "peak_working_set_bytes": rep["peak_working_set_bytes"],
+            "ok": ok,
+        });
+        println!("{doc:#}");
+    } else {
+        for (i, b) in series.iter().enumerate().step_by(5) {
+            println!("  minute {i:>4}: private {:.2} MB", selfmem::mb(*b));
+        }
+        match growth {
+            Some(g) => println!(
+                "private growth after the warm-up: {g:+.2} MB/h (limit {SOAK_LIMIT_MB_PER_HOUR}) {}",
+                if ok { "ok" } else { "FAILED" }
+            ),
+            None => println!("too few samples to judge the growth: FAILED"),
+        }
+        if !within_budget {
+            println!("the peak working set was over the budget: FAILED");
+        }
+    }
+    if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }
 
 struct Run {
@@ -225,6 +342,17 @@ fn start_hidden(exe: &Path, args: &[String]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn growth_is_the_slope_in_mb_per_hour() {
+        let flat = vec![5 * MB; 30];
+        assert_eq!(growth_mb_per_hour(&flat), Some(0.0));
+        // 1 MB more every 60 samples (minutes) = 1 MB per hour.
+        let rising: Vec<u64> = (0..61).map(|i| 4 * MB + i * MB / 60).collect();
+        let g = growth_mb_per_hour(&rising).unwrap();
+        assert!((g - 1.0).abs() < 0.01, "{g}");
+        assert_eq!(growth_mb_per_hour(&[MB]), None);
+    }
 
     #[test]
     fn verdict_uses_the_peak() {

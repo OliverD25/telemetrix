@@ -1,3 +1,5 @@
+#[cfg(feature = "alloc-stats")]
+mod alloc_stats;
 mod app;
 mod cli;
 mod commands;
@@ -15,6 +17,10 @@ mod ui;
 use std::process::ExitCode;
 
 use cli::{Command, Flags};
+
+#[cfg(feature = "alloc-stats")]
+#[global_allocator]
+static ALLOC: alloc_stats::Counting = alloc_stats::Counting;
 
 fn main() -> ExitCode {
     let cli = match cli::parse(std::env::args_os().skip(1)) {
@@ -34,7 +40,14 @@ fn main() -> ExitCode {
             println!("telemetrix {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        Command::Selftest { seconds, json } => commands::selftest::run(seconds, json, &cli.flags),
+        Command::Selftest {
+            soak: Some(minutes),
+            json,
+            ..
+        } => commands::selftest::soak(minutes, json, &cli.flags),
+        Command::Selftest { seconds, json, .. } => {
+            commands::selftest::run(seconds, json, &cli.flags)
+        }
         Command::ProbeTemps => {
             if metrics::worker::any_temperature() {
                 ExitCode::SUCCESS

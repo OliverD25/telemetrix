@@ -18,6 +18,9 @@ Usage:
                                           (--force: also over your edits and deletions)
   telemetrix selftest --memory [--seconds N] [--json]
                                           measure memory against the budgets, exit 1 if over
+  telemetrix selftest --memory --soak <minutes> [--json]
+                                          run 10 minutes plus <minutes>, exit 1 if private
+                                          memory grows more than 0.2 MB per hour
   telemetrix themes                       list theme names
   telemetrix config init [--force]        write the default settings file
   telemetrix config path                  print where the settings file is
@@ -92,6 +95,8 @@ pub enum Command {
     Selftest {
         seconds: u64,
         json: bool,
+        /// `--soak <minutes>`: a long run that checks memory growth.
+        soak: Option<u64>,
     },
     /// Hidden: exits 0 when a temperature sensor answers (used by the metrics thread).
     ProbeTemps,
@@ -114,6 +119,7 @@ struct Switches {
     plugins: bool,
     memory: bool,
     run: bool,
+    soak: Option<u64>,
     seconds: Option<u64>,
 }
 
@@ -162,6 +168,15 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
             Long("plugins") => sw.plugins = true,
             Long("memory") => sw.memory = true,
             Long("run") => sw.run = true,
+            Long("soak") => {
+                let n: u64 = text(parser.value())?
+                    .parse()
+                    .map_err(|_| "--soak needs a whole number of minutes")?;
+                if !(10..=1440).contains(&n) {
+                    return Err("--soak must be 10..1440 minutes".into());
+                }
+                sw.soak = Some(n);
+            }
             Long("seconds") => {
                 let n: u64 = text(parser.value())?
                     .parse()
@@ -212,6 +227,7 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
         ["selftest"] if sw.memory => Command::Selftest {
             seconds: sw.seconds.unwrap_or(30),
             json: sw.json,
+            soak: sw.soak,
         },
         ["selftest"] => return Err("selftest needs --memory".into()),
         ["probe-temps"] => Command::ProbeTemps,
@@ -245,6 +261,9 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
     );
     if sw.plugins && !matches!(cmd, Command::Snapshot { .. }) {
         return Err("--plugins only applies to snapshot".into());
+    }
+    if sw.soak.is_some() && !matches!(cmd, Command::Selftest { .. }) {
+        return Err("--soak only applies to selftest --memory".into());
     }
     if sw.run && !matches!(cmd, Command::Plugin(PluginCmd::Check { .. })) {
         return Err("--run only applies to plugin check".into());
@@ -312,7 +331,8 @@ mod tests {
             cli.command,
             Command::Selftest {
                 seconds: 30,
-                json: true
+                json: true,
+                soak: None
             }
         );
         assert!(
@@ -332,6 +352,14 @@ mod tests {
         assert!(run(&["snapshot", "--run"]).is_err());
         assert!(run(&["plugin", "list", "--force"]).is_err());
         assert!(run(&["selftest", "--memory", "--seconds", "1"]).is_err());
+        assert!(run(&["selftest", "--memory", "--soak", "5"]).is_err());
+        assert!(run(&["snapshot", "--soak", "30"]).is_err());
+        assert!(matches!(
+            run(&["selftest", "--memory", "--soak", "60"])
+                .unwrap()
+                .command,
+            Command::Selftest { soak: Some(60), .. }
+        ));
         assert!(run(&["--bogus"]).is_err());
     }
 }

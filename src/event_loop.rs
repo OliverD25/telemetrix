@@ -115,6 +115,8 @@ fn event_loop(
     let mut next_house = start + HOUSEKEEPING;
     let mut next_memory = start;
     let mut next_frame = start;
+    // Private bytes once a minute, for `selftest --memory --soak`.
+    let mut private_series: Vec<u64> = Vec::new();
     loop {
         let now = Instant::now();
         let interval = lp.frame_interval();
@@ -178,17 +180,48 @@ fn event_loop(
                 lp.state.record_self_memory(m);
             }
             next_memory = now + SELF_MEMORY_EVERY;
+            let minute = start.elapsed().as_secs() / 60;
+            if lp.flags.selftest_report.is_some() && private_series.len() as u64 <= minute {
+                let private = lp.state.self_memory.and_then(|m| m.private).unwrap_or(0);
+                private_series.push(private);
+            }
+            #[cfg(feature = "alloc-stats")]
+            log_heap(&mut lp.state, start);
         }
         if let Some(report) = &lp.flags.selftest_report
             && start.elapsed() >= Duration::from_secs(lp.flags.selftest_seconds)
         {
-            let doc = crate::commands::selftest::report_json(&lp.state);
+            let doc = crate::commands::selftest::report_json(&lp.state, &private_series);
             return config::write_atomic(report, &format!("{doc:#}"));
         }
         if lp.flags.panic_test && start.elapsed() >= PANIC_TEST_AFTER {
             panic!("--panic-test: deliberate panic to check that the terminal is restored");
         }
     }
+}
+
+/// Once a minute with `--features alloc-stats`: live heap bytes next to the
+/// private bytes and each plugin's Lua bytes, for memory soaks.
+#[cfg(feature = "alloc-stats")]
+fn log_heap(state: &mut AppState, start: Instant) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST_MINUTE: AtomicU64 = AtomicU64::new(u64::MAX);
+    let minute = start.elapsed().as_secs() / 60;
+    if LAST_MINUTE.swap(minute, Ordering::Relaxed) == minute {
+        return;
+    }
+    let (live, calls) = crate::alloc_stats::snapshot();
+    let private = state.self_memory.and_then(|m| m.private).unwrap_or(0);
+    let lua: usize = state
+        .plugins
+        .values()
+        .filter_map(|c| c.data.lua_bytes)
+        .sum();
+    let log_len = state.log.len();
+    let (heaps, heap_allocated, heap_committed) = crate::alloc_stats::heaps();
+    state.log(&format!(
+        "heap: minute {minute} live {live} allocs {calls} private {private} lua {lua} log_lines {log_len}          heaps {heaps} heap_allocated {heap_allocated} heap_committed {heap_committed}"
+    ));
 }
 
 fn mtime(path: &Path) -> Option<SystemTime> {

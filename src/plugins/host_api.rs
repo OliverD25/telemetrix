@@ -600,6 +600,94 @@ pub fn set_settings(lua: &Lua, settings: &toml_edit::Table) -> mlua::Result<()> 
     t.set("settings", value)
 }
 
+/// Network soak of the HTTP client: `cargo test --features alloc-stats
+/// http_client_soak -- --ignored --nocapture`. It sends a few hundred cheap
+/// requests to Binance's ping endpoint (weight 1 each).
+#[cfg(all(test, feature = "alloc-stats"))]
+mod http_soak {
+    use super::*;
+    use crate::alloc_stats::snapshot;
+
+    const URL: &str = "https://api.binance.com/api/v3/ping";
+
+    fn get(http: &RefCell<Http>) {
+        let deadline: Deadline = Rc::new(Cell::new(None));
+        let (_, status) = http_get(http, &deadline, URL, Some(10.0)).unwrap();
+        assert_eq!(status, 200);
+    }
+
+    fn private() -> i64 {
+        crate::selfmem::read().and_then(|m| m.private).unwrap_or(0) as i64
+    }
+
+    /// Runs `f` 300 times after 30 warm-up calls; prints heap and private growth.
+    fn probe(what: &str, mut f: impl FnMut()) {
+        for _ in 0..30 {
+            f();
+        }
+        let (heap, priv0) = (snapshot().0, private());
+        for _ in 0..300 {
+            f();
+        }
+        println!(
+            "{what}: heap {:+} bytes, private {:+} KB over 300 calls",
+            snapshot().0 - heap,
+            (private() - priv0) / 1024
+        );
+    }
+
+    #[test]
+    #[ignore = "uses the network"]
+    fn native_memory_bisect() {
+        let http = RefCell::new(Http::new(Duration::from_secs(10)));
+        probe("thread spawn+join", || {
+            std::thread::spawn(|| {}).join().unwrap()
+        });
+        probe("dns in a new thread", || {
+            std::thread::spawn(|| {
+                let _ = std::net::ToSocketAddrs::to_socket_addrs("api.binance.com:443");
+            })
+            .join()
+            .unwrap()
+        });
+        probe("dns on this thread", || {
+            let _ = std::net::ToSocketAddrs::to_socket_addrs("api.binance.com:443");
+        });
+        probe("tcp connect to an IP", || {
+            let _ =
+                TcpStream::connect_timeout(&"1.1.1.1:443".parse().unwrap(), Duration::from_secs(2));
+        });
+        probe("https, pooled agent", || get(&http));
+        probe("https, new agent each time", || {
+            get(&http);
+            *SHARED_AGENT.lock().unwrap() = None;
+        });
+    }
+
+    #[test]
+    #[ignore = "uses the network"]
+    fn http_client_soak() {
+        let http = RefCell::new(Http::new(Duration::from_secs(10)));
+        for _ in 0..20 {
+            get(&http);
+        }
+        let before = snapshot().0;
+        for _ in 0..200 {
+            get(&http);
+        }
+        let kept = snapshot().0 - before;
+        let before = snapshot().0;
+        for _ in 0..100 {
+            get(&http);
+            // What drop_if_idle does after a minute without requests.
+            *SHARED_AGENT.lock().unwrap() = None;
+        }
+        let rebuilt = snapshot().0 - before;
+        println!("200 requests on one agent: heap {kept:+} bytes");
+        println!("100 requests, agent rebuilt each time: heap {rebuilt:+} bytes");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
