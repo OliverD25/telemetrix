@@ -181,15 +181,25 @@ cards are not empty after a restart.
 | Currency | USD, EUR, GBP to hryvnia from two banks, 7- and 30-day graphs | Monobank `api.monobank.ua/bank/currency`; PrivatBank card rate `api.privatbank.ua/p24api/pubinfo`; NBU official rate `bank.gov.ua/NBU_Exchange` | Monobank: 1 request per 5 minutes. PrivatBank and NBU publish no limit. | Monobank and PrivatBank every 5 minutes (Monobank never sooner, even after a restart). NBU history once a day, one request per currency. |
 | Crypto | BTC, ETH, SOL in USDT, 7- and 30-day graphs | Binance `api.binance.com/api/v3/ticker/price` and `/klines` | Binance counts a request weight of 6000 per minute per IP address. | Prices every minute (one request). Daily history once an hour, one request per coin. |
 | Weather | now, tomorrow and the day after | Open-Meteo `api.open-meteo.com` and its geocoding service | 10 000 requests per day for non-commercial use. | Every 10 minutes. The city is looked up once per change. |
-| Speed test | download, upload, ping | Cloudflare `speed.cloudflare.com` | No published limit. | Every 30 minutes, and when you press `g`. Never at start. |
+| Speed test | download, upload, ping, server | the nearest Ookla speed-test server; Cloudflare `speed.cloudflare.com` as the backup | No published limit. | Every 30 minutes, and when you press `g`. Never at start. The server list once a day. |
 | Internet latency | time to connect to 1.1.1.1:443 | a TCP connection, no service | none | every 30 seconds |
 | Clock, Uptime | time and date; computer name and uptime | this computer | none | every second; every 30 seconds |
 
-**The speed test uses data.** One run downloads 15 MB and uploads 5 MB with
-the default settings, about 20 MB. At the 30-minute interval that is about
-1 GB a day, or about 29 GB a month. On a metered connection, raise the
-interval, lower `download_mb` and `upload_mb` in the `s` box, or set
-`enabled = false` under `[plugin.speedtest]`.
+**The speed test uses a lot of data.** It runs for a fixed time, not a
+fixed size: 3 seconds per direction over 4 connections. So each test moves
+about (download speed + upload speed) × 3 seconds. On a 935/933 Mbps line
+that is about 700 MB per test, and at the 30-minute interval about 34 GB a
+day, or about 1 TB a month. On a metered connection, raise the interval,
+lower `streams` or `seconds` in the `s` box, or set `enabled = false` under
+`[plugin.speedtest]`.
+
+**Where the speed test measures.** It asks Ookla's public server list
+(`www.speedtest.net/api/js/servers`) for the five nearest servers, pings
+each and uses the fastest one for 24 hours. This is the same list the
+open-source speedtest-cli uses. It is not an official API, so it may change
+without notice; that is why Cloudflare is the automatic backup. When the
+backup is used, the card says `Cloudflare (backup)` and the log says why.
+Cloudflare's servers can be farther away, so its numbers are often lower.
 
 Settings you can change in the `s` box:
 
@@ -208,8 +218,10 @@ Settings you can change in the `s` box:
   and without coordinates the card shows Kyiv. The log says which one is
   used, and `config check` warns when a file has both. Temperatures are
   always °C.
-- **Speed test:** `download_mb` (5..100), `upload_mb` (1..50) and
-  `max_seconds` per direction (3..15).
+- **Speed test:** `server` (empty = the nearest Ookla server, `host:port`
+  forces one, `cloudflare` uses Cloudflare only), `streams` (parallel
+  connections, 1..8) and `seconds` per direction (2..10). The old keys
+  `download_mb`, `upload_mb` and `max_seconds` are ignored.
 
 To write your own plugin, see [PLUGINS.md](PLUGINS.md).
 

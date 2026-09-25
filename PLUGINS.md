@@ -191,6 +191,7 @@ All of them live in the global table `telemetrix`.
 | `store_set(table)` | `true` or `nil, error_text` | Saves the table. See [Remembering things](#remembering-things-between-runs). |
 | `emit(card)` | `true`, or `false` when dropped | Shows a card at once, before `update()` returns. See [Showing progress](#showing-progress). |
 | `trigger()` | text | Why this `update()` runs. See [Why update() runs](#why-update-runs). |
+| `speed_multi{ ... }` | result or `nil, error_text` | A real speed test over parallel connections. See [Speed tests](#speed-tests). |
 | `speed_download(url, max_bytes, max_seconds [, progress])` | result or `nil, error_text` | See [Speed tests](#speed-tests). |
 | `speed_upload(url, bytes, max_seconds [, progress])` | result or `nil, error_text` | See [Speed tests](#speed-tests). |
 | `log(text)` | nothing | Writes a line to the log. Press `l` in the dashboard to see it. A text that starts with `warning: ` is shown as a warning. |
@@ -243,7 +244,7 @@ One `update()` call may take `plugins.call_timeout_s` seconds (5 by
 default). A plugin that needs longer, like a speed test, sets its own limit:
 
 ```lua
-return { title = "Speed test", call_timeout = 40, update = ... }
+return { title = "Speed test", call_timeout = 60, update = ... }
 ```
 
 The limit is 60 seconds at most. The time counts from the start of the call;
@@ -291,9 +292,46 @@ end
 
 ### Speed tests
 
-Two functions measure the internet connection. Both accept only `https://`
-addresses. Neither keeps the data in memory: the program reads or writes it
-16 KB at a time.
+For a real speed test use `speed_multi`. One connection cannot fill a fast
+line, and a test of a fixed size ends before the connection is up to speed.
+`speed_multi` runs for a fixed time over several connections and leaves out
+the first moments:
+
+```lua
+local r, err = telemetrix.speed_multi({
+  direction = "down",          -- "down" or "up"
+  url = "https://host:8080/download?size=25000000",
+  streams = 4,                 -- parallel connections, 1..16
+  seconds = 3,                 -- how long to measure
+  warmup = 0.5,                -- the first 0.5 s is not counted
+  piece_bytes = 25000000,      -- "up" only: bytes per upload request
+  progress = function(mbps, seconds)
+    telemetrix.emit({ metrics = { { label = "testing download...", value = string.format("%.0f Mbps", mbps) } } })
+  end,
+})
+-- r = { mbps = 935.2, bytes = 292000000, seconds = 2.5 }
+```
+
+- Only `direction` and `url` matter for most tests; the rest have the
+  defaults shown.
+- Each connection repeats its request until the time is up. A download
+  reads and throws away the body; `r=<number>` is added to each download
+  URL so no cache answers it. An upload sends `piece_bytes` zero bytes per
+  request, with their length declared (some servers refuse uploads of
+  unknown length).
+- `mbps` counts only the bytes after the warm-up. `progress` gets the rate
+  so far, at most 4 times a second, after the warm-up.
+- The call ends within about `seconds` + 1.5 s, even when a server hangs,
+  and never runs past the plugin's `call_timeout`.
+- Only `https://` addresses are accepted. The connections are closed when
+  the call ends.
+- An upload counts the bytes handed to the network connection. The
+  computer may still hold a few of them in its send buffer, so an upload
+  result can read a few percent high.
+
+`speed_download` and `speed_upload` are simpler: one connection and a
+fixed size. They suit a quick check, not a speed test. Neither keeps the
+data in memory: the program reads or writes it 16 KB at a time.
 
 - `speed_download(url, max_bytes, max_seconds [, progress])` downloads from
   `url`. It stops after `max_bytes` bytes or `max_seconds` seconds,
@@ -314,7 +352,7 @@ local r, err = telemetrix.speed_download(
   end)
 ```
 
-Both count against `call_timeout`. Give the plugin enough time for both
+All three count against `call_timeout`. Give the plugin enough time for both
 directions plus a few seconds.
 
 ## What a plugin cannot do
@@ -397,7 +435,7 @@ only shows its stored result. With `--run` it really runs.
 | `currency.lua` | hryvnia rates from Monobank and PrivatBank, NBU graphs | `primary_bank`, `show_month`, `compact`; file only: `currencies` | yes |
 | `crypto.lua` | coin prices from Binance, 7- and 30-day graphs | `quote`; file only: `coins` | yes |
 | `weather.lua` | now, tomorrow and the day after (Open-Meteo) | `city`; file only: `lat`, `lon`, `label` | yes |
-| `speedtest.lua` | download, upload and ping (Cloudflare), key `g` | `download_mb`, `upload_mb`, `max_seconds` | yes, about 20 MB per run |
+| `speedtest.lua` | download, upload and ping against the nearest Ookla server (Cloudflare as backup), key `g` | `server`, `streams`, `seconds` | yes, about 700 MB per test at 1 Gbps |
 
 These files live in `plugins/` in the repository and are built into the
 program, which installs them into the plugin home. The README describes
