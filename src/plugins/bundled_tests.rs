@@ -565,7 +565,7 @@ mod speedtest {
         );
         h.stub(
             "speed_download",
-            "return function(url, bytes, secs, cb) DOWN = { url, bytes, secs }              cb(19500000, 0.5) cb(39000000, 1.0) return { mbps = 312, bytes = bytes, seconds = 1 } end",
+            "DOWNS = {} return function(url, bytes, secs, cb) DOWN = { url, bytes, secs } DOWNS[#DOWNS + 1] = bytes              cb(19500000, 0.5) return { mbps = 312, bytes = bytes, seconds = bytes * 8 / 312e6 } end",
         );
         h.stub(
             "speed_upload",
@@ -620,8 +620,11 @@ mod speedtest {
             .load("return DOWN[1], DOWN[2]")
             .eval()
             .unwrap();
-        assert_eq!(url, "https://speed.cloudflare.com/__down?bytes=15000000");
-        assert_eq!(bytes, 15_000_000);
+        // 15 MB arrives as a 10 MB and a 5 MB piece: Cloudflare refuses a 15 MB request.
+        assert_eq!(url, "https://speed.cloudflare.com/__down?bytes=5000000");
+        assert_eq!(bytes, 5_000_000);
+        let pieces: Vec<i64> = h.plugin.lua().load("return DOWNS").eval().unwrap();
+        assert_eq!(pieces, [10_000_000, 5_000_000]);
 
         let d = h.run(Trigger::Interval);
         let trend = d.metrics.last().unwrap();
@@ -657,8 +660,12 @@ max_seconds = 99",
         }
         let d = h.run(Trigger::Start);
         assert_eq!(d.metrics.last().unwrap().label, "30 runs");
-        let secs: i64 = h.plugin.lua().load("return DOWN[3]").eval().unwrap();
-        assert_eq!(secs, 8, "an out-of-range setting falls back to the default");
+        // The piece gets what is left of max_seconds, so a little under 8.
+        let secs: f64 = h.plugin.lua().load("return DOWN[3]").eval().unwrap();
+        assert!(
+            secs > 7.0 && secs <= 8.0,
+            "an out-of-range setting falls back to the default: {secs}"
+        );
         let bytes: i64 = h.plugin.lua().load("return DOWN[2]").eval().unwrap();
         assert_eq!(bytes, 5_000_000);
     }

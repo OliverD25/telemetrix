@@ -63,6 +63,45 @@ local function progress(what, mbps)
   })
 end
 
+-- Cloudflare refuses some sizes with HTTP 403 (15 and 16 MB did, 10, 20 and
+-- 25 MB did not, tested 2026-09-25), so the download is fetched in pieces of
+-- 10 MB and 5 MB, which it accepts. download_mb is always a multiple of 5.
+local PIECES_MB = { 10, 5 }
+
+local function download(total_mb, max_seconds)
+  local started = telemetrix.now_ms()
+  local done_bytes, done_seconds, left_mb = 0, 0, total_mb
+  while left_mb > 0 do
+    local piece_mb = left_mb >= PIECES_MB[1] and PIECES_MB[1] or PIECES_MB[2]
+    local left_s = max_seconds - (telemetrix.now_ms() - started) / 1000
+    if left_s <= 0 then
+      break
+    end
+    local bytes = piece_mb * 1000000
+    local r, err = telemetrix.speed_download(
+      DOWN_URL .. string.format("%d", bytes), bytes, left_s,
+      function(b, secs)
+        local all_s = done_seconds + secs
+        progress("download", all_s > 0 and (done_bytes + b) * 8 / all_s / 1e6 or 0)
+      end)
+    if not r then
+      if done_bytes > 0 then
+        break -- keep what was measured before the failure
+      end
+      return nil, err
+    end
+    done_bytes, done_seconds = done_bytes + r.bytes, done_seconds + r.seconds
+    left_mb = left_mb - piece_mb
+    if r.bytes < bytes then
+      break -- the time limit cut this piece short
+    end
+  end
+  if done_seconds <= 0 then
+    return nil, "no data was received"
+  end
+  return { bytes = done_bytes, seconds = done_seconds, mbps = done_bytes * 8 / done_seconds / 1e6 }
+end
+
 local function measure(s)
   progress("ping")
   local pings = {}
@@ -73,13 +112,8 @@ local function measure(s)
     end
   end
   local max_seconds = s.max_seconds
-  local down_bytes = s.download_mb * 1000000
   progress("download")
-  local down, err = telemetrix.speed_download(
-    DOWN_URL .. string.format("%d", down_bytes), down_bytes, max_seconds,
-    function(bytes, seconds)
-      progress("download", seconds > 0 and bytes * 8 / seconds / 1e6 or 0)
-    end)
+  local down, err = download(s.download_mb, max_seconds)
   if not down then
     error("download failed: " .. err, 0)
   end
