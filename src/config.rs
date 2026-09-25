@@ -400,6 +400,13 @@ label = "Kyiv"
 interval = 120
 coins = ["bitcoin", "ethereum", "solana"]
 
+[plugin.currency]
+interval = 300                # Monobank allows one request per 5 minutes
+currencies = ["USD", "EUR", "GBP"]
+primary_bank = "mono"         # mono | privat
+show_month = true             # the 30-day graph
+compact = false               # true = only the primary bank, for narrow cards
+
 [plugin.network_ping]
 interval = 30
 host = "1.1.1.1"

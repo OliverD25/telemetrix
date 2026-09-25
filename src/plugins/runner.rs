@@ -215,6 +215,12 @@ impl Plugin {
         })
     }
 
+    /// Tests replace host functions (like `telemetrix.http_get`) through this.
+    #[cfg(test)]
+    pub fn lua(&self) -> &mlua::Lua {
+        &self.sandbox.lua
+    }
+
     pub fn lua_bytes(&self) -> usize {
         self.sandbox.lua.used_memory()
     }
@@ -637,7 +643,14 @@ mod tests {
     fn default_plugins_load_and_the_offline_ones_run() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins");
         let s = RunnerSettings::from_config(&Config::default());
-        for name in ["clock", "uptime", "network_ping", "crypto", "weather"] {
+        for name in [
+            "clock",
+            "uptime",
+            "network_ping",
+            "crypto",
+            "weather",
+            "currency",
+        ] {
             let path = dir.join(format!("{name}.lua"));
             let p = Plugin::load(
                 &path,

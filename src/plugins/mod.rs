@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod bundled_tests;
 pub mod host_api;
 pub mod manager;
 pub mod manifest;
