@@ -19,6 +19,8 @@ use crate::config::{Config, PluginConfig};
 pub enum Answer {
     File(&'static str),
     Status(u16),
+    /// A status with response headers (lower-case names, as `http_get` gives them).
+    Headers(u16, &'static [(&'static str, &'static str)]),
     Offline,
 }
 
@@ -108,18 +110,29 @@ impl Harness {
                     .iter()
                     .find(|(pattern, _)| url.contains(pattern.as_str()))
                     .map(|(_, a)| a.clone());
+                let headers = |list: &[(&str, &str)]| -> mlua::Result<Value> {
+                    Ok(Value::Table(lua.create_table_from(list.iter().copied())?))
+                };
                 Ok(match answer {
                     Some(Answer::File(name)) => (
                         Value::String(lua.create_string(net_fixture(name))?),
                         Value::Integer(200),
+                        headers(&[])?,
                     ),
                     Some(Answer::Status(code)) => (
                         Value::String(lua.create_string("")?),
                         Value::Integer(code.into()),
+                        headers(&[])?,
+                    ),
+                    Some(Answer::Headers(code, list)) => (
+                        Value::String(lua.create_string("")?),
+                        Value::Integer(code.into()),
+                        headers(list)?,
                     ),
                     Some(Answer::Offline) | None => (
                         Value::Nil,
                         Value::String(lua.create_string("connection refused")?),
+                        Value::Nil,
                     ),
                 })
             })
@@ -461,13 +474,120 @@ mod crypto {
                 "{status}: no klines after it"
             );
             assert_eq!(d.metrics[0].value, "84,853 USDT (stale)", "{status}");
-            assert!(h.log.borrow().last().unwrap().contains("slow down"));
+            let why = if status == 429 {
+                "slow down"
+            } else {
+                "HTTP 418"
+            };
+            assert!(h.log.borrow().last().unwrap().contains(why), "{status}");
             // A klines 429 stops the other coins' klines too.
             let h = Harness::new("crypto", "", &routes());
             h.route("symbol=BTCUSDT", Answer::Status(status));
             h.run(Trigger::Start);
             assert_eq!(h.asked_for("klines"), 1, "{status}: ETH and SOL wait");
         }
+    }
+
+    fn lua_int(h: &Harness, code: &str) -> i64 {
+        h.plugin.lua().load(code).eval().unwrap()
+    }
+
+    /// Seconds from now until the stored ban ends.
+    fn ban_left(h: &Harness) -> i64 {
+        lua_int(
+            h,
+            "return (telemetrix.store_get().ban_until or 0) - os.time()",
+        )
+    }
+
+    fn pause_row(d: &PluginData) -> Option<&crate::plugins::MetricItem> {
+        d.metrics
+            .iter()
+            .find(|m| m.label.starts_with("paused by Binance until "))
+    }
+
+    #[test]
+    fn a_418_waits_as_long_as_retry_after_says() {
+        use crate::plugins::MetricStyle;
+        let h = Harness::new("crypto", "", &routes());
+        h.run(Trigger::Start);
+        h.route(
+            "ticker/price",
+            Answer::Headers(418, &[("retry-after", "120")]),
+        );
+        let d = h.run(Trigger::Interval);
+        assert!((118..=120).contains(&ban_left(&h)), "{}", ban_left(&h));
+        let row = pause_row(&d).expect("a pause row");
+        let until: String = h
+            .plugin
+            .lua()
+            .load("return os.date('%H:%M', telemetrix.store_get().ban_until)")
+            .eval()
+            .unwrap();
+        assert_eq!(row.label, format!("paused by Binance until {until}"));
+        assert_eq!(
+            (row.value.as_str(), row.style),
+            ("", Some(MetricStyle::Bad))
+        );
+        assert_eq!(d.metrics[0].value, "84,853 USDT (stale)");
+        assert!(h.log.borrow().last().unwrap().contains("Retry-After 120 s"));
+        println!("{}", render_card(&d, 45));
+
+        // While paused, nothing is asked at all.
+        let before = h.asked.borrow().len();
+        let d = h.run(Trigger::Interval);
+        assert_eq!(h.asked.borrow().len(), before);
+        assert!(pause_row(&d).is_some());
+
+        // After the wait, one success ends the pause and resets the streak.
+        h.age_store("s.ban_until = s.ban_until - 121");
+        h.route("ticker/price", Answer::File("binance_price.json"));
+        let d = h.run(Trigger::Interval);
+        assert_eq!(h.asked.borrow().len(), before + 1);
+        assert!(pause_row(&d).is_none());
+        assert_eq!(d.metrics[0].value, "84,853 USDT");
+        assert_eq!(
+            lua_int(&h, "return telemetrix.store_get().ban_streak or 0"),
+            0
+        );
+    }
+
+    #[test]
+    fn repeated_418_doubles_the_wait_from_10_minutes_up_to_a_day() {
+        let h = Harness::new("crypto", "", &routes());
+        h.run(Trigger::Start);
+        h.route("ticker/price", Answer::Status(418));
+        let mut waits = Vec::new();
+        for _ in 0..9 {
+            h.run(Trigger::Interval);
+            waits.push(ban_left(&h));
+            h.age_store("s.ban_until = os.time() - 1");
+        }
+        let expected = [600, 1200, 2400, 4800, 9600, 19200, 38400, 76800, 86400];
+        for (got, want) in waits.iter().zip(expected) {
+            assert!(want - 2 <= *got && *got <= want, "{waits:?}");
+        }
+        assert!(
+            h.log
+                .borrow()
+                .last()
+                .unwrap()
+                .contains("418 number 9 in a row")
+        );
+    }
+
+    #[test]
+    fn a_418_before_any_price_shows_only_the_pause() {
+        let h = Harness::new(
+            "crypto",
+            "",
+            &[("", Answer::Headers(418, &[("retry-after", "7200")]))],
+        );
+        let d = h.run(Trigger::Start);
+        assert_eq!(d.error, None);
+        assert_eq!(d.metrics.len(), 1);
+        assert!(pause_row(&d).is_some());
+        assert!((7198..=7200).contains(&ban_left(&h)));
     }
 
     #[test]

@@ -30,7 +30,11 @@ All notable changes to telemetrix. Versions follow
   stays 10 MB.
 - On Windows the program uses the segment heap, so private memory stays flat
   over hours.
-- The crypto plugin stops asking Binance after an HTTP 429 or 418 answer.
+- The crypto plugin stops asking Binance after an HTTP 429 answer until the
+  next interval. After an HTTP 418 (the address is banned) it waits as long
+  as Binance's `Retry-After` says, or else 10 minutes, doubled for every 418
+  in a row up to 24 hours, and shows `paused by Binance until HH:MM`.
+- `telemetrix.http_get` also returns the response headers.
 
 ## 0.1.0 (2026-09-25, not released)
 

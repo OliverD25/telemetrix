@@ -212,7 +212,7 @@ All of them live in the global table `telemetrix`.
 
 | Function | Returns | Notes |
 |---|---|---|
-| `http_get(url [, timeout_s])` | `body, status` or `nil, error_text` | HTTP GET. A status like 404 is not an error: check `status` yourself. The body is limited to 1 MiB. The timeout is `plugins.http_timeout_s` unless you give a shorter one. |
+| `http_get(url [, timeout_s])` | `body, status, headers` or `nil, error_text` | HTTP GET. A status like 404 is not an error: check `status` yourself. `headers` is a table of the response headers with lower-case names, like `headers["retry-after"]`. The body is limited to 1 MiB. The timeout is `plugins.http_timeout_s` unless you give a shorter one. |
 | `json_decode(text)` | `table` or `nil, error_text` | JSON `null` becomes `nil`. A list with `null` holes then has gaps, so `#list` may be wrong. |
 | `tcp_ping_ms(host, port [, timeout_ms])` | `milliseconds` or `nil, error_text` | Time to open a TCP connection. The default timeout is 2000 ms. |
 | `store_get()` | `table` or `nil` (nothing stored), or `nil, error_text` | What `store_set` saved last, also after a restart. |
@@ -506,6 +506,9 @@ each data source and its free limits.
   schema default is empty, which the `s` box shows as `(not set)`; without
   a city and without coordinates the card shows Kyiv.
 - **crypto:** old settings files list CoinGecko names (`"bitcoin"`); they
-  still work. After an HTTP 429 or 418 from Binance the plugin sends no
-  more requests until the next interval, because Binance bans addresses
-  that keep asking.
+  still work. After an HTTP 429 from Binance the plugin sends no more
+  requests until the next interval, because Binance bans addresses that
+  keep asking. An HTTP 418 means such a ban: the plugin reads the
+  `retry-after` header from `http_get` and waits that long, or else 10
+  minutes, doubled for every 418 in a row up to 24 hours. The wait is kept
+  in its store, so a restart does not end it.

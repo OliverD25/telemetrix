@@ -139,12 +139,15 @@ pub fn json_to_lua(lua: &Lua, json: &serde_json::Value) -> mlua::Result<Value> {
     lua.to_value_with(json, options)
 }
 
+/// A response: body, status and headers (lower-case names).
+type Got = (String, u16, Vec<(String, String)>);
+
 fn http_get(
     http: &RefCell<Http>,
     deadline: &Deadline,
     url: &str,
     timeout: Option<f64>,
-) -> Result<(String, u16), String> {
+) -> Result<Got, String> {
     let wanted = timeout.map_or(http.borrow().timeout, Duration::from_secs_f64);
     let limit = cap(wanted, deadline);
     let mut response = shared_agent()
@@ -155,13 +158,18 @@ fn http_get(
         .call()
         .map_err(|e| e.to_string())?;
     let status = response.status().as_u16();
+    let headers = response
+        .headers()
+        .iter()
+        .filter_map(|(k, v)| Some((k.as_str().to_string(), v.to_str().ok()?.to_string())))
+        .collect();
     let body = response
         .body_mut()
         .with_config()
         .limit(BODY_LIMIT)
         .read_to_string()
         .map_err(|e| e.to_string())?;
-    Ok((body, status))
+    Ok((body, status, headers))
 }
 
 /// What one speed-test direction moved, and how fast.
@@ -358,11 +366,12 @@ pub fn install(lua: &Lua, ctx: HostCtx) -> mlua::Result<()> {
         "http_get",
         lua.create_function(move |lua, (url, timeout): (String, Option<f64>)| {
             Ok(match http_get(&http, &deadline, &url, timeout) {
-                Ok((body, status)) => (
+                Ok((body, status, headers)) => (
                     Value::String(lua.create_string(body)?),
                     Value::Integer(status.into()),
+                    Value::Table(lua.create_table_from(headers)?),
                 ),
-                Err(e) => (Value::Nil, Value::String(lua.create_string(e)?)),
+                Err(e) => (Value::Nil, Value::String(lua.create_string(e)?), Value::Nil),
             })
         })?,
     )?;
@@ -631,7 +640,7 @@ mod http_soak {
 
     fn get(http: &RefCell<Http>) {
         let deadline: Deadline = Rc::new(Cell::new(None));
-        let (_, status) = http_get(http, &deadline, URL, Some(10.0)).unwrap();
+        let (_, status, _) = http_get(http, &deadline, URL, Some(10.0)).unwrap();
         assert_eq!(status, 200);
     }
 
@@ -884,6 +893,36 @@ mod tests {
             .eval()
             .unwrap();
         assert!(ok);
+    }
+
+    #[test]
+    fn http_get_returns_the_status_and_headers() {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut request = [0u8; 1024];
+            let _ = conn.read(&mut request).unwrap();
+            conn.write_all(
+                b"HTTP/1.1 418 I'm a teapot
+Retry-After: 120
+Content-Length: 2
+Connection: close
+
+no",
+            )
+            .unwrap();
+        });
+        let (lua, _) = lua_with_host();
+        let (body, status, retry): (String, i64, String) = lua
+            .load(format!(
+                "local body, status, headers = telemetrix.http_get('http://127.0.0.1:{port}/')                  return body, status, headers['retry-after']"
+            ))
+            .eval()
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!((body.as_str(), status, retry.as_str()), ("no", 418, "120"));
     }
 
     #[test]
