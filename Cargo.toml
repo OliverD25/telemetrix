@@ -1,10 +1,16 @@
 [package]
 name = "telemetrix"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 description = "TermSaver: ultra-lightweight terminal screensaver and live system telemetry dashboard"
+repository = "https://github.com/OliverD25/telemetrix"
+homepage = "https://github.com/OliverD25/telemetrix"
+readme = "README.md"
+keywords = ["dashboard", "screensaver", "tui", "monitoring", "terminal"]
+categories = ["command-line-utilities"]
+exclude = [".claude/", ".github/"]
 
 [dependencies]
 lexopt = "0.3.2"
