@@ -149,7 +149,7 @@ cargo build --release
 ```
 
 The program is `target/release/telemetrix` (`telemetrix.exe` on Windows),
-about 2.8 MB. It is all you need: the seven default plugins are built into
+about 3.3 MB. It is all you need: the seven default plugins are built into
 it, and it installs them on its first start (see
 [Where plugins live](#where-plugins-live)). It works the same from any
 folder.
