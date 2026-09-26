@@ -117,6 +117,7 @@ cargo install --git https://github.com/OliverD25/telemetrix
 telemetrix                        # open the dashboard
 telemetrix --exit-on-any-key      # screensaver mode: any key closes it
 telemetrix snapshot               # print the numbers once, no dashboard
+telemetrix screensaver install    # open it full screen when the PC is idle (Windows)
 ```
 
 In the dashboard: `t` picks a theme, `s` opens the settings, `l` shows the
@@ -214,6 +215,8 @@ These need no terminal window, so scripts and agents can use them.
 | `telemetrix plugin list` | list the plugins that would run, the plugin home, and whether each one is built-in, built-in-edited or yours |
 | `telemetrix plugin install [--force] [name...]` | install or update the built-in plugins now; `--force` also replaces your edits and restores deleted ones (all, or only the named ones) |
 | `telemetrix themes` | list the theme names |
+| `telemetrix screensaver install [--idle-minutes N] [--dry-run]` | open the dashboard full screen after N minutes without input (Windows); on Linux print the idle-daemon line. See [As a screensaver](#as-a-screensaver-when-the-pc-is-idle-windows) |
+| `telemetrix screensaver uninstall [--dry-run]` / `status` | remove it / show whether it is installed and running |
 | `telemetrix selftest --memory [--seconds N] [--json]` | measure memory against the budgets; exit 1 if over (see below) |
 
 ## Themes
@@ -666,19 +669,53 @@ wt.exe -F -p telemetrix
 Windows only honours such keys for shortcuts on the desktop or in the Start
 menu.
 
-### As a screensaver when the PC is idle (Task Scheduler)
-
-This command (in PowerShell or Command Prompt) starts it after 10 minutes
-without input, in screensaver mode, so any key closes it. Words after
-`-p telemetrix` replace the profile's command, so the program name comes
-first; `cargo install` puts it on your `PATH`.
+### As a screensaver when the PC is idle (Windows)
 
 ```
-schtasks /Create /TN "telemetrix screensaver" /SC ONIDLE /I 10 /TR "wt.exe -F -p telemetrix telemetrix.exe --exit-on-any-key"
+telemetrix screensaver install --idle-minutes 10
 ```
 
-Windows decides when the PC counts as idle, so the start can come a few
-minutes late. Remove it with `schtasks /Delete /TN "telemetrix screensaver"`.
+After 10 minutes without a key press or mouse move, the dashboard opens
+full screen in Windows Terminal, in screensaver mode: any key closes it.
+It uses the Windows Terminal profile `telemetrix` when you have one (see
+above) and the default profile otherwise. Without Windows Terminal it opens
+in a normal console window.
+
+- `telemetrix screensaver install --dry-run` prints exactly what would be
+  created and changes nothing.
+- `telemetrix screensaver status` shows whether it is installed, whether
+  the watcher and a screensaver dashboard run, and how long the PC has
+  been idle.
+- `telemetrix screensaver uninstall` removes it and ends the watcher
+  (`--dry-run` works here too).
+
+**How it works.** `install` creates a Task Scheduler task named
+"telemetrix screensaver" that starts a small watcher,
+`telemetrix screensaver watch`, at every logon, and starts it once right
+away. The task runs as you, only while you are logged on, and needs no
+administrator rights. The watcher has no window. Every 5 seconds it asks
+Windows how long ago the last input came (`GetLastInputInfo`). When that
+passes the limit, it opens the dashboard once; it opens it again only
+after you have used the PC in between. It does not open a second dashboard
+while one it started still runs, and it waits while a program (a video
+player, for example) asks Windows to keep the display on. The watcher
+uses about 0.7 MB of working set and 1.4 MB of private memory
+(measured on Windows 11 after 60 seconds) and almost no CPU.
+
+Why not Task Scheduler's own idle trigger? Windows counts the PC as idle
+only when the CPU and disks are quiet too, and checks that only every few
+minutes, so the start comes late or never. The logon trigger that starts
+the watcher is reliable.
+
+The task starts the program from where it was when you ran `install`. If
+you move or reinstall telemetrix somewhere else, run `install` again. If
+you ran `install` with `--config <file>`, the dashboard uses that file.
+
+An older version of this README suggested a task with `/SC ONIDLE` and the
+same name. `install` replaces it, and `uninstall` removes it.
+
+On Linux, `telemetrix screensaver install` writes nothing; it prints the
+swayidle and xautolock lines below with the right path.
 
 ### Linux: swayidle (Sway, Wayland)
 

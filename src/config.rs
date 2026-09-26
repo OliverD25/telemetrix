@@ -1265,7 +1265,7 @@ pub fn apply_flags(cfg: &mut Config, flags: &Flags) {
     if flags.no_plugins {
         cfg.plugins.enabled = false;
     }
-    if flags.exit_on_any_key {
+    if flags.exit_on_any_key || flags.screensaver {
         cfg.general.exit_on_any_key = true;
     }
     if let Some(log) = &flags.log {
@@ -1279,7 +1279,10 @@ pub fn release_flag(flags: &mut Flags, key: &str) {
         "general.theme" => flags.theme = None,
         "general.fps" => flags.fps = None,
         "plugins.enabled" => flags.no_plugins = false,
-        "general.exit_on_any_key" => flags.exit_on_any_key = false,
+        "general.exit_on_any_key" => {
+            flags.exit_on_any_key = false;
+            flags.screensaver = false;
+        }
         _ => {}
     }
 }
@@ -1296,7 +1299,10 @@ pub fn flag_keys(flags: &Flags) -> BTreeSet<&'static str> {
     add(flags.fps.is_some(), "general.fps");
     add(flags.plugins_dir.is_some(), "general.plugins_dir");
     add(flags.no_plugins, "plugins.enabled");
-    add(flags.exit_on_any_key, "general.exit_on_any_key");
+    add(
+        flags.exit_on_any_key || flags.screensaver,
+        "general.exit_on_any_key",
+    );
     add(flags.log.is_some(), "general.log_file");
     keys
 }

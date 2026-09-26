@@ -63,12 +63,17 @@ fn main() -> ExitCode {
         }
         Command::Config(cmd) => commands::config_cmd::run(cmd, &cli.flags),
         Command::Plugin(cmd) => commands::plugin_cmd::run(cmd, &cli.flags),
+        Command::Screensaver(cmd) => commands::screensaver::run(cmd, &cli.flags),
         Command::Snapshot { json, plugins } => commands::snapshot::run(json, plugins, &cli.flags),
         Command::Tui => dashboard(&cli.flags),
     }
 }
 
 fn dashboard(flags: &Flags) -> ExitCode {
+    let _mark = flags
+        .screensaver
+        .then(commands::screensaver::mark_dashboard)
+        .flatten();
     let (_, cfg, status) = config::load_effective(flags);
     match event_loop::run(cfg, status, flags) {
         Ok(()) => ExitCode::SUCCESS,

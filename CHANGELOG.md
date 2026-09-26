@@ -21,6 +21,11 @@ All notable changes to telemetrix. Versions follow
   power, read through NVML (loaded at run time, no link-time dependency).
   Off by default (`gpu.enabled`), because NVML adds about 24 MB of memory.
   `snapshot --json` lists the GPUs in `system.gpus`.
+- **Screensaver command:** `telemetrix screensaver install [--idle-minutes N]`
+  registers a small watcher as a logon task. It opens the dashboard full
+  screen after N minutes without input and closes on any key. `uninstall`
+  and `status` go with it, and `--dry-run` shows what would change. On Linux
+  it prints the swayidle or xautolock line instead.
 - **Memory soak test:** `selftest --memory --soak <minutes>` checks that
   memory does not grow over a long run.
 

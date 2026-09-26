@@ -22,6 +22,14 @@ Usage:
                                           run 10 minutes plus <minutes>, exit 1 if private
                                           memory grows more than 0.2 MB per hour
   telemetrix themes                       list theme names
+  telemetrix screensaver install [--idle-minutes N] [--dry-run]
+                                          open the dashboard full screen after N minutes
+                                          without input (Windows; Linux prints a recipe)
+  telemetrix screensaver uninstall [--dry-run]
+                                          remove it again
+  telemetrix screensaver status           show whether it is installed and running
+  telemetrix screensaver watch --idle-minutes N [--dry-run]
+                                          the watcher that install starts at logon
   telemetrix config init [--force]        write the default settings file
   telemetrix config path                  print where the settings file is
   telemetrix config check [--json]        list every problem in the settings file
@@ -57,6 +65,9 @@ pub struct Flags {
     pub selftest_seconds: u64,
     /// Where plugin stores live; the OS data folder when not set.
     pub data_dir: Option<PathBuf>,
+    /// Hidden, used by the screensaver watcher: screensaver mode, and a
+    /// marker that tells the watcher this dashboard runs.
+    pub screensaver: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -85,6 +96,14 @@ pub enum PluginCmd {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum ScreensaverCmd {
+    Install { idle_minutes: u32, dry_run: bool },
+    Uninstall { dry_run: bool },
+    Status,
+    Watch { idle_minutes: u32, dry_run: bool },
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Tui,
     Snapshot {
@@ -102,6 +121,7 @@ pub enum Command {
     ProbeTemps,
     Config(ConfigCmd),
     Plugin(PluginCmd),
+    Screensaver(ScreensaverCmd),
     Help,
     Version,
 }
@@ -121,6 +141,8 @@ struct Switches {
     run: bool,
     soak: Option<u64>,
     seconds: Option<u64>,
+    idle_minutes: Option<u32>,
+    dry_run: bool,
 }
 
 pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
@@ -186,6 +208,17 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
                 }
                 sw.seconds = Some(n);
             }
+            Long("idle-minutes") => {
+                let n: u32 = text(parser.value())?
+                    .parse()
+                    .map_err(|_| "--idle-minutes needs a whole number")?;
+                if !(1..=1440).contains(&n) {
+                    return Err("--idle-minutes must be 1..1440".into());
+                }
+                sw.idle_minutes = Some(n);
+            }
+            Long("dry-run") => sw.dry_run = true,
+            Long("screensaver") => flags.screensaver = true,
             Long("data-dir") => {
                 flags.data_dir = Some(parser.value().map_err(|e| e.to_string())?.into())
             }
@@ -250,6 +283,23 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
         ["config", "check"] => Command::Config(ConfigCmd::Check { json: sw.json }),
         ["config", "show"] => Command::Config(ConfigCmd::Show),
         ["config", "reference"] => Command::Config(ConfigCmd::Reference),
+        ["screensaver", "install"] => Command::Screensaver(ScreensaverCmd::Install {
+            idle_minutes: sw
+                .idle_minutes
+                .unwrap_or(crate::commands::screensaver::DEFAULT_IDLE_MINUTES),
+            dry_run: sw.dry_run,
+        }),
+        ["screensaver", "uninstall"] => Command::Screensaver(ScreensaverCmd::Uninstall {
+            dry_run: sw.dry_run,
+        }),
+        ["screensaver", "status"] => Command::Screensaver(ScreensaverCmd::Status),
+        ["screensaver", "watch"] => match sw.idle_minutes {
+            Some(idle_minutes) => Command::Screensaver(ScreensaverCmd::Watch {
+                idle_minutes,
+                dry_run: sw.dry_run,
+            }),
+            None => return Err("screensaver watch needs --idle-minutes".into()),
+        },
         _ => return Err(format!("unknown command {:?}, see --help", words.join(" "))),
     };
     let takes_json = matches!(
@@ -264,6 +314,26 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
     }
     if sw.soak.is_some() && !matches!(cmd, Command::Selftest { .. }) {
         return Err("--soak only applies to selftest --memory".into());
+    }
+    if sw.idle_minutes.is_some()
+        && !matches!(
+            cmd,
+            Command::Screensaver(ScreensaverCmd::Install { .. } | ScreensaverCmd::Watch { .. })
+        )
+    {
+        return Err("--idle-minutes only applies to screensaver install and watch".into());
+    }
+    if sw.dry_run
+        && !matches!(
+            cmd,
+            Command::Screensaver(
+                ScreensaverCmd::Install { .. }
+                    | ScreensaverCmd::Uninstall { .. }
+                    | ScreensaverCmd::Watch { .. }
+            )
+        )
+    {
+        return Err("--dry-run only applies to screensaver install, uninstall and watch".into());
     }
     if sw.run && !matches!(cmd, Command::Plugin(PluginCmd::Check { .. })) {
         return Err("--run only applies to plugin check".into());
@@ -361,5 +431,47 @@ mod tests {
             Command::Selftest { soak: Some(60), .. }
         ));
         assert!(run(&["--bogus"]).is_err());
+        assert!(
+            run(&["screensaver", "watch"]).is_err(),
+            "needs --idle-minutes"
+        );
+        assert!(run(&["screensaver", "install", "--idle-minutes", "0"]).is_err());
+        assert!(run(&["screensaver", "status", "--dry-run"]).is_err());
+        assert!(run(&["snapshot", "--idle-minutes", "5"]).is_err());
+    }
+
+    #[test]
+    fn screensaver_commands() {
+        assert_eq!(
+            run(&["screensaver", "install"]).unwrap().command,
+            Command::Screensaver(ScreensaverCmd::Install {
+                idle_minutes: 10,
+                dry_run: false
+            })
+        );
+        assert_eq!(
+            run(&["screensaver", "install", "--idle-minutes", "3", "--dry-run"])
+                .unwrap()
+                .command,
+            Command::Screensaver(ScreensaverCmd::Install {
+                idle_minutes: 3,
+                dry_run: true
+            })
+        );
+        assert_eq!(
+            run(&["screensaver", "watch", "--idle-minutes", "1"])
+                .unwrap()
+                .command,
+            Command::Screensaver(ScreensaverCmd::Watch {
+                idle_minutes: 1,
+                dry_run: false
+            })
+        );
+        let cli = run(&["--screensaver"]).unwrap();
+        assert!(cli.flags.screensaver && cli.command == Command::Tui);
+        assert!(
+            !HELP.contains("--screensaver "),
+            "internal flag stays out of --help"
+        );
     }
 }
