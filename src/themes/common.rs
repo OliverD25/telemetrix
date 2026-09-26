@@ -5,8 +5,9 @@ use std::collections::VecDeque;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
+use ratatui::widgets::{Block, Clear, Padding, Paragraph};
 
 use crate::app::AppState;
 use crate::format;
@@ -31,7 +32,16 @@ pub struct Palette {
     pub bar: Color,
     pub bar_empty: Color,
     pub spark: Color,
-    pub rounded: bool,
+    /// The box-drawing characters of the card frames.
+    pub border_set: border::Set<'static>,
+    /// Put around a card title, like `[ ` and ` ]`.
+    pub brackets: (&'static str, &'static str),
+    /// Values above a threshold, errors and falling trends.
+    pub warn: Color,
+    /// Rising trends and `good` rows.
+    pub rise: Color,
+    /// `dim` rows and stale values.
+    pub muted: Color,
 }
 
 pub fn minimalist_palette() -> Palette {
@@ -44,7 +54,11 @@ pub fn minimalist_palette() -> Palette {
         bar: Color::Rgb(150, 150, 150),
         bar_empty: Color::Rgb(58, 58, 58),
         spark: Color::Rgb(120, 120, 120),
-        rounded: true,
+        border_set: border::ROUNDED,
+        brackets: (" ", " "),
+        warn: WARN,
+        rise: RISE,
+        muted: MUTED,
     }
 }
 
@@ -69,8 +83,18 @@ pub fn matrix_palette(c: (u8, u8, u8)) -> Palette {
         bar: scale(c, 0.9),
         bar_empty: scale(c, 0.25),
         spark: scale(c, 0.8),
-        rounded: false,
+        border_set: border::PLAIN,
+        brackets: (" ", " "),
+        warn: WARN,
+        rise: RISE,
+        muted: MUTED,
     }
+}
+
+/// Paints the whole screen in one background colour, under the cards.
+pub fn fill_screen(frame: &mut Frame, bg: Color) {
+    let area = frame.area();
+    frame.buffer_mut().set_style(area, Style::new().bg(bg));
 }
 
 pub fn fg(c: Color) -> Style {
@@ -177,15 +201,15 @@ fn render_card(frame: &mut Frame, rect: Rect, card: Card, pal: &Palette) {
     if let Some(bg) = pal.bg {
         style = style.bg(bg);
     }
+    let (open, close) = pal.brackets;
     let block = Block::bordered()
-        .border_type(if pal.rounded {
-            BorderType::Rounded
-        } else {
-            BorderType::Plain
-        })
+        .border_set(pal.border_set)
         .border_style(fg(pal.border))
         .padding(Padding::horizontal(1))
-        .title(Span::styled(format!(" {} ", card.title), title_style))
+        .title(Span::styled(
+            format!("{open}{}{close}", card.title),
+            title_style,
+        ))
         .style(style);
     frame.render_widget(Clear, rect);
     frame.render_widget(Paragraph::new(card.lines).block(block), rect);
@@ -226,13 +250,13 @@ pub fn fit(text: &str, max: usize) -> String {
 pub fn bar(pct: f32, width: usize, pal: &Palette, warn: bool) -> Line<'static> {
     let bar_w = width.saturating_sub(6);
     let filled = ((pct / 100.0).clamp(0.0, 1.0) * bar_w as f32).round() as usize;
-    let color = if warn { WARN } else { pal.bar };
+    let color = if warn { pal.warn } else { pal.bar };
     Line::from(vec![
         Span::styled("█".repeat(filled), fg(color)),
         Span::styled("░".repeat(bar_w - filled), fg(pal.bar_empty)),
         Span::styled(
             format!(" {pct:>4.0}%"),
-            fg(if warn { WARN } else { pal.value }),
+            fg(if warn { pal.warn } else { pal.value }),
         ),
     ])
 }
@@ -262,7 +286,7 @@ fn system_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
     let mut cpu = vec![bar(s.cpu_usage, w, pal, cpu_warn)];
     if let Some(t) = s.cpu_temp {
         let color = if t > cfg.thresholds.temp_warn_c {
-            WARN
+            pal.warn
         } else {
             pal.value
         };
@@ -288,7 +312,7 @@ fn system_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
         cpu.push(spark(
             &state.cpu_history,
             w,
-            if cpu_warn { WARN } else { pal.spark },
+            if cpu_warn { pal.warn } else { pal.spark },
         ));
         ram.push(spark(&state.ram_history, w, pal.spark));
     }
@@ -334,7 +358,7 @@ fn gpu_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
             }
             if let Some(t) = g.temp_c {
                 let color = if t > cfg.thresholds.temp_warn_c {
-                    WARN
+                    pal.warn
                 } else {
                     pal.value
                 };
@@ -420,7 +444,7 @@ fn network_card(state: &AppState, pal: &Palette, w: usize) -> Option<Card> {
                 pct > state.config.thresholds.disk_warn_pct,
             ));
         } else {
-            lines.push(kv(&r.title, "offline".into(), w, pal, WARN));
+            lines.push(kv(&r.title, "offline".into(), w, pal, pal.warn));
         }
     }
     Some(Card::new("Network", lines))
@@ -468,14 +492,20 @@ fn plugin_card(card: &PluginCard, pal: &Palette, w: usize) -> Card {
         PluginStatus::Error(msg) => {
             let mut lines: Vec<Line<'static>> = wrap(&format!("Error: {msg}"), w)
                 .into_iter()
-                .map(|l| Line::styled(l, fg(WARN)))
+                .map(|l| Line::styled(l, fg(pal.warn)))
                 .collect();
             for m in &d.metrics {
-                lines.push(kv(&m.label, format!("{} (stale)", m.value), w, pal, MUTED));
+                lines.push(kv(
+                    &m.label,
+                    format!("{} (stale)", m.value),
+                    w,
+                    pal,
+                    pal.muted,
+                ));
             }
             Card {
                 title: d.title.clone(),
-                title_color: Some(WARN),
+                title_color: Some(pal.warn),
                 lines,
             }
         }
@@ -485,7 +515,7 @@ fn plugin_card(card: &PluginCard, pal: &Palette, w: usize) -> Card {
 pub fn metric_line(m: &crate::plugins::MetricItem, pal: &Palette, w: usize) -> Line<'static> {
     use crate::plugins::MetricStyle;
     if m.bad {
-        return kv(&m.label, m.value.clone(), w, pal, WARN);
+        return kv(&m.label, m.value.clone(), w, pal, pal.warn);
     }
     if let Some(points) = &m.trend {
         return trend_line(&m.label, points, &m.value, w, pal);
@@ -495,9 +525,9 @@ pub fn metric_line(m: &crate::plugins::MetricItem, pal: &Palette, w: usize) -> L
         // Without a value, the label carries the colour (a footer like "stale since 14:32").
         Some(MetricStyle::Good | MetricStyle::Bad) => {
             let color = if m.style == Some(MetricStyle::Good) {
-                RISE
+                pal.rise
             } else {
-                WARN
+                pal.warn
             };
             let label = if m.value.is_empty() {
                 fg(color)
@@ -514,7 +544,7 @@ pub fn metric_line(m: &crate::plugins::MetricItem, pal: &Palette, w: usize) -> L
             // A secondary row: when both parts do not fit, the value goes.
             let fits = m.label.chars().count() + 1 + m.value.chars().count() <= w;
             let value = if fits { m.value.as_str() } else { "" };
-            styled_kv(&m.label, value, w, fg(MUTED), fg(MUTED))
+            styled_kv(&m.label, value, w, fg(pal.muted), fg(pal.muted))
         }
     }
 }
@@ -548,8 +578,8 @@ pub fn trend_line(
 ) -> Line<'static> {
     let (first, last) = (points.first().copied(), points.last().copied());
     let color = match (first, last) {
-        (Some(a), Some(b)) if b > a => RISE,
-        (Some(a), Some(b)) if b < a => WARN,
+        (Some(a), Some(b)) if b > a => pal.rise,
+        (Some(a), Some(b)) if b < a => pal.warn,
         _ => pal.value,
     };
     let label = fit(label, w.saturating_sub(value.chars().count() + 1));

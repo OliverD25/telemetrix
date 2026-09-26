@@ -21,6 +21,7 @@ use crate::themes::common::{self, ACCENT, MUTED, fg};
 pub const TOO_SMALL: &str = "terminal too small (need 40x10)";
 const OVERLAY_BG: Color = Color::Rgb(22, 22, 22);
 const OVERLAY_FG: Color = Color::Rgb(210, 210, 210);
+const STATUS_NAME: &str = " telemetrix ";
 
 pub fn draw(frame: &mut Frame, state: &AppState, theme: &mut dyn Theme) {
     let area = frame.area();
@@ -79,6 +80,15 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &AppState) {
         state.theme_name(),
         state.config.general.fps
     );
+    // On a narrow screen the memory figure goes first, so the program name
+    // on the left stays readable.
+    let memory = if memory.chars().count() + rest.chars().count() + STATUS_NAME.len()
+        > usize::from(area.width)
+    {
+        String::new()
+    } else {
+        memory
+    };
     let right_w = u16::try_from(memory.chars().count() + rest.chars().count()).unwrap_or(u16::MAX);
     let [left_area, right_area] =
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(right_w)]).areas(area);
@@ -87,7 +97,7 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &AppState) {
         .fg(Color::Rgb(190, 190, 190));
     let left = Line::from(vec![
         Span::styled(
-            " telemetrix ",
+            STATUS_NAME,
             Style::new()
                 .bg(ACCENT)
                 .fg(Color::Black)
@@ -563,7 +573,7 @@ mod tests {
 
     #[test]
     fn overlays_banner_and_toast_render_at_all_sizes() {
-        for theme in ["minimalist", "matrix"] {
+        for theme in crate::config::THEME_NAMES {
             let mut s = state(theme);
             s.config_status = ConfigStatus::Syntax {
                 line: Some(14),

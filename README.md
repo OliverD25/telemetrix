@@ -15,7 +15,8 @@ wrong value can never break.
 
 These are real renders of the program, drawn into a 100 by 30 text buffer
 with made-up data (a test prints them). The first theme is quiet; the second
-has digital rain behind the cards.
+has digital rain behind the cards. Three more colour themes are listed under
+[Themes](#themes).
 
 <!-- screenshot:start -->
 `minimalist`:
@@ -56,35 +57,35 @@ has digital rain behind the cards.
 `matrix`:
 
 ```text
-    ﾌ4     Lｭ  V Pｲ8   4 3      9  4  ﾖ   9     ﾔ   Tｻ   7  2  ZY4  R         O       S     ｮｩﾙ   W
-  ┌ CPU ────────────────────────┐  ┌ Disks ─────────────────────┐0 ┌ Clock ──────────────────────┐ﾕ
-  │ █████░░░░░░░░░░░░░░░░   23% │  │ Sys… 412.0 GiB / 931.0 GiB │ﾔ │ time               14:32:07 │1
-  │ temp                52.0 °C │  │ █████████░░░░░░░░░░░   44% │ﾖ │ date        Sat 26 Sep 2026 │ｻ
-  │ ▃▃▃▃▃▃▃▃▃▃▃▃▃▂▃▃▃▃▃▃▃▃▃▃▃▃▃ │  │ Games (… 1.6 TiB / 1.8 TiB │ﾋ └─────────────────────────────┘V
-  └─────────────────────────────┘  │ █████████████████░░░   87% │0 ｩｺ                  Rﾎ   ﾓ 7   5
-    ﾓﾚ    ｸ 0  1U        9 ﾔ     1 └────────────────────────────┘7 ┌ Crypto ─────────────────────┐K
-  ┌ RAM ────────────────────────┐7 1   4 DP        V ｳ      ﾔ ｹ  ﾍ │ BTC             84,853 USDT │
-  │ used    18.3 GiB / 64.0 GiB │W S   ﾋ ｻT    6   ｯ ｩ      ﾊ 0  ｶ │ 7d ▂▂▃▃▃▁▁▁▆▆▇▇▇▆▆▆██ +2.1% │
-  │ ██████░░░░░░░░░░░░░░░   29% │ﾓ ｺ   ﾑ R4    ﾅ   0 ﾋ      E 0  ﾒ │ ETH              2,725 USDT │
-  │ ▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃ │  ﾋ 7 ﾊ GR    R P ｭ      ﾅ ｧ ﾗ  F │ 7d ██▇▇▇▅▅▅▆▆▁▁▁▄▄▄▂▂ -1.4% │
-  └─────────────────────────────┘    ｱ Z ﾗｦ    1 T        ｮ ﾝ ﾍ  J └─────────────────────────────┘
-    ｦ     6     ｹ   I      ﾖ G       J ｧ ｬｩ    P A        8   ﾅ  U        6          ﾉ ﾆ  5   ｬ
-  ┌ Swap ───────────────────────┐ ｯ  ﾓ 9 ﾆ9    ｪ ﾌ        4   ｺ  6 ┌ Weather ────────────────────┐
-  │ used    512.0 MiB / 8.0 GiB │ ｯ  Q ｮ ﾝR    1 9        7        │ now        17°C, wind 3 m/s │
-  │ █░░░░░░░░░░░░░░░░░░░░    6% │ ｦ  ｯ   Zｮ    ｬ 8        ｬ        │ Sun      9..18°C cloudy 20% │
-  └─────────────────────────────┘ 2  I   34    ﾛ A        B        │ Mon        8..15°C rain 70% │
-    ｽ     L     J   L ﾜ   ﾀｮ ﾋｾｲ  ﾇ  ｩ    2    ﾒ ｰ        ﾎ        │ data: Open-Meteo.com        │
-  ┌ GPU ────────────────────────┐ M  ﾕ         9 1        ｭ        └─────────────────────────────┘
-  │ NVIDIA GeForce RTX 4090     │ 5  2           S    ﾔ   W           64 8L          ｹ
-  │ ████████░░░░░░░░░░░░░   37% │ 1  ﾘ           ﾝ    ﾋ   ｪ           ｴ  9           ﾍ
-  │ vram     9.0 GiB / 24.0 GiB │ P              ｯ    3   K           ﾎ  R           T
-  │ ████████░░░░░░░░░░░░░   38% │ ｮ              ｲ    1   S           ﾔ  ﾝ
-  │ temp                45.0 °C │ X              1    2   ﾀ           1  F
-  │ power               112.4 W │ R              ﾇ        9           ｩ  0
-  └─────────────────────────────┘ 8              E        0           ﾗ  1
-                      ｳ       ｨ                  6        Q           ﾄ  ｭ
-                      W       A
-
+     1    ｫ   ｯ         1  L  ﾗ    ｳ ｰ    7P          Cﾆﾇ        DX  1Y   3    ﾗ                ｷ
+  ┌ CPU ────────────────────────┐  ┌ Disks ─────────────────────┐5 ┌ Clock ──────────────────────┐
+  │ █████░░░░░░░░░░░░░░░░   23% │  │ Sys… 412.0 GiB / 931.0 GiB │O │ time               14:32:07 │
+  │ temp                52.0 °C │  │ █████████░░░░░░░░░░░   44% │4 │ date        Sat 26 Sep 2026 │
+  │ ▃▃▃▃▃▃▃▃▃▃▃▃▃▂▃▃▃▃▃▃▃▃▃▃▃▃▃ │  │ Games (… 1.6 TiB / 1.8 TiB │ﾘ └─────────────────────────────┘
+  └─────────────────────────────┘  │ █████████████████░░░   87% │ﾏ                       6  8
+     ｨ                     ｩ       └────────────────────────────┘  ┌ Crypto ─────────────────────┐
+  ┌ RAM ────────────────────────┐       ﾖ        I ﾐ  ﾑEﾍ          │ BTC             84,853 USDT │
+  │ used    18.3 GiB / 64.0 GiB │       ﾒ        ﾒ 4  Lｸ4          │ 7d ▂▂▃▃▃▁▁▁▆▆▇▇▇▆▆▆██ +2.1% │
+5 │ ██████░░░░░░░░░░░░░░░   29% │       Q        6 ﾝ   ｫY          │ ETH              2,725 USDT │
+5 │ ▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃ │ H     U5       ｽ ﾚ   ｭE          │ 7d ██▇▇▇▅▅▅▆▆▁▁▁▄▄▄▂▂ -1.4% │
+ﾈ └─────────────────────────────┘ 5     ﾋQ       0 4   74          └─────────────────────────────┘
+ﾜ  ﾅ ﾅ           9    ﾚ        3  F     H2       ｴ     ｴR           ﾉ  Z              V  D  ﾉ
+ﾑ ┌ Swap ───────────────────────┐ S    ｩﾀ1             2           ┌ Weather ────────────────────┐
+1 │ used    512.0 MiB / 8.0 GiB │      4Jﾒ             7           │ now        17°C, wind 3 m/s │
+D │ █░░░░░░░░░░░░░░░░░░░░    6% │      ｵ28             ﾈ           │ Sun      9..18°C cloudy 20% │
+ﾈ └─────────────────────────────┘      ｺﾔ9             G           │ Mon        8..15°C rain 70% │
+Q  ﾑ    ｵ8       R             6       ﾕﾈﾌ                 ｳ       │ data: Open-Meteo.com        │
+ｽ ┌ GPU ────────────────────────┐        L     5           Hﾔ      └─────────────────────────────┘
+ｶ │ NVIDIA GeForce RTX 4090     │        3     ｮ           31       ﾅ  ﾈｨ  8          ｷ  ｦ
+ﾈ │ ████████░░░░░░░░░░░░░   37% │        5     ﾜ           8ﾀ       ｪ  ﾂｾ  ｮ          ｳ  ｶ
+9 │ vram     9.0 GiB / 24.0 GiB │        ﾁ     4           ｰ2      ｱｸ  6ﾐ  ｵ          ﾏ       1
+7 │ ████████░░░░░░░░░░░░░   38% │              ｸ           5I      ﾀ   ｨ8  ｨ       B  ｪ       I
+ﾃ │ temp                45.0 °C │              ｽ           8H      S   ﾙﾆ  ﾖ       8  ﾏ       ﾀ
+ﾀ │ power               112.4 W │              ﾄ           6ﾚ      3   9ﾁ  ﾔ       1  ﾂ       V
+ｳ └─────────────────────────────┘              ﾇ           ｵM      K    X  F       H  ﾀ       ｻ
+                             7 ｽ               ﾉ           ﾒ9      ｱ    ｴ  ｵ       9  H
+                             F                 J            L      E    ｸ  5          ﾃ
+                                                                   Z       ﾎ
  telemetrix  · t themes · s settings · l log · ? help · q quit       self 11.5 MB · matrix · 15 fps
 ```
 <!-- screenshot:end -->
@@ -188,7 +189,7 @@ only `Ctrl+C` quits.
 | Flag | Meaning |
 |---|---|
 | `--config <path>` | use this settings file |
-| `--theme <name>` | `minimalist` or `matrix` |
+| `--theme <name>` | `minimalist`, `matrix`, `tokyo-night`, `crt-amber` or `cyberpunk` |
 | `--fps <n>` | frames per second for animated themes, 1..60 |
 | `--plugins-dir <dir>` | folder with `.lua` plugins |
 | `--no-plugins` | run no plugins |
@@ -225,11 +226,22 @@ These need no terminal window, so scripts and agents can use them.
   second. Density, speed and colour are in `[theme.matrix]`. On very large
   terminals (over 20 000 cells) it limits itself to 10 frames per second.
 - **minimalist**: grey cards, colour only where a value is above its
-  threshold. It redraws only when data changes.
+  threshold.
+- **tokyo-night**: the Tokyo Night colours: a dark slate background with
+  quiet blues, purples and soft accents.
+- **crt-amber**: an old amber monitor: amber on near-black, heavy card
+  frames, and every second row a little darker, like scanlines.
+- **cyberpunk**: a neon HUD: magenta titles in `[ brackets ]`, cyan frames
+  and yellow values on a near-black background.
 
-Both themes lay the cards out in three columns on wide terminals, two on
+Every theme except matrix is static: it redraws only when data changes, so
+it uses almost no CPU. Press `t` to try them with a live preview.
+
+All themes lay the cards out in three columns on wide terminals, two on
 medium ones and one on narrow ones. Below 40 by 10 cells the screen only says
-"terminal too small".
+"terminal too small". They show the same cards and rows; only the colours,
+frames and background differ. The status bar and the boxes (`s`, `l`, `t`,
+`?`) look the same in every theme.
 
 ### GPU card (NVIDIA)
 
@@ -272,7 +284,8 @@ On Linux, mounts of type nfs, nfs4, cifs, smb3, smbfs, fuse.sshfs and 9p go
 to the Network card. A hung network mount can still delay the disk
 readings there; protecting against that is planned after v0.1.
 
-**Roadmap:** the original brief lists eight more themes. They are planned for
+**Roadmap:** the original brief lists eight more themes; three of them are
+here (tokyo-night, crt-amber, cyberpunk). The other five are planned for
 later versions.
 
 ## Where plugins live
@@ -421,7 +434,7 @@ no longer matches the program.
 | Key | Default | Allowed values | In the `s` overlay | Meaning |
 |---|---|---|---|---|
 | `schema` | `1` | 1..1 | no, edit the file | format version of this file, do not change |
-| `general.theme` | `"matrix"` | minimalist \| matrix | yes | minimalist \| matrix |
+| `general.theme` | `"matrix"` | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk | yes | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk |
 | `general.fps` | `15` | 1..60 | yes | frames per second for animated themes, 1..60 |
 | `general.exit_on_any_key` | `false` | true \| false | yes | true = screensaver mode: any key quits |
 | `general.plugins_dir` | `""` | a file or folder path | no, edit the file | empty = the plugins folder next to this file; relative paths start there |

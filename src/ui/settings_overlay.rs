@@ -545,7 +545,7 @@ mod tests {
             set("general.theme", 1),
             Some(Change::Set(
                 "general.theme".into(),
-                Value::Str("minimalist".into())
+                Value::Str("tokyo-night".into())
             ))
         );
         assert_eq!(

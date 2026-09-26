@@ -154,7 +154,16 @@ pub fn lines(buf: &Buffer) -> String {
 #[test]
 #[ignore = "prints the README screenshot"]
 fn readme_screenshot() {
-    for name in crate::config::THEME_NAMES {
+    // Colour is most of what tells the other themes apart, and text has none.
+    for name in ["minimalist", "matrix"] {
         println!("--- {name}\n{}", lines(&render(&state(name), 100, 30)));
+    }
+}
+
+#[test]
+#[ignore = "prints a small render of every theme"]
+fn theme_samples() {
+    for name in crate::config::THEME_NAMES {
+        println!("--- {name}\n{}", lines(&render(&state(name), 72, 18)));
     }
 }

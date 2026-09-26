@@ -563,7 +563,7 @@ mod tests {
         lp.act(Action::OpenThemes);
         assert_eq!(lp.state.overlay, Overlay::Themes);
         lp.act(Action::PickerMove(1));
-        assert_eq!(lp.state.theme_name(), "minimalist", "live preview");
+        assert_eq!(lp.state.theme_name(), "tokyo-night", "live preview");
         lp.act(Action::PickerCancel);
         assert_eq!(lp.state.theme_name(), "matrix");
         assert_eq!(lp.state.overlay, Overlay::None);
@@ -624,12 +624,16 @@ mod tests {
         let mut lp = Loop::for_test(Config::default(), Flags::default(), path.clone());
         lp.act(Action::OpenThemes);
         lp.act(Action::PickerMove(1));
-        assert_eq!(lp.state.theme_name(), "minimalist");
+        assert_eq!(lp.state.theme_name(), "tokyo-night");
         config::set(&path, "general.theme", &Value::Str("minimalist".into())).unwrap();
         lp.reload();
         assert_eq!(lp.state.overlay, Overlay::Themes, "the picker stays open");
         lp.act(Action::PickerMove(1));
-        assert_eq!(lp.state.theme_name(), "matrix", "the preview keeps working");
+        assert_eq!(
+            lp.state.theme_name(),
+            "crt-amber",
+            "the preview keeps working"
+        );
         lp.act(Action::PickerCancel);
         assert_eq!(
             lp.state.theme_name(),

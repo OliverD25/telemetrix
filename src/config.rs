@@ -14,7 +14,13 @@ use toml_edit::{DocumentMut, Item, Table};
 
 use crate::cli::Flags;
 
-pub const THEME_NAMES: &[&str] = &["minimalist", "matrix"];
+pub const THEME_NAMES: &[&str] = &[
+    "minimalist",
+    "matrix",
+    "tokyo-night",
+    "crt-amber",
+    "cyberpunk",
+];
 pub const MATRIX_COLORS: &[&str] = &["green", "amber", "cyan", "white"];
 const FILE_NAME: &str = "telemetrix.toml";
 const PLUGIN_MIN_INTERVAL: i64 = 5;
@@ -145,7 +151,7 @@ pub static SETTINGS: &[Setting] = &[
         Kind::Enum(THEME_NAMES),
         text("matrix"),
         true,
-        "minimalist | matrix",
+        "minimalist | matrix | tokyo-night | crt-amber | cyberpunk",
     ),
     setting(
         "general.fps",
@@ -1324,7 +1330,9 @@ mod tests {
     fn default_file_matches_the_plan_layout() {
         let text = render_default_file();
         assert!(text.starts_with("# telemetrix settings."));
-        assert!(text.contains("\ntheme = \"matrix\"            # minimalist | matrix\n"));
+        assert!(text.contains(
+            "\ntheme = \"matrix\"            # minimalist | matrix | tokyo-night | crt-amber | cyberpunk\n"
+        ));
         assert!(text.contains("\nfps = 15                    # frames per second"));
         assert!(text.contains("\n[theme.matrix]\ndensity = 0.5"));
         assert!(text.contains("\n[plugin.crypto]\ninterval = 60\n"));

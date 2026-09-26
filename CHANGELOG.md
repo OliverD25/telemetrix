@@ -21,6 +21,8 @@ All notable changes to telemetrix. Versions follow
   power, read through NVML (loaded at run time, no link-time dependency).
   Off by default (`gpu.enabled`), because NVML adds about 24 MB of memory.
   `snapshot --json` lists the GPUs in `system.gpus`.
+- **Three new themes:** `tokyo-night`, `crt-amber` (with scanlines) and
+  `cyberpunk`. All three are static, so they use almost no CPU.
 - **Screensaver command:** `telemetrix screensaver install [--idle-minutes N]`
   registers a small watcher as a logon task. It opens the dashboard full
   screen after N minutes without input and closes on any key. `uninstall`
