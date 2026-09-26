@@ -253,6 +253,20 @@ pub static SETTINGS: &[Setting] = &[
         "highlight disks fuller than this",
     ),
     setting(
+        "gpu.enabled",
+        Kind::Bool,
+        Value::Bool(false),
+        true,
+        "NVIDIA GPU card; NVML adds about 24 MB, so it is off by default",
+    ),
+    setting(
+        "gpu.interval_ms",
+        int(500, 60_000),
+        Value::Int(2000),
+        true,
+        "500..60000",
+    ),
+    setting(
         "disks.show_network",
         Kind::Bool,
         Value::Bool(true),
@@ -475,6 +489,12 @@ pub struct Memory {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct Gpu {
+    pub enabled: bool,
+    pub interval_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Disks {
     pub show_network: bool,
     pub network_interval_s: u64,
@@ -533,6 +553,7 @@ pub struct Config {
     pub units: Units,
     pub metrics: Metrics,
     pub thresholds: Thresholds,
+    pub gpu: Gpu,
     pub disks: Disks,
     pub plugins: Plugins,
     pub memory: Memory,
@@ -562,6 +583,10 @@ impl Default for Config {
                 temps_interval_ms: 0,
                 disks_interval_ms: 0,
                 history_len: 0,
+            },
+            gpu: Gpu {
+                enabled: false,
+                interval_ms: 0,
             },
             disks: Disks {
                 show_network: false,
@@ -645,6 +670,8 @@ impl Config {
             "thresholds.cpu_warn_pct" => Value::Int(self.thresholds.cpu_warn_pct as i64),
             "thresholds.temp_warn_c" => Value::Int(self.thresholds.temp_warn_c as i64),
             "thresholds.disk_warn_pct" => Value::Int(self.thresholds.disk_warn_pct as i64),
+            "gpu.enabled" => Value::Bool(self.gpu.enabled),
+            "gpu.interval_ms" => Value::Int(self.gpu.interval_ms as i64),
             "disks.show_network" => Value::Bool(self.disks.show_network),
             "disks.network_interval_s" => Value::Int(self.disks.network_interval_s as i64),
             "disks.network_timeout_s" => Value::Int(self.disks.network_timeout_s as i64),
@@ -704,6 +731,8 @@ impl Config {
             "thresholds.cpu_warn_pct" => self.thresholds.cpu_warn_pct = v.as_f64() as f32,
             "thresholds.temp_warn_c" => self.thresholds.temp_warn_c = v.as_f64() as f32,
             "thresholds.disk_warn_pct" => self.thresholds.disk_warn_pct = v.as_f64() as f32,
+            "gpu.enabled" => self.gpu.enabled = v.as_bool(),
+            "gpu.interval_ms" => self.gpu.interval_ms = clamp_u64(v),
             "disks.show_network" => self.disks.show_network = v.as_bool(),
             "disks.network_interval_s" => self.disks.network_interval_s = clamp_u64(v),
             "disks.network_timeout_s" => self.disks.network_timeout_s = clamp_u64(v),

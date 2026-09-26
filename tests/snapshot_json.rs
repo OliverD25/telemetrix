@@ -20,6 +20,8 @@ fn snapshot_json_has_the_documented_shape() {
         .expect("cpu_usage_pct is a number");
     assert!((0.0..=100.0).contains(&cpu), "cpu_usage_pct = {cpu}");
     assert!(doc["system"]["disks"].is_array());
-    assert_eq!(doc["system"]["gpus"], serde_json::json!([]));
+    // Empty without an NVIDIA driver; with one, every GPU has a name.
+    let gpus = doc["system"]["gpus"].as_array().expect("gpus is a list");
+    assert!(gpus.iter().all(|g| g["name"].as_str().is_some()));
     assert!(doc["timestamp"].as_str().is_some_and(|t| t.ends_with('Z')));
 }

@@ -1,4 +1,5 @@
 pub mod cpu;
+pub mod gpu;
 pub mod network;
 pub mod worker;
 
@@ -13,7 +14,7 @@ pub struct SystemSnapshot {
     pub swap_used_bytes: u64,
     pub swap_total_bytes: u64,
     pub disks: Vec<DiskMetric>,
-    /// Always empty in v0.1; GPU metrics are planned for v0.2.
+    /// NVIDIA GPUs (NVML); empty without an NVIDIA driver or with `gpu.enabled = false`.
     pub gpus: Vec<GpuMetric>,
     /// Network mounts on Linux; Windows has its own network-drive thread.
     pub network: Vec<NetDrive>,
@@ -28,10 +29,15 @@ pub struct DiskMetric {
     pub total_bytes: u64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// One GPU reading; a value the GPU does not report is `None`.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct GpuMetric {
     pub name: String,
     pub usage_pct: Option<f32>,
+    pub mem_used_bytes: Option<u64>,
+    pub mem_total_bytes: Option<u64>,
+    pub temp_c: Option<f32>,
+    pub power_w: Option<f32>,
 }
 
 impl DiskMetric {

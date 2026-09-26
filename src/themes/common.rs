@@ -111,18 +111,28 @@ impl Card {
 #[derive(Clone, Copy)]
 enum Group {
     System,
+    Gpu,
     Disks,
     Plugins,
 }
 
-/// Three columns from 96 cells wide, two from 64, else one.
+/// Three columns from 96 cells wide, two from 64, else one. With fewer
+/// columns the GPU card comes after Disks, so the cards that were there
+/// before it keep their place when space runs out.
 pub fn draw_columns(frame: &mut Frame, body: Rect, state: &AppState, pal: &Palette, spaced: bool) {
     let plan: &[&[Group]] = if body.width >= 96 {
-        &[&[Group::System], &[Group::Disks], &[Group::Plugins]]
+        &[
+            &[Group::System, Group::Gpu],
+            &[Group::Disks],
+            &[Group::Plugins],
+        ]
     } else if body.width >= 64 {
-        &[&[Group::System, Group::Disks], &[Group::Plugins]]
+        &[
+            &[Group::System, Group::Disks, Group::Gpu],
+            &[Group::Plugins],
+        ]
     } else {
-        &[&[Group::System, Group::Disks, Group::Plugins]]
+        &[&[Group::System, Group::Disks, Group::Gpu, Group::Plugins]]
     };
     let (margin, gap) = if spaced { (1, 1) } else { (0, 0) };
     let columns = Layout::horizontal(vec![Constraint::Fill(1); plan.len()])
@@ -136,6 +146,7 @@ pub fn draw_columns(frame: &mut Frame, body: Rect, state: &AppState, pal: &Palet
             .iter()
             .flat_map(|g| match g {
                 Group::System => system_cards(state, pal, w),
+                Group::Gpu => gpu_cards(state, pal, w),
                 Group::Disks => std::iter::once(disk_card(state, pal, w))
                     .chain(network_card(state, pal, w))
                     .collect(),
@@ -301,6 +312,51 @@ fn system_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
         Card::new("RAM", ram),
         Card::new("Swap", swap),
     ]
+}
+
+/// One card per NVIDIA GPU; none without readings or with `gpu.enabled = false`.
+fn gpu_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
+    let cfg = &state.config;
+    let gpus = match &state.snapshot {
+        Some(s) if cfg.gpu.enabled => &s.gpus,
+        _ => return Vec::new(),
+    };
+    gpus.iter()
+        .enumerate()
+        .map(|(i, g)| {
+            let mut lines = vec![Line::styled(fit(&g.name, w), fg(pal.label))];
+            if let Some(load) = g.usage_pct {
+                lines.push(bar(load, w, pal, false));
+            }
+            if let (Some(used), Some(total)) = (g.mem_used_bytes, g.mem_total_bytes) {
+                lines.push(kv("vram", used_of(used, total, state), w, pal, pal.value));
+                lines.push(bar(metrics::pct(used, total), w, pal, false));
+            }
+            if let Some(t) = g.temp_c {
+                let color = if t > cfg.thresholds.temp_warn_c {
+                    WARN
+                } else {
+                    pal.value
+                };
+                lines.push(kv(
+                    "temp",
+                    format::temperature(t, cfg.units.temperature),
+                    w,
+                    pal,
+                    color,
+                ));
+            }
+            if let Some(watts) = g.power_w {
+                lines.push(kv("power", format!("{watts:.1} W"), w, pal, pal.value));
+            }
+            let title = if gpus.len() > 1 {
+                format!("GPU {}", i + 1)
+            } else {
+                "GPU".to_string()
+            };
+            Card::new(title, lines)
+        })
+        .collect()
 }
 
 fn disk_card(state: &AppState, pal: &Palette, w: usize) -> Card {

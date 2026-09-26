@@ -401,6 +401,65 @@ mod tests {
         );
     }
 
+    fn cell_color(buf: &Buffer, needle: &str) -> Option<Color> {
+        let cells = buf.content();
+        let chars: Vec<&str> = cells.iter().map(|c| c.symbol()).collect();
+        let n = needle.chars().count();
+        let pos = chars.windows(n).position(|w| w.concat() == needle)?;
+        Some(cells[pos].fg)
+    }
+
+    #[test]
+    fn gpu_card_renders_at_three_two_and_one_columns() {
+        for theme in crate::config::THEME_NAMES {
+            for (w, h) in [(120, 40), (80, 40), (50, 60)] {
+                let s = demo::state(theme);
+                let t = text(&demo::render(&s, w, h));
+                let at = format!("{theme} {w}x{h}");
+                assert!(t.contains(" GPU "), "{at}: card title");
+                assert!(t.contains("NVIDIA GeForce"), "{at}: the name");
+                assert!(
+                    t.contains("vram") && t.contains("9.0 GiB / 24.0 GiB"),
+                    "{at}"
+                );
+                assert!(t.contains("45.0 °C") && t.contains("112.4 W"), "{at}");
+                assert!(t.contains(" 37%"), "{at}: the load gauge");
+                assert!(t.contains(" Disks ") && t.contains(" CPU "), "{at}");
+            }
+        }
+    }
+
+    #[test]
+    fn gpu_card_hides_follows_units_and_warns_when_hot() {
+        let mut s = demo::state("minimalist");
+        s.config.gpu.enabled = false;
+        assert!(!text(&demo::render(&s, 120, 40)).contains(" GPU "), "off");
+        s.config.gpu.enabled = true;
+        let mut snap = demo::snapshot();
+        snap.gpus.clear();
+        s.snapshot = Some(snap.clone());
+        assert!(
+            !text(&demo::render(&s, 120, 40)).contains(" GPU "),
+            "no GPU"
+        );
+
+        let hot = crate::metrics::GpuMetric {
+            name: "Hot One".into(),
+            temp_c: Some(90.0),
+            ..Default::default()
+        };
+        snap.gpus = vec![hot, demo::snapshot().gpus.remove(0)];
+        s.snapshot = Some(snap);
+        let buf = demo::render(&s, 120, 40);
+        let t = text(&buf);
+        assert!(t.contains(" GPU 1 ") && t.contains(" GPU 2 "), "{t}");
+        assert_eq!(cell_color(&buf, "90.0 °C"), Some(WARN));
+        assert_ne!(cell_color(&buf, "45.0 °C"), Some(WARN));
+        s.config.units.temperature = crate::config::TempUnit::Fahrenheit;
+        let t = text(&demo::render(&s, 120, 40));
+        assert!(t.contains("194.0 °F") && t.contains("113.0 °F"), "{t}");
+    }
+
     #[test]
     fn tiny_terminal_shows_the_notice() {
         assert!(text(&render(&state("minimalist"), 30, 5)).contains("terminal too small"));

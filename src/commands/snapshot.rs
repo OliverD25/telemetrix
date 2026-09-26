@@ -53,7 +53,15 @@ pub fn to_json(
     let gpus: Vec<Value> = s
         .gpus
         .iter()
-        .map(|g| json!({ "name": g.name, "usage_pct": g.usage_pct.map(round1) }))
+        .map(|g| {
+            json!({
+                "name": g.name,
+                "usage_pct": g.usage_pct.map(round1),
+                "memory": { "used_bytes": g.mem_used_bytes, "total_bytes": g.mem_total_bytes },
+                "temp_c": g.temp_c.map(round1),
+                "power_w": g.power_w.map(round1),
+            })
+        })
         .collect();
     let mut doc = json!({
         "schema": 1,
@@ -115,6 +123,26 @@ pub fn to_text(
             used_of(s.swap_used_bytes, s.swap_total_bytes),
         ),
     ];
+    for g in &s.gpus {
+        let mut parts = Vec::new();
+        if let Some(u) = g.usage_pct {
+            parts.push(format::pct(u));
+        }
+        if let (Some(used), Some(total)) = (g.mem_used_bytes, g.mem_total_bytes) {
+            parts.push(format!(
+                "vram {} / {}",
+                format::bytes(used, unit),
+                format::bytes(total, unit)
+            ));
+        }
+        if let Some(t) = g.temp_c {
+            parts.push(format::temperature(t, cfg.units.temperature));
+        }
+        if let Some(w) = g.power_w {
+            parts.push(format!("{w:.1} W"));
+        }
+        rows.push((format!("gpu {}", g.name), parts.join(", ")));
+    }
     for d in &s.disks {
         rows.push((
             format!("disk {}", d.title()),
@@ -145,7 +173,8 @@ pub fn host_name() -> String {
 
 pub fn run(json: bool, with_plugins: bool, flags: &Flags) -> ExitCode {
     let (path, cfg, _) = config::load_effective(flags);
-    let snapshot = worker::read_once();
+    // Always with GPUs: NVML's memory only matters in the long-running dashboard.
+    let snapshot = worker::read_once(true);
     let d = &cfg.disks;
     let drives = if !d.show_network {
         Vec::new()
@@ -172,7 +201,7 @@ pub fn run(json: bool, with_plugins: bool, flags: &Flags) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metrics::DiskMetric;
+    use crate::metrics::{DiskMetric, GpuMetric};
 
     #[test]
     fn json_shape() {
@@ -203,6 +232,36 @@ mod tests {
         }
         let doc = to_json(&s, &[], "PC", "t", Some(Vec::new()));
         assert_eq!(doc["plugins"], json!([]));
+    }
+
+    #[test]
+    fn gpus_in_json_and_text() {
+        let s = SystemSnapshot {
+            gpus: vec![GpuMetric {
+                name: "NVIDIA GeForce RTX 4090".into(),
+                usage_pct: Some(12.0),
+                mem_used_bytes: Some(3 << 30),
+                mem_total_bytes: Some(24 << 30),
+                temp_c: Some(45.0),
+                power_w: Some(35.24),
+            }],
+            ..SystemSnapshot::default()
+        };
+        let doc = to_json(&s, &[], "PC", "t", None);
+        let g = &doc["system"]["gpus"][0];
+        assert_eq!(g["name"], "NVIDIA GeForce RTX 4090");
+        assert_eq!(g["usage_pct"], 12.0);
+        assert_eq!(g["memory"]["total_bytes"], 24u64 << 30);
+        assert_eq!(g["temp_c"], 45.0);
+        assert_eq!(g["power_w"], 35.2);
+        let text = to_text(&s, &[], "PC", "t", &Config::default());
+        assert!(
+            text.contains(
+                "gpu NVIDIA GeForce RTX 4090  12.0 %, vram 3.0 GiB / 24.0 GiB, 45.0 °C, 35.2 W
+"
+            ),
+            "{text}"
+        );
     }
 
     #[test]

@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 use sysinfo::{Components, DiskRefreshKind, Disks, MemoryRefreshKind, System};
 
 use super::cpu::{self, CpuMeter};
+use super::gpu::Nvml;
 use super::network::{LINUX_NETWORK_FS, NetDrive, split_remote};
-use super::{DiskMetric, SystemSnapshot};
+use super::{DiskMetric, GpuMetric, SystemSnapshot};
 use crate::config::Config;
 use crate::event::{AppEvent, WorkerCmd};
 
@@ -26,6 +27,8 @@ pub struct MetricsIntervals {
     pub memory: Duration,
     pub temps: Duration,
     pub disks: Duration,
+    pub gpu: Duration,
+    pub gpu_enabled: bool,
 }
 
 impl MetricsIntervals {
@@ -37,11 +40,13 @@ impl MetricsIntervals {
             memory: ms(m.memory_interval_ms),
             temps: ms(m.temps_interval_ms),
             disks: ms(m.disks_interval_ms),
+            gpu: ms(cfg.gpu.interval_ms),
+            gpu_enabled: cfg.gpu.enabled,
         }
     }
 
-    fn all(&self) -> [Duration; 4] {
-        [self.cpu, self.memory, self.temps, self.disks]
+    fn all(&self) -> [Duration; 5] {
+        [self.cpu, self.memory, self.temps, self.disks, self.gpu]
     }
 }
 
@@ -56,6 +61,9 @@ pub struct Sampler {
     /// False when no sensor reported a temperature at start (most Windows PCs).
     temps: bool,
     disks: Disks,
+    /// Loaded only while `gpu.enabled`; `None` also when loading failed.
+    nvml: Option<Nvml>,
+    gpus: Vec<GpuMetric>,
 }
 
 impl Sampler {
@@ -82,11 +90,35 @@ impl Sampler {
             components: if temps { components } else { Components::new() },
             temps,
             disks: Disks::new_with_refreshed_list_specifics(disk_kind()),
+            nvml: None,
+            gpus: Vec::new(),
         }
     }
 
-    /// Refreshes the sources whose index (cpu, memory, temps, disks) is set.
-    fn refresh(&mut self, due: [bool; 4]) {
+    /// Loads or unloads NVML; returns the line for the log. A failure only
+    /// means no GPU card.
+    pub fn set_gpu(&mut self, enabled: bool) -> String {
+        self.gpus.clear();
+        if !enabled {
+            self.nvml = None;
+            return "gpu: off (gpu.enabled = false)".into();
+        }
+        match Nvml::load() {
+            Ok(nvml) => {
+                let names = nvml.names().join(", ");
+                self.gpus = nvml.read();
+                self.nvml = Some(nvml);
+                format!("gpu: NVML loaded: {names}")
+            }
+            Err(reason) => {
+                self.nvml = None;
+                format!("gpu: {reason}; no GPU card")
+            }
+        }
+    }
+
+    /// Refreshes the sources whose index (cpu, memory, temps, disks, gpu) is set.
+    fn refresh(&mut self, due: [bool; 5]) {
         if due[0] {
             self.cpu.refresh(&mut self.sys);
         }
@@ -98,6 +130,11 @@ impl Sampler {
         }
         if due[3] {
             self.disks.refresh_specifics(true, disk_kind());
+        }
+        if due[4]
+            && let Some(nvml) = &self.nvml
+        {
+            self.gpus = nvml.read();
         }
     }
 
@@ -119,7 +156,7 @@ impl Sampler {
             swap_used_bytes: self.sys.used_swap(),
             swap_total_bytes: self.sys.total_swap(),
             disks,
-            gpus: Vec::new(),
+            gpus: self.gpus.clone(),
             network,
         }
     }
@@ -165,8 +202,12 @@ fn sensors_worth_loading() -> bool {
     }
 }
 
-pub fn read_once() -> SystemSnapshot {
-    Sampler::new().snapshot()
+pub fn read_once(gpu: bool) -> SystemSnapshot {
+    let mut sampler = Sampler::new();
+    if gpu {
+        sampler.set_gpu(true);
+    }
+    sampler.snapshot()
 }
 
 /// Known CPU package sensors first, else the hottest CPU-like sensor.
@@ -340,6 +381,10 @@ fn run(mut intervals: MetricsIntervals, tx: &Sender<AppEvent>, cmds: &mpsc::Rece
     if tx.send(AppEvent::Metrics(last.clone())).is_err() {
         return;
     }
+    // After the first snapshot, so starting NVML never delays the CPU and RAM cards.
+    if intervals.gpu_enabled && tx.send(AppEvent::Log(sampler.set_gpu(true))).is_err() {
+        return;
+    }
     let start = Instant::now();
     let mut next = intervals.all().map(|iv| start + iv);
     loop {
@@ -347,6 +392,9 @@ fn run(mut intervals: MetricsIntervals, tx: &Sender<AppEvent>, cmds: &mpsc::Rece
         match cmds.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(WorkerCmd::Stop) | Err(RecvTimeoutError::Disconnected) => return,
             Ok(WorkerCmd::Reconfigure(new)) => {
+                if new.gpu_enabled != intervals.gpu_enabled {
+                    let _ = tx.send(AppEvent::Log(sampler.set_gpu(new.gpu_enabled)));
+                }
                 intervals = new;
                 let now = Instant::now();
                 next = intervals.all().map(|iv| now + iv);

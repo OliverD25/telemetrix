@@ -17,6 +17,10 @@ All notable changes to telemetrix. Versions follow
 - **Built-in plugins:** the default plugins are built into the program and
   are installed next to the settings file on the first start.
   `telemetrix plugin install` restores or updates them.
+- **GPU card** for NVIDIA GPUs: name, load, video memory, temperature and
+  power, read through NVML (loaded at run time, no link-time dependency).
+  Off by default (`gpu.enabled`), because NVML adds about 24 MB of memory.
+  `snapshot --json` lists the GPUs in `system.gpus`.
 - **Memory soak test:** `selftest --memory --soak <minutes>` checks that
   memory does not grow over a long run.
 

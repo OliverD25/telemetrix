@@ -35,14 +35,14 @@ has digital rain behind the cards.
 │ used      512.0 MiB / 8.0 GiB │                                  │ now          17°C, wind 3 m/s │
 │ █░░░░░░░░░░░░░░░░░░░░░░    6% │                                  │ Sun        9..18°C cloudy 20% │
 ╰───────────────────────────────╯                                  │ Mon          8..15°C rain 70% │
-                                                                   │ data: Open-Meteo.com          │
-                                                                   ╰───────────────────────────────╯
-
-
-
-
-
-
+╭ GPU ──────────────────────────╮                                  │ data: Open-Meteo.com          │
+│ NVIDIA GeForce RTX 4090       │                                  ╰───────────────────────────────╯
+│ █████████░░░░░░░░░░░░░░   37% │
+│ vram       9.0 GiB / 24.0 GiB │
+│ █████████░░░░░░░░░░░░░░   38% │
+│ temp                  45.0 °C │
+│ power                 112.4 W │
+╰───────────────────────────────╯
 
 
 
@@ -56,35 +56,35 @@ has digital rain behind the cards.
 `matrix`:
 
 ```text
-  ﾛ           ｧK                Z ﾜ                ｱ         ｷ           U    ｹG
-  ┌ CPU ────────────────────────┐ ｾ┌ Disks ─────────────────────┐  ┌ Clock ──────────────────────┐
-  │ █████░░░░░░░░░░░░░░░░   23% │ ﾁ│ Sys… 412.0 GiB / 931.0 GiB │  │ time               14:32:07 │
-  │ temp                52.0 °C │ T│ █████████░░░░░░░░░░░   44% │  │ date        Sat 26 Sep 2026 │
-  │ ▃▃▃▃▃▃▃▃▃▃▃▃▃▂▃▃▃▃▃▃▃▃▃▃▃▃▃ │ F│ Games (… 1.6 TiB / 1.8 TiB │  └─────────────────────────────┘
-  └─────────────────────────────┘ K│ █████████████████░░░   87% │        ﾗ       2       ｹ
-      C       6    ﾄ  9         W ﾄ└────────────────────────────┘  ┌ Crypto ─────────────────────┐
-  ┌ RAM ────────────────────────┐ M       W     5  5         ﾘ  ﾆ  │ BTC             84,853 USDT │
-  │ used    18.3 GiB / 64.0 GiB │Cｫ       Z     2  6         Yｨ 8  │ 7d ▂▂▃▃▃▁▁▁▆▆▇▇▇▆▆▆██ +2.1% │
-  │ ██████░░░░░░░░░░░░░░░   29% │ｮW       ｩ     ｮﾖ L       ｨ 8ｮ 8ﾝ │ ETH              2,725 USDT │
-  │ ▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃ │ﾋﾂ       9     36 ﾝ  Q    ｨ  ｾ ﾗﾏ │ 7d ██▇▇▇▅▅▅▆▆▁▁▁▄▄▄▂▂ -1.4% │
-  └─────────────────────────────┘ﾌ               ﾃ 3  0    ﾐ  ﾋ 8ﾖ └─────────────────────────────┘
-    K              ｰ  9          Z          ﾀ    ｧ    T3   ﾘ  ｫ ﾓﾕ 2   2    ﾑ    P     ﾁ 6 ｾ
-  ┌ Swap ───────────────────────┐ﾄ          ﾄ    R    ﾛ7   R  A 9F ┌ Weather ────────────────────┐
-  │ used    512.0 MiB / 8.0 GiB │1          5    9    88  ﾆﾗ  6 5ｷ │ now        17°C, wind 3 m/s │
-  │ █░░░░░░░░░░░░░░░░░░░░    6% │1    ｵ     B    G    ﾁ2  Cｰ    3ﾃ │ Sun      9..18°C cloudy 20% │
-  └─────────────────────────────┘ﾛ    6     X    ｸ    70  ｫﾖ    ﾀﾗ │ Mon        8..15°C rain 70% │ ﾘ
-    ﾗ4                ﾐ ｺ        9    ﾄ          8    ｨ2  Aﾛ     ｵ │ data: Open-Meteo.com        │ 6
-    ﾗ7                6ｯﾓ        ﾝ   Aﾔ               ﾆ2 ｭUｾ     4 └─────────────────────────────┘ 7
-     ｭ      ﾛP        ﾎSｻ        ﾍ   ﾓP               ｨ8 ｨ1V     1 ｼ                       ﾌｭ 2    E
-     ﾎ      ﾏ5        ﾈｺﾙ        7   8ｩ               ﾕI ﾖ9U     G 4                       X8 R    ﾋ
-     ﾑ      3F        6ｻ         2   0ﾖ               ｲｧ Jﾄｰ     ﾝ V                       ｩﾌ ｶ    D
-     0      ﾀY        60         0   ｵ8               G  RﾔK     6 4                       ﾑﾇ N    4
-     6      ﾔｪ        Aｪ         ｺ   KY               5  TXﾚ     ﾛ T                       1I ｹ    3
-     ﾔ 1    ｽ3         4         6   8ﾀ               ﾛ  3ｲA     C R                       ﾒ  Q    P
-     B ｶ    ｴ0         ﾛ         ｻ   ｪ                ｼ  ﾚT2     F D                       0  5    9
-     7 ﾊ    ｪ0         ﾄ             8                ﾏ   B0     ﾋ Y                       8  5    I
-     ﾝ 6    ﾙ6         ﾘ             6                ｬ   ｱ        ﾉ                          L    ﾐ
-     3 ﾔ    W3         W                                  ｲ        0                          ｽ    5
+    ﾌ4     Lｭ  V Pｲ8   4 3      9  4  ﾖ   9     ﾔ   Tｻ   7  2  ZY4  R         O       S     ｮｩﾙ   W
+  ┌ CPU ────────────────────────┐  ┌ Disks ─────────────────────┐0 ┌ Clock ──────────────────────┐ﾕ
+  │ █████░░░░░░░░░░░░░░░░   23% │  │ Sys… 412.0 GiB / 931.0 GiB │ﾔ │ time               14:32:07 │1
+  │ temp                52.0 °C │  │ █████████░░░░░░░░░░░   44% │ﾖ │ date        Sat 26 Sep 2026 │ｻ
+  │ ▃▃▃▃▃▃▃▃▃▃▃▃▃▂▃▃▃▃▃▃▃▃▃▃▃▃▃ │  │ Games (… 1.6 TiB / 1.8 TiB │ﾋ └─────────────────────────────┘V
+  └─────────────────────────────┘  │ █████████████████░░░   87% │0 ｩｺ                  Rﾎ   ﾓ 7   5
+    ﾓﾚ    ｸ 0  1U        9 ﾔ     1 └────────────────────────────┘7 ┌ Crypto ─────────────────────┐K
+  ┌ RAM ────────────────────────┐7 1   4 DP        V ｳ      ﾔ ｹ  ﾍ │ BTC             84,853 USDT │
+  │ used    18.3 GiB / 64.0 GiB │W S   ﾋ ｻT    6   ｯ ｩ      ﾊ 0  ｶ │ 7d ▂▂▃▃▃▁▁▁▆▆▇▇▇▆▆▆██ +2.1% │
+  │ ██████░░░░░░░░░░░░░░░   29% │ﾓ ｺ   ﾑ R4    ﾅ   0 ﾋ      E 0  ﾒ │ ETH              2,725 USDT │
+  │ ▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃ │  ﾋ 7 ﾊ GR    R P ｭ      ﾅ ｧ ﾗ  F │ 7d ██▇▇▇▅▅▅▆▆▁▁▁▄▄▄▂▂ -1.4% │
+  └─────────────────────────────┘    ｱ Z ﾗｦ    1 T        ｮ ﾝ ﾍ  J └─────────────────────────────┘
+    ｦ     6     ｹ   I      ﾖ G       J ｧ ｬｩ    P A        8   ﾅ  U        6          ﾉ ﾆ  5   ｬ
+  ┌ Swap ───────────────────────┐ ｯ  ﾓ 9 ﾆ9    ｪ ﾌ        4   ｺ  6 ┌ Weather ────────────────────┐
+  │ used    512.0 MiB / 8.0 GiB │ ｯ  Q ｮ ﾝR    1 9        7        │ now        17°C, wind 3 m/s │
+  │ █░░░░░░░░░░░░░░░░░░░░    6% │ ｦ  ｯ   Zｮ    ｬ 8        ｬ        │ Sun      9..18°C cloudy 20% │
+  └─────────────────────────────┘ 2  I   34    ﾛ A        B        │ Mon        8..15°C rain 70% │
+    ｽ     L     J   L ﾜ   ﾀｮ ﾋｾｲ  ﾇ  ｩ    2    ﾒ ｰ        ﾎ        │ data: Open-Meteo.com        │
+  ┌ GPU ────────────────────────┐ M  ﾕ         9 1        ｭ        └─────────────────────────────┘
+  │ NVIDIA GeForce RTX 4090     │ 5  2           S    ﾔ   W           64 8L          ｹ
+  │ ████████░░░░░░░░░░░░░   37% │ 1  ﾘ           ﾝ    ﾋ   ｪ           ｴ  9           ﾍ
+  │ vram     9.0 GiB / 24.0 GiB │ P              ｯ    3   K           ﾎ  R           T
+  │ ████████░░░░░░░░░░░░░   38% │ ｮ              ｲ    1   S           ﾔ  ﾝ
+  │ temp                45.0 °C │ X              1    2   ﾀ           1  F
+  │ power               112.4 W │ R              ﾇ        9           ｩ  0
+  └─────────────────────────────┘ 8              E        0           ﾗ  1
+                      ｳ       ｨ                  6        Q           ﾄ  ｭ
+                      W       A
+
  telemetrix  · t themes · s settings · l log · ? help · q quit       self 11.5 MB · matrix · 15 fps
 ```
 <!-- screenshot:end -->
@@ -227,6 +227,27 @@ These need no terminal window, so scripts and agents can use them.
 Both themes lay the cards out in three columns on wide terminals, two on
 medium ones and one on narrow ones. Below 40 by 10 cells the screen only says
 "terminal too small".
+
+### GPU card (NVIDIA)
+
+Set `gpu.enabled = true`, or turn it on in the `s` box, to show a GPU card:
+the GPU's name, its load, the video memory used and total, the temperature
+and the power draw. The temperature follows `units.temperature` and turns
+red above `thresholds.temp_warn_c`. `gpu.interval_ms` sets how often the
+card is read (every 2 seconds by default). With three columns the card sits
+under Swap; with two or one column it comes after Disks.
+
+The card reads NVIDIA's NVML library, which comes with the NVIDIA driver
+(`nvml.dll` on Windows, `libnvidia-ml.so.1` on Linux). telemetrix loads it
+only while the card is on. Without an NVIDIA driver the card stays hidden
+and the log (`l`) says why. AMD and Intel GPUs are not shown yet.
+
+**It is off by default because NVML is large.** On the test PC (an RTX
+4090) the dashboard's working set grows by about 24 MB when NVML starts,
+from about 8 MB to about 31 MB, and it stays at that size until the
+program ends. That is far above the memory budgets below, so turn it on
+only if the card is worth it to you. `telemetrix snapshot` always lists the
+GPUs, because it ends right after.
 
 ### Disks and network drives
 
@@ -413,6 +434,8 @@ no longer matches the program.
 | `thresholds.cpu_warn_pct` | `80` | 1..100 | yes | highlight CPU above this, 1..100 |
 | `thresholds.temp_warn_c` | `75` | 1..150 | yes | highlight temperature above this |
 | `thresholds.disk_warn_pct` | `90` | 1..100 | yes | highlight disks fuller than this |
+| `gpu.enabled` | `false` | true \| false | yes | NVIDIA GPU card; NVML adds about 24 MB, so it is off by default |
+| `gpu.interval_ms` | `2000` | 500..60000 | yes | 500..60000 |
 | `disks.show_network` | `true` | true \| false | yes | show mapped network drives in their own card |
 | `disks.network_interval_s` | `60` | 10..3600 | yes | how often network drives are asked, 10..3600 |
 | `disks.network_timeout_s` | `5` | 1..30 | yes | a drive that takes longer is shown offline, 1..30 |
@@ -467,6 +490,8 @@ memory that belongs to this program alone.
 | 5 plugins, minimalist | 11.0 MB | 3.4 MB |
 | 5 plugins, matrix (v0.1 default) | 11.0 MB | 3.3 MB |
 | 7 plugins, matrix (v0.2 default, `selftest --memory`, 30 s) | 12.5 MB | 4.5 MB |
+| no plugins, GPU card on (NVML, RTX 4090, `selftest --memory`, 30 s) | 31.1 MB | 21.9 MB |
+| 7 plugins, GPU card on (NVML, RTX 4090, `selftest --memory`, 30 s) | 35.5 MB | 23.6 MB |
 
 For comparison, a Rust program that does nothing but sleep uses 4.9 MB
 working set on the same PC. Much of that comes from Windows itself and from

@@ -8,7 +8,7 @@ use ratatui::buffer::Buffer;
 use crate::app::AppState;
 use crate::config::{Config, ConfigStatus};
 use crate::event::AppEvent;
-use crate::metrics::{DiskMetric, SystemSnapshot};
+use crate::metrics::{DiskMetric, GpuMetric, SystemSnapshot};
 use crate::plugins::{MetricItem, MetricStyle, PluginCard, PluginData, PluginStatus};
 use crate::selfmem::{MB, SelfMemory};
 use crate::themes;
@@ -60,6 +60,14 @@ pub fn snapshot() -> SystemSnapshot {
             disk("C:\\", "System", 412, 931),
             disk("D:\\", "Games", 1620, 1863),
         ],
+        gpus: vec![GpuMetric {
+            name: "NVIDIA GeForce RTX 4090".into(),
+            usage_pct: Some(37.0),
+            mem_used_bytes: Some(9 * GIB),
+            mem_total_bytes: Some(24 * GIB),
+            temp_c: Some(45.0),
+            power_w: Some(112.4),
+        }],
         ..SystemSnapshot::default()
     }
 }
@@ -68,6 +76,7 @@ pub fn state(theme: &str) -> AppState {
     let mut cfg = Config::default();
     cfg.general.theme = theme.into();
     cfg.disks.show_network = false;
+    cfg.gpu.enabled = true;
     let mut state = AppState::new(cfg, ConfigStatus::Ok);
     for i in 0..60 {
         let mut s = snapshot();

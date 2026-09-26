@@ -27,6 +27,10 @@ cpu_warn_pct = 80           # highlight CPU above this, 1..100
 temp_warn_c = 75            # highlight temperature above this
 disk_warn_pct = 90          # highlight disks fuller than this
 
+[gpu]
+enabled = false             # NVIDIA GPU card; NVML adds about 24 MB, so it is off by default
+interval_ms = 2000          # 500..60000
+
 [disks]
 show_network = true         # show mapped network drives in their own card
 network_interval_s = 60     # how often network drives are asked, 10..3600
