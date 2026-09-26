@@ -11,7 +11,133 @@ plugins and about 12 MB with the seven default plugins, and almost no CPU
 on the static theme. Settings live in a commented `telemetrix.toml` that a
 wrong value can never break.
 
-## Build and run
+## What it looks like
+
+These are real renders of the program, drawn into a 100 by 30 text buffer
+with made-up data (a test prints them). The first theme is quiet; the second
+has digital rain behind the cards.
+
+<!-- screenshot:start -->
+`minimalist`:
+
+```text
+╭ CPU ──────────────────────────╮ ╭ Disks ───────────────────────╮ ╭ Clock ────────────────────────╮
+│ █████░░░░░░░░░░░░░░░░░░   23% │ │ Syste… 412.0 GiB / 931.0 GiB │ │ time                 14:32:07 │
+│ temp                  52.0 °C │ │ ██████████░░░░░░░░░░░░   44% │ │ date          Sat 26 Sep 2026 │
+│ ▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▂▃▃▃▃▃▃▃▃▃▃▃▃▃ │ │ Games (D:) 1.6 TiB / 1.8 TiB │ ╰───────────────────────────────╯
+╰───────────────────────────────╯ │ ███████████████████░░░   87% │ ╭ Crypto ───────────────────────╮
+╭ RAM ──────────────────────────╮ ╰──────────────────────────────╯ │ BTC               84,853 USDT │
+│ used      18.3 GiB / 64.0 GiB │                                  │ 7d ▂▂▃▃▃▁▁▁▆▆▆▆▇▇▇▆▆▆██ +2.1% │
+│ ███████░░░░░░░░░░░░░░░░   29% │                                  │ ETH                2,725 USDT │
+│ ▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃ │                                  │ 7d ██▇▇▇▅▅▅▆▆▆▆▁▁▁▄▄▄▂▂ -1.4% │
+╰───────────────────────────────╯                                  ╰───────────────────────────────╯
+╭ Swap ─────────────────────────╮                                  ╭ Weather ──────────────────────╮
+│ used      512.0 MiB / 8.0 GiB │                                  │ now          17°C, wind 3 m/s │
+│ █░░░░░░░░░░░░░░░░░░░░░░    6% │                                  │ Sun        9..18°C cloudy 20% │
+╰───────────────────────────────╯                                  │ Mon          8..15°C rain 70% │
+                                                                   │ data: Open-Meteo.com          │
+                                                                   ╰───────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+ telemetrix  · t themes · s settings · l log · ? help · q quit   self 11.5 MB · minimalist · 15 fps
+```
+
+`matrix`:
+
+```text
+  ﾛ           ｧK                Z ﾜ                ｱ         ｷ           U    ｹG
+  ┌ CPU ────────────────────────┐ ｾ┌ Disks ─────────────────────┐  ┌ Clock ──────────────────────┐
+  │ █████░░░░░░░░░░░░░░░░   23% │ ﾁ│ Sys… 412.0 GiB / 931.0 GiB │  │ time               14:32:07 │
+  │ temp                52.0 °C │ T│ █████████░░░░░░░░░░░   44% │  │ date        Sat 26 Sep 2026 │
+  │ ▃▃▃▃▃▃▃▃▃▃▃▃▃▂▃▃▃▃▃▃▃▃▃▃▃▃▃ │ F│ Games (… 1.6 TiB / 1.8 TiB │  └─────────────────────────────┘
+  └─────────────────────────────┘ K│ █████████████████░░░   87% │        ﾗ       2       ｹ
+      C       6    ﾄ  9         W ﾄ└────────────────────────────┘  ┌ Crypto ─────────────────────┐
+  ┌ RAM ────────────────────────┐ M       W     5  5         ﾘ  ﾆ  │ BTC             84,853 USDT │
+  │ used    18.3 GiB / 64.0 GiB │Cｫ       Z     2  6         Yｨ 8  │ 7d ▂▂▃▃▃▁▁▁▆▆▇▇▇▆▆▆██ +2.1% │
+  │ ██████░░░░░░░░░░░░░░░   29% │ｮW       ｩ     ｮﾖ L       ｨ 8ｮ 8ﾝ │ ETH              2,725 USDT │
+  │ ▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃ │ﾋﾂ       9     36 ﾝ  Q    ｨ  ｾ ﾗﾏ │ 7d ██▇▇▇▅▅▅▆▆▁▁▁▄▄▄▂▂ -1.4% │
+  └─────────────────────────────┘ﾌ               ﾃ 3  0    ﾐ  ﾋ 8ﾖ └─────────────────────────────┘
+    K              ｰ  9          Z          ﾀ    ｧ    T3   ﾘ  ｫ ﾓﾕ 2   2    ﾑ    P     ﾁ 6 ｾ
+  ┌ Swap ───────────────────────┐ﾄ          ﾄ    R    ﾛ7   R  A 9F ┌ Weather ────────────────────┐
+  │ used    512.0 MiB / 8.0 GiB │1          5    9    88  ﾆﾗ  6 5ｷ │ now        17°C, wind 3 m/s │
+  │ █░░░░░░░░░░░░░░░░░░░░    6% │1    ｵ     B    G    ﾁ2  Cｰ    3ﾃ │ Sun      9..18°C cloudy 20% │
+  └─────────────────────────────┘ﾛ    6     X    ｸ    70  ｫﾖ    ﾀﾗ │ Mon        8..15°C rain 70% │ ﾘ
+    ﾗ4                ﾐ ｺ        9    ﾄ          8    ｨ2  Aﾛ     ｵ │ data: Open-Meteo.com        │ 6
+    ﾗ7                6ｯﾓ        ﾝ   Aﾔ               ﾆ2 ｭUｾ     4 └─────────────────────────────┘ 7
+     ｭ      ﾛP        ﾎSｻ        ﾍ   ﾓP               ｨ8 ｨ1V     1 ｼ                       ﾌｭ 2    E
+     ﾎ      ﾏ5        ﾈｺﾙ        7   8ｩ               ﾕI ﾖ9U     G 4                       X8 R    ﾋ
+     ﾑ      3F        6ｻ         2   0ﾖ               ｲｧ Jﾄｰ     ﾝ V                       ｩﾌ ｶ    D
+     0      ﾀY        60         0   ｵ8               G  RﾔK     6 4                       ﾑﾇ N    4
+     6      ﾔｪ        Aｪ         ｺ   KY               5  TXﾚ     ﾛ T                       1I ｹ    3
+     ﾔ 1    ｽ3         4         6   8ﾀ               ﾛ  3ｲA     C R                       ﾒ  Q    P
+     B ｶ    ｴ0         ﾛ         ｻ   ｪ                ｼ  ﾚT2     F D                       0  5    9
+     7 ﾊ    ｪ0         ﾄ             8                ﾏ   B0     ﾋ Y                       8  5    I
+     ﾝ 6    ﾙ6         ﾘ             6                ｬ   ｱ        ﾉ                          L    ﾐ
+     3 ﾔ    W3         W                                  ｲ        0                          ｽ    5
+ telemetrix  · t themes · s settings · l log · ? help · q quit       self 11.5 MB · matrix · 15 fps
+```
+<!-- screenshot:end -->
+
+## Install
+
+**Download a release.** Open the
+[Releases page](https://github.com/OliverD25/telemetrix/releases) and take
+the file for your system:
+
+- Windows: `telemetrix-<version>-windows-x86_64.zip`. Unpack it and start
+  `telemetrix.exe` from Windows Terminal. Windows may warn that the program
+  is from an unknown publisher, because it is not signed; choose "More info",
+  then "Run anyway".
+- Linux: `telemetrix-<version>-linux-x86_64.tar.gz`. Unpack it with
+  `tar -xzf` and run `./telemetrix` in a terminal.
+
+The program is one file. Copy it to any folder on your `PATH`.
+
+**Or build it with Rust** (1.95 or newer; see
+[Build from source](#build-from-source) for the C compiler it needs):
+
+```
+cargo install --git https://github.com/OliverD25/telemetrix
+```
+
+## Quick start
+
+```
+telemetrix                        # open the dashboard
+telemetrix --exit-on-any-key      # screensaver mode: any key closes it
+telemetrix snapshot               # print the numbers once, no dashboard
+```
+
+In the dashboard: `t` picks a theme, `s` opens the settings, `l` shows the
+log, `?` lists all keys, `q` quits. Every change you make is saved at once.
+
+## Where things live
+
+| What | Windows | Linux |
+|---|---|---|
+| Settings file | `%APPDATA%\telemetrix\telemetrix.toml` | `~/.config/telemetrix/telemetrix.toml` |
+| Plugins (`.lua` files) | `%APPDATA%\telemetrix\plugins` | `~/.config/telemetrix/plugins` |
+| Plugin data (stored rates, results) | `%LOCALAPPDATA%\telemetrix\plugins` | `~/.local/share/telemetrix/plugins` |
+
+The settings file appears the first time you change something in the
+dashboard; `telemetrix config init` writes it now, with a comment on every
+key. `telemetrix config path` prints the path in use. The default plugins
+are built into the program and are copied into the plugins folder on the
+first start. See [Settings](#settings) and
+[Where plugins live](#where-plugins-live) for the details.
+
+## Build from source
 
 You need Rust 1.95 or newer. On Windows you also need the Visual Studio C++
 build tools, because the Lua interpreter is compiled from C source.

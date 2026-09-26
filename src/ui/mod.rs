@@ -1,5 +1,7 @@
 //! Everything drawn on top of the theme: banner, status bar, toast, overlays.
 
+#[cfg(test)]
+pub(crate) mod demo;
 mod help_overlay;
 mod log_overlay;
 pub mod settings_overlay;
