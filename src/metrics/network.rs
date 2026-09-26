@@ -434,12 +434,12 @@ mod tests {
             drive("M:", Some("nas"), "music", true, t, f),
             drive("P:", Some("nas"), "photos", true, t, f),
             drive("R:", Some("nas"), "projects", true, t, f),
-            drive("W:", Some("nas"), "archive", true, t, f),
-            drive("X:", Some("nas"), "vault", true, t, f),
+            drive("W:", Some("nas"), "office", true, t, f),
+            drive("X:", Some("nas"), "backup", true, t, f),
             drive(
                 "Y:",
                 Some("nas"),
-                "Archive",
+                "archive",
                 true,
                 24_400 * TB / 1000,
                 8_600 * TB / 1000,
@@ -453,7 +453,7 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].title, "nas  M: P: R: W: X:");
         assert_eq!(rows[0].letters, ["M:", "P:", "R:", "W:", "X:"]);
-        assert_eq!(rows[1].title, "Archive (Y:)");
+        assert_eq!(rows[1].title, "archive (Y:)");
         assert!(rows.iter().all(|r| r.online));
     }
 
@@ -490,10 +490,7 @@ mod tests {
     #[test]
     fn remote_names_split() {
         let s = |x: &str| Some(x.to_string());
-        assert_eq!(
-            split_remote(r"\\nas\music"),
-            (s("nas"), s("music"))
-        );
+        assert_eq!(split_remote(r"\\nas\music"), (s("nas"), s("music")));
         assert_eq!(split_remote("//nas/media/"), (s("nas"), s("media")));
         assert_eq!(
             split_remote("nas:/export/home"),
@@ -510,10 +507,8 @@ mod tests {
             (s("nas"), s("music"))
         );
         assert_eq!(
-            split_device_path(
-                r"\Device\Mup\;LanmanRedirector\;Y:000000000001a2b3\nas\Archive"
-            ),
-            (s("nas"), s("Archive"))
+            split_device_path(r"\Device\Mup\;LanmanRedirector\;Y:000000000001a2b3\nas\archive"),
+            (s("nas"), s("archive"))
         );
         assert_eq!(split_device_path(r"\Device\HarddiskVolume3"), (None, None));
     }

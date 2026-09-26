@@ -586,11 +586,11 @@ mod tests {
     #[test]
     fn long_titles_are_cut_so_the_value_stays_visible() {
         assert_eq!(fit("System Disk (C:)", 20), "System Disk (C:)");
-        assert_eq!(fit("SSD 1 Media (D:)", 12), "SSD 1 Progr…");
+        assert_eq!(fit("Archive Storage (D:)", 12), "Archive Sto…");
         assert_eq!(fit("abc", 0), "");
         let pal = minimalist_palette();
         let line = kv(
-            "SSD 1 Media (D:)",
+            "Archive Storage (D:)",
             "554.3 GiB / 1.8 TiB".into(),
             30,
             &pal,
@@ -599,6 +599,6 @@ mod tests {
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text.chars().count(), 30);
         assert!(text.ends_with("554.3 GiB / 1.8 TiB"), "{text}");
-        assert!(text.starts_with("SSD 1 Pro…"), "{text}");
+        assert!(text.starts_with("Archive S…"), "{text}");
     }
 }

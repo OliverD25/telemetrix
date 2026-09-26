@@ -237,14 +237,14 @@ mod tests {
         s.network = Some(vec![
             nas("M:", "music", true, 5 * tb, 2 * tb),
             nas("P:", "photos", true, 5 * tb, 2 * tb),
-            nas("Y:", "Archive", true, 24 * tb, 8 * tb),
+            nas("Y:", "archive", true, 24 * tb, 8 * tb),
             nas("Z:", "old_share", false, 0, 0),
         ]);
         let buf = render(&s, 120, 40);
         let t = text(&buf);
         assert!(t.contains(" Network "), "card title");
         assert!(t.contains("nas  M: P:"), "grouped row");
-        assert!(t.contains("Archive (Y:)"), "single row");
+        assert!(t.contains("archive (Y:)"), "single row");
         assert!(t.contains("old_share (Z:)"), "offline row");
         let offline_red = buf
             .content()

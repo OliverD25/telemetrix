@@ -663,13 +663,13 @@ mod speedtest {
         vec![("api/js/servers", Answer::File("ookla_servers.json"))]
     }
 
-    /// Fake pings (speedtest.example-c.net is nearest) and a fake speed_multi that
+    /// Fake pings (spt.example-b.net is nearest) and a fake speed_multi that
     /// records its calls, reports progress and fails where FAIL says.
     fn fake(h: &Harness) {
         h.stub(
             "tcp_ping_ms",
-            "PINGS = { ['speedtest.example-a.net'] = 10, \
-               ['speedtest.example-c.net'] = 4, ['speedtest.example-d.net'] = 12, \
+            "PINGS = { ['speedtest1.example-a.net'] = 10, \
+               ['spt.example-b.net'] = 4, ['speedtest.example-c.net'] = 12, \
                ['speed.cloudflare.com'] = 56 } \
              PINGED = {} \
              return function(host, port) PINGED[#PINGED + 1] = host .. ':' .. port \
@@ -744,14 +744,17 @@ mod speedtest {
         assert_eq!(row(&d, "ping"), "4 ms");
         assert_eq!(
             row(&d, "server"),
-            "Exampletown LTD, Exampletown…",
+            "Example Broadband Ltd, Springfiel…",
             "cut to fit"
         );
         assert_eq!(
             calls(&h),
             [
-                call("down", "https://speedtest.example-c.net:8080/download?size=25000000"),
-                call("up", "https://speedtest.example-c.net:8080/upload"),
+                call(
+                    "down",
+                    "https://spt.example-b.net:8080/download?size=25000000"
+                ),
+                call("up", "https://spt.example-b.net:8080/upload"),
             ]
         );
         let args: (i64, i64, f64) = h
@@ -859,13 +862,13 @@ mod speedtest {
         fake(&h);
         lua(
             &h,
-            "FAIL[1] = { 'down', 'speedtest.example-c.net', 'the server answered HTTP 403' }",
+            "FAIL[1] = { 'down', 'spt.example-b.net', 'the server answered HTTP 403' }",
         );
         let d = h.run(Trigger::Key);
         assert_eq!(row(&d, "server"), "Cloudflare (backup)");
         let c = calls(&h);
         assert_eq!(c.len(), 3, "Ookla down, then Cloudflare down and up: {c:?}");
-        assert!(h.log.borrow()[0].contains("download from speedtest.example-c.net:8080 failed"));
+        assert!(h.log.borrow()[0].contains("download from spt.example-b.net:8080 failed"));
         let chosen: bool = h
             .plugin
             .lua()
@@ -881,7 +884,7 @@ mod speedtest {
         fake(&h);
         lua(
             &h,
-            "FAIL[1] = { 'up', 'speedtest.example-c.net', 'the server answered HTTP 500' }",
+            "FAIL[1] = { 'up', 'spt.example-b.net', 'the server answered HTTP 500' }",
         );
         let d = h.run(Trigger::Key);
         assert_eq!(row(&d, "up"), "failed: the server answered HTTP 500");

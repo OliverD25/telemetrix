@@ -344,8 +344,7 @@ memory that belongs to this program alone.
 
 For comparison, a Rust program that does nothing but sleep uses 4.9 MB
 working set on the same PC. Much of that comes from Windows itself and from
-other software that loads into every process (here an antivirus and Microsoft
-Defender).
+other software that loads into every process (for example an antivirus).
 
 CPU, measured over 60 seconds, as a share of one core:
 
