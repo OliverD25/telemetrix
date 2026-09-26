@@ -1,0 +1,82 @@
+# On a tag like v0.2.0: build release binaries for Windows and Linux and
+# attach them to a GitHub Release with that name.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-x86_64
+            archive: zip
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux-x86_64
+            archive: tar.gz
+    env:
+      PACKAGE: telemetrix-${{ github.ref_name }}-${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path $env:PACKAGE | Out-Null
+          Copy-Item -Path "target/${{ matrix.target }}/release/telemetrix.exe", README.md, LICENSE-MIT, LICENSE-APACHE, telemetrix.example.toml -Destination $env:PACKAGE
+          Compress-Archive -Path $env:PACKAGE -DestinationPath "$env:PACKAGE.zip"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir "$PACKAGE"
+          cp "target/${{ matrix.target }}/release/telemetrix" README.md LICENSE-MIT LICENSE-APACHE telemetrix.example.toml "$PACKAGE/"
+          tar -czf "$PACKAGE.tar.gz" "$PACKAGE"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ env.PACKAGE }}.${{ matrix.archive }}
+          if-no-files-found: error
+
+  # One job creates the release, so the two builds never race to create it.
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
