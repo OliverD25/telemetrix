@@ -1,1 +1,4 @@
 /target
+
+# Local Notion desk binding: private board link, never published
+/.claude/notion-desk.json
