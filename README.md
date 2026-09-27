@@ -746,6 +746,13 @@ Use your own terminal instead of `foot` if you like.
 xautolock -time 5 -locker "xterm -fullscreen -e telemetrix --exit-on-any-key" &
 ```
 
+## Questions and bugs
+
+Please open an issue: https://github.com/OliverD25/telemetrix/issues. Say which
+system you use (Windows or Linux), the telemetrix version (`telemetrix --version`),
+and what you saw. For a plugin problem, add the output of
+`telemetrix plugin check <file> --run`.
+
 ## License
 
 Either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
