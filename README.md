@@ -279,8 +279,10 @@ and the log (`l`) says why.
 
 **Memory.** On the test PC (an RTX 4090 and an AMD Radeon iGPU) the
 `auto` source adds about 1.3 MB of working set and 0.3 MB of private
-memory (`selftest --memory`: 7.8 → 9.1 MB without plugins, 11.8 → 13.0 MB
-with the 7 default plugins). That leaves little room under the 14 MB total
+memory (`selftest --memory`: 7.9 → 9.1 MB without plugins, 11.9 → 13.1 MB
+with the 7 default plugins). Almost all of it is Windows' `gdi32.dll`,
+which telemetrix loads only while the card is on; the readings themselves
+cost next to nothing. That leaves little room under the 14 MB total
 budget, so the card is still off by default. NVML is much larger: the
 working set grows by about 24 MB when it starts, and it stays at that size
 until the program ends. `telemetrix snapshot` always lists the GPUs from

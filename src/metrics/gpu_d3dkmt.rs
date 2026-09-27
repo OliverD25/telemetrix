@@ -1,7 +1,9 @@
 //! GPU readings the way Task Manager takes them: the adapter statistics of
 //! the Windows display kernel (D3DKMT functions in gdi32.dll). Every GPU
-//! with a WDDM driver answers, NVIDIA, AMD and Intel alike, and gdi32 is
-//! already loaded, so this costs almost no memory. NVML adds about 24 MB.
+//! with a WDDM driver answers, NVIDIA, AMD and Intel alike. It costs about
+//! 1.3 MB of working set, mostly gdi32 itself, where NVML adds about 24 MB.
+//! gdi32 is loaded at run time, on first use: linked normally, it would
+//! load into every telemetrix process, also with the GPU card off.
 //!
 //! - Load: each engine (node) reports its running time. The load is the
 //!   busiest engine's share of the time between two readings, as in Task
@@ -14,6 +16,7 @@
 //!   the adapter's limit, not in watts.
 
 use std::ffi::c_void;
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use windows_sys::Wdk::Graphics::Direct3D::{
@@ -21,11 +24,13 @@ use windows_sys::Wdk::Graphics::Direct3D::{
     D3DKMT_CLOSEADAPTER, D3DKMT_ENUMADAPTERS2, D3DKMT_QUERYADAPTERINFO, D3DKMT_QUERYSTATISTICS,
     D3DKMT_QUERYSTATISTICS_ADAPTER, D3DKMT_QUERYSTATISTICS_NODE, D3DKMT_QUERYSTATISTICS_RESULT,
     D3DKMT_QUERYSTATISTICS_SEGMENT, D3DKMT_QUERYSTATISTICS_TYPE, D3DKMT_SEGMENTSIZEINFO,
-    D3DKMTCloseAdapter, D3DKMTEnumAdapters2, D3DKMTQueryAdapterInfo, D3DKMTQueryStatistics,
     KMTQAITYPE_ADAPTERPERFDATA, KMTQAITYPE_ADAPTERREGISTRYINFO, KMTQAITYPE_ADAPTERTYPE,
     KMTQAITYPE_GETSEGMENTSIZE, KMTQUERYADAPTERINFOTYPE,
 };
-use windows_sys::Win32::Foundation::LUID;
+use windows_sys::Win32::Foundation::{LUID, NTSTATUS};
+use windows_sys::Win32::System::LibraryLoader::{
+    GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+};
 
 use super::GpuMetric;
 
@@ -51,6 +56,55 @@ pub struct D3dkmt {
     adapters: Vec<Adapter>,
 }
 
+type EnumAdapters2 = unsafe extern "system" fn(*mut D3DKMT_ENUMADAPTERS2) -> NTSTATUS;
+type QueryAdapterInfo = unsafe extern "system" fn(*mut D3DKMT_QUERYADAPTERINFO) -> NTSTATUS;
+type QueryStatistics = unsafe extern "system" fn(*const D3DKMT_QUERYSTATISTICS) -> NTSTATUS;
+type CloseAdapter = unsafe extern "system" fn(*const D3DKMT_CLOSEADAPTER) -> NTSTATUS;
+type Farproc = unsafe extern "system" fn() -> isize;
+
+/// The four gdi32 functions, found at run time.
+struct Gdi {
+    enum_adapters2: EnumAdapters2,
+    query_adapter_info: QueryAdapterInfo,
+    query_statistics: QueryStatistics,
+    close_adapter: CloseAdapter,
+}
+
+/// Loads gdi32 from System32 once; it then stays for the life of the process.
+fn gdi() -> Result<&'static Gdi, String> {
+    static GDI: OnceLock<Option<Gdi>> = OnceLock::new();
+    GDI.get_or_init(|| {
+        let name: Vec<u16> = "gdi32.dll\0".encode_utf16().collect();
+        // SAFETY: a nul-terminated wide name; System32 only.
+        let lib = unsafe {
+            LoadLibraryExW(
+                name.as_ptr(),
+                std::ptr::null_mut(),
+                LOAD_LIBRARY_SEARCH_SYSTEM32,
+            )
+        };
+        if lib.is_null() {
+            return None;
+        }
+        macro_rules! sym {
+            ($name:literal, $ty:ty) => {{
+                // SAFETY: a loaded module and a nul-terminated name.
+                let f = unsafe { GetProcAddress(lib, $name.as_ptr()) }?;
+                // SAFETY: gdi32 exports the function with this signature (d3dkmthk.h).
+                unsafe { std::mem::transmute::<Farproc, $ty>(f) }
+            }};
+        }
+        Some(Gdi {
+            enum_adapters2: sym!(b"D3DKMTEnumAdapters2\0", EnumAdapters2),
+            query_adapter_info: sym!(b"D3DKMTQueryAdapterInfo\0", QueryAdapterInfo),
+            query_statistics: sym!(b"D3DKMTQueryStatistics\0", QueryStatistics),
+            close_adapter: sym!(b"D3DKMTCloseAdapter\0", CloseAdapter),
+        })
+    })
+    .as_ref()
+    .ok_or_else(|| "gdi32.dll has no D3DKMT functions (Windows 10 or newer needed)".into())
+}
+
 /// `D3DKMTQueryAdapterInfo` into a plain struct.
 fn query<T: Copy>(handle: u32, kind: KMTQUERYADAPTERINFOTYPE, mut out: T) -> Option<T> {
     let mut q = D3DKMT_QUERYADAPTERINFO {
@@ -59,8 +113,9 @@ fn query<T: Copy>(handle: u32, kind: KMTQUERYADAPTERINFOTYPE, mut out: T) -> Opt
         pPrivateDriverData: (&raw mut out).cast::<c_void>(),
         PrivateDriverDataSize: size_of::<T>() as u32,
     };
+    let g = gdi().ok()?;
     // SAFETY: the buffer is `out`, with its size.
-    (unsafe { D3DKMTQueryAdapterInfo(&mut q) } == 0).then_some(out)
+    (unsafe { (g.query_adapter_info)(&mut q) } == 0).then_some(out)
 }
 
 /// `D3DKMTQueryStatistics` for one adapter, node or segment.
@@ -76,14 +131,17 @@ fn statistics(
     };
     // The node and segment queries share this first field.
     q.Anonymous.QueryNode.NodeId = id;
+    let g = gdi().ok()?;
     // SAFETY: a zeroed query with its type, adapter and id set.
-    (unsafe { D3DKMTQueryStatistics(&q) } == 0).then_some(q.QueryResult)
+    (unsafe { (g.query_statistics)(&q) } == 0).then_some(q.QueryResult)
 }
 
 fn close(handle: u32) {
     let c = D3DKMT_CLOSEADAPTER { hAdapter: handle };
-    // SAFETY: a handle from D3DKMTEnumAdapters2, closed once.
-    unsafe { D3DKMTCloseAdapter(&c) };
+    if let Ok(g) = gdi() {
+        // SAFETY: a handle from D3DKMTEnumAdapters2, closed once.
+        unsafe { (g.close_adapter)(&c) };
+    }
 }
 
 fn wide_text(w: &[u16]) -> String {
@@ -111,18 +169,19 @@ impl D3dkmt {
     /// ("Microsoft Basic Render Driver") and display-only adapters are left
     /// out. `Err` when there is none.
     pub fn load() -> Result<Self, String> {
+        let g = gdi()?;
         let mut e = D3DKMT_ENUMADAPTERS2 {
             NumAdapters: 0,
             pAdapters: std::ptr::null_mut(),
         };
         // SAFETY: a null list asks for the count.
-        if unsafe { D3DKMTEnumAdapters2(&mut e) } != 0 {
+        if unsafe { (g.enum_adapters2)(&mut e) } != 0 {
             return Err("D3DKMTEnumAdapters2 failed".into());
         }
         let mut list = vec![D3DKMT_ADAPTERINFO::default(); e.NumAdapters as usize];
         e.pAdapters = list.as_mut_ptr();
         // SAFETY: the list holds NumAdapters entries.
-        if unsafe { D3DKMTEnumAdapters2(&mut e) } != 0 {
+        if unsafe { (g.enum_adapters2)(&mut e) } != 0 {
             return Err("D3DKMTEnumAdapters2 failed".into());
         }
         list.truncate(e.NumAdapters as usize);
