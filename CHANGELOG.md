@@ -44,6 +44,8 @@ All notable changes to telemetrix. Versions follow
   follow `units.temperature`. Its city is picked from a search list in the
   `s` box, which also finds misspelled, old Russian and Cyrillic names;
   places in the `country` setting (default `UA`) come first.
+- The Disks and Network cards list drives by letter, as Windows Explorer
+  does; on Linux `/` comes first, then the other mount points in order.
 - The default total memory budget is 14 MB (was 13 MB); the core budget
   stays 10 MB.
 - On Windows the program uses the segment heap, so private memory stays flat
