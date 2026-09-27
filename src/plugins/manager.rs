@@ -150,6 +150,15 @@ impl Manager {
         running.is_some()
     }
 
+    /// Sends a search to the running plugin; false when it does not run.
+    pub fn search(&self, id: &str, query: &str) -> bool {
+        let running = self.running.values().find(|r| r.handle.current_id() == id);
+        if let Some(r) = running {
+            r.handle.search(query);
+        }
+        running.is_some()
+    }
+
     pub fn stop_all(&mut self) {
         let paths: Vec<PathBuf> = self.running.keys().cloned().collect();
         for path in paths {

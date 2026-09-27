@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime};
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use ratatui::layout::Size;
 
-use crate::app::{self, Action, AppState, InputKey, Overlay, TextInput};
+use crate::app::{self, Action, AppState, InputKey, Overlay, SearchBox, TextInput};
 use crate::cli::Flags;
 use crate::config::{self, Config, ConfigStatus, LoadOutcome, THEME_NAMES, Value};
 use crate::event::{AppEvent, WorkerCmd};
@@ -139,7 +139,7 @@ fn event_loop(
         if event::poll(deadline.saturating_duration_since(Instant::now()))? {
             match event::read() {
                 Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                    let action = if lp.state.text_input.is_some() {
+                    let action = if lp.state.text_input.is_some() || lp.state.search_box.is_some() {
                         app::input_key_action(&key)
                     } else {
                         app::key_action(
@@ -161,6 +161,7 @@ fn event_loop(
         while let Ok(ev) = rx.try_recv() {
             lp.state.apply(ev);
         }
+        lp.search_tick(Instant::now());
         let now = Instant::now();
         if lp
             .state
@@ -293,7 +294,12 @@ impl Loop {
                 let rows = settings_overlay::rows(&s.plugin_ids, &s.plugin_schemas);
                 let sel = settings_overlay::selectable(&rows);
                 let row = &rows[sel[s.settings_cursor.min(sel.len() - 1)]];
-                if let Some((id, key)) = settings_overlay::text_row(row) {
+                if let Some((id, entry)) = settings_overlay::search_row(row) {
+                    if dir > 0 {
+                        s.search_box = Some(SearchBox::new(id, &entry.key, &entry.label));
+                        s.dirty = true;
+                    }
+                } else if let Some((id, key)) = settings_overlay::text_row(row) {
                     if dir > 0 {
                         let text = settings_overlay::text_value(row, &s.config);
                         s.text_input = Some(TextInput::new(id, key, &text));
@@ -305,7 +311,29 @@ impl Loop {
             }
             Action::Input(InputKey::Cancel) => {
                 s.text_input = None;
+                s.search_box = None;
                 s.dirty = true;
+            }
+            Action::Input(InputKey::Save) if s.search_box.is_some() => {
+                let chosen = s.search_box.as_ref().and_then(|b| {
+                    let id = b.input.id.clone();
+                    b.chosen().map(|c| (id, c.values.clone()))
+                });
+                if let Some((id, values)) = chosen {
+                    s.search_box = None;
+                    let sets = values
+                        .into_iter()
+                        .map(|(k, v)| (format!("plugin.{id}.{k}"), v))
+                        .collect();
+                    self.change_many(sets);
+                    self.plugins.run_now(&id);
+                }
+            }
+            Action::Input(key) if s.search_box.is_some() => {
+                if let Some(b) = &mut s.search_box {
+                    b.key(key, Instant::now());
+                    s.dirty = true;
+                }
             }
             Action::Input(InputKey::Save) => {
                 if let Some(input) = s.text_input.take() {
@@ -363,6 +391,23 @@ impl Loop {
         settings_overlay::apply(&mut new, &change);
         self.adopt(new, false);
         let saved = settings_overlay::save(&self.path, &change);
+        self.saved(saved);
+    }
+
+    /// Applies several settings at once and saves them in one write.
+    fn change_many(&mut self, sets: Vec<(String, Value)>) {
+        let mut new = self.state.config.clone();
+        for (key, value) in &sets {
+            config::release_flag(&mut self.flags, key);
+            settings_overlay::apply(&mut new, &Change::Set(key.clone(), value.clone()));
+        }
+        self.adopt(new, false);
+        let saved = config::set_many(&self.path, &sets);
+        self.saved(saved);
+    }
+
+    /// Notes the result of a save in the overlay footer.
+    fn saved(&mut self, saved: io::Result<()>) {
         // This write needs no reload: the settings in memory already match it.
         self.last_mtime = mtime(&self.path);
         let s = &mut self.state;
@@ -374,6 +419,25 @@ impl Loop {
             }
         });
         s.dirty = true;
+    }
+
+    /// Sends the search box's query to its plugin once typing has paused,
+    /// and keeps the spinner turning while an answer is pending.
+    fn search_tick(&mut self, now: Instant) {
+        let Some(b) = &mut self.state.search_box else {
+            return;
+        };
+        if let Some(query) = b.due(now)
+            && !self.plugins.search(&b.input.id, &query)
+        {
+            b.answer(
+                &query,
+                Err("the plugin is not running; turn it on first".into()),
+            );
+        }
+        if b.waiting() {
+            self.state.dirty = true;
+        }
     }
 
     /// What the empty Plugins card needs: the folder and whether anything runs.
@@ -648,7 +712,7 @@ mod tests {
             code,
             ratatui::crossterm::event::KeyModifiers::NONE,
         );
-        let action = if lp.state.text_input.is_some() {
+        let action = if lp.state.text_input.is_some() || lp.state.search_box.is_some() {
             app::input_key_action(&key)
         } else {
             app::key_action(&key, lp.state.overlay, false)
@@ -664,6 +728,12 @@ mod tests {
                 label: "city".into(),
                 kind: SchemaKind::Text,
                 default: Value::Str("Kyiv".into()),
+            },
+            SchemaEntry {
+                key: "spot".into(),
+                label: "spot".into(),
+                kind: SchemaKind::Search,
+                default: Value::Str("".into()),
             },
             SchemaEntry {
                 key: "days".into(),
@@ -742,6 +812,72 @@ mod tests {
             lp.state.config.plugin_cfg["weather"].settings["city"].as_str(),
             Some("Lviv"),
             "Esc saves nothing"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_picked_search_result_saves_all_its_values_at_once() {
+        use crate::plugins::manifest::SearchOption;
+        use ratatui::crossterm::event::KeyCode;
+        let path = temp_file("search-box");
+        let mut lp = Loop::for_test(Config::default(), Flags::default(), path.clone());
+        open_on(&mut lp, "spot");
+        press(&mut lp, KeyCode::Enter);
+        assert!(lp.state.search_box.is_some(), "Enter opens the search box");
+        for c in "Lq".chars() {
+            press(&mut lp, KeyCode::Char(c));
+        }
+        assert!(!lp.quit, "q does not quit while searching");
+        let later = Instant::now() + app::SEARCH_PAUSE;
+        lp.search_tick(later);
+        let b = lp.state.search_box.as_ref().unwrap();
+        assert_eq!(
+            b.error.as_deref(),
+            Some("the plugin is not running; turn it on first"),
+            "plugins are off in this test"
+        );
+        press(&mut lp, KeyCode::Backspace);
+        press(&mut lp, KeyCode::Char('v'));
+        let query = lp
+            .state
+            .search_box
+            .as_mut()
+            .unwrap()
+            .due(later + app::SEARCH_PAUSE);
+        let option = |label: &str, lat: f64| SearchOption {
+            label: label.into(),
+            values: vec![
+                ("lat".into(), Value::Float(lat)),
+                ("spot".into(), Value::Str(label.to_string().into())),
+            ],
+        };
+        lp.state.apply(AppEvent::SearchResults {
+            id: "weather".into(),
+            query: query.unwrap(),
+            result: Ok(vec![option("Place A", 1.5), option("Place B", 2.5)]),
+        });
+        press(&mut lp, KeyCode::Down);
+        press(&mut lp, KeyCode::Enter);
+        assert!(lp.state.search_box.is_none(), "Enter closes the box");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let saved = config::parse_text(&text).unwrap().config;
+        let w = &saved.plugin_cfg["weather"].settings;
+        assert_eq!(w["spot"].as_str(), Some("Place B"));
+        assert_eq!(w["lat"].as_float(), Some(2.5));
+        assert_eq!(
+            lp.state.config.plugin_cfg["weather"].settings["spot"].as_str(),
+            Some("Place B"),
+            "the running settings have it too"
+        );
+        press(&mut lp, KeyCode::Enter);
+        press(&mut lp, KeyCode::Char('x'));
+        press(&mut lp, KeyCode::Esc);
+        assert!(lp.state.search_box.is_none());
+        assert_eq!(
+            lp.state.overlay,
+            Overlay::Settings,
+            "Esc only closes the box"
         );
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }

@@ -12,6 +12,8 @@ Usage:
   telemetrix plugin check <file> [--json] [--run]
                                           load a plugin, run update() once, print the card
                                           (--run: as if its run key was pressed)
+  telemetrix plugin check <file> --search <text> [--json]
+                                          run the plugin's search(text) once, print the list
   telemetrix plugin list                  list the plugins that would run
   telemetrix plugin install [--force] [name...]
                                           install or update the built-in plugins
@@ -89,6 +91,8 @@ pub enum PluginCmd {
         json: bool,
         /// `update()` sees the trigger "manual" instead of "start".
         run: bool,
+        /// Run `search(text)` instead of `update()`.
+        search: Option<String>,
     },
     List,
     /// Built-in plugin names, or none for all of them.
@@ -155,6 +159,7 @@ struct Switches {
     plugins: bool,
     memory: bool,
     run: bool,
+    search: Option<String>,
     soak: Option<u64>,
     seconds: Option<u64>,
     idle_minutes: Option<u32>,
@@ -207,6 +212,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
             Long("plugins") => sw.plugins = true,
             Long("memory") => sw.memory = true,
             Long("run") => sw.run = true,
+            Long("search") => sw.search = Some(text(parser.value())?),
             Long("soak") => {
                 let n: u64 = text(parser.value())?
                     .parse()
@@ -288,6 +294,7 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
             file: PathBuf::from(file),
             json: sw.json,
             run: sw.run,
+            search: sw.search.clone(),
         }),
         ["plugin", "list"] => Command::Plugin(PluginCmd::List),
         ["plugin", "install", names @ ..] => Command::Plugin(PluginCmd::Install {
@@ -370,6 +377,12 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
     if sw.run && !matches!(cmd, Command::Plugin(PluginCmd::Check { .. })) {
         return Err("--run only applies to plugin check".into());
     }
+    if sw.search.is_some() && !matches!(cmd, Command::Plugin(PluginCmd::Check { .. })) {
+        return Err("--search only applies to plugin check".into());
+    }
+    if sw.search.is_some() && sw.run {
+        return Err("--search and --run do not go together".into());
+    }
     if sw.json && !takes_json {
         return Err("--json does not apply to this command".into());
     }
@@ -425,9 +438,23 @@ mod tests {
             Command::Plugin(PluginCmd::Check {
                 file: PathBuf::from("a.lua"),
                 json: false,
-                run: true
+                run: true,
+                search: None
             })
         );
+        assert_eq!(
+            run(&["plugin", "check", "w.lua", "--search", "lvov"])
+                .unwrap()
+                .command,
+            Command::Plugin(PluginCmd::Check {
+                file: PathBuf::from("w.lua"),
+                json: false,
+                run: false,
+                search: Some("lvov".into())
+            })
+        );
+        assert!(run(&["snapshot", "--search", "x"]).is_err());
+        assert!(run(&["plugin", "check", "w.lua", "--search", "x", "--run"]).is_err());
         let cli = run(&["selftest", "--memory", "--json"]).unwrap();
         assert_eq!(
             cli.command,

@@ -240,7 +240,7 @@ fn run(mut settings: NetworkSettings, tx: &Sender<AppEvent>, cmds: &mpsc::Receiv
         match cmds.recv_timeout(wait) {
             Ok(WorkerCmd::Stop) | Err(RecvTimeoutError::Disconnected) => return,
             Ok(WorkerCmd::Reconfigure(new)) => settings = new,
-            Ok(WorkerCmd::RunNow) | Err(RecvTimeoutError::Timeout) => {}
+            Ok(WorkerCmd::RunNow | WorkerCmd::Search(_)) | Err(RecvTimeoutError::Timeout) => {}
         }
     }
 }

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use super::PluginData;
 use super::host_api::{self, EmitFn, HostCtx, Http, LogFn, PluginMeta, Trigger};
-use super::manifest::{CardUpdate, PluginManifest};
+use super::manifest::{self, CardUpdate, PluginManifest, SearchOption};
 use super::sandbox::Sandbox;
 use super::schema::{self, SchemaEntry};
 use crate::config::{Config, PluginConfig};
@@ -84,6 +84,9 @@ fn short(e: &mlua::Error) -> String {
 /// A settings change waits this long for more changes, and for the `RunNow`
 /// that follows a saved text setting, so they end in one `update()`.
 const SETTLE: Duration = Duration::from_millis(300);
+
+/// The time limit of one `search(query)` call: someone waits for the list.
+pub const SEARCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One loaded plugin: its sandbox, its manifest and its HTTP client.
 pub struct Plugin {
@@ -220,6 +223,21 @@ impl Plugin {
         })
     }
 
+    /// Runs the plugin's `search(query)` with the current settings and the
+    /// short `SEARCH_TIMEOUT`.
+    pub fn search(&self, s: &RunnerSettings, query: &str) -> Result<Vec<SearchOption>, String> {
+        let Some(search) = &self.manifest.search else {
+            return Err("this plugin has no search function".into());
+        };
+        let settings = self.checked_settings(s);
+        host_api::set_settings(&self.sandbox.lua, &settings).map_err(|e| short(&e))?;
+        host_api::set_units(&self.sandbox.lua, &s.units).map_err(|e| short(&e))?;
+        self.sandbox.arm(SEARCH_TIMEOUT);
+        let result = search.call::<mlua::Value>(query);
+        self.sandbox.disarm();
+        manifest::search_options(result.map_err(|e| short(&e))?)
+    }
+
     /// Tests replace host functions (like `telemetrix.http_get`) through this.
     #[cfg(test)]
     pub fn lua(&self) -> &mlua::Lua {
@@ -278,6 +296,12 @@ impl RunnerHandle {
     pub fn run_now(&self) {
         let _ = self.cmd.send(WorkerCmd::RunNow);
     }
+
+    /// Asks the thread to run `search(query)`; the answer comes as
+    /// `AppEvent::SearchResults`.
+    pub fn search(&self, query: &str) {
+        let _ = self.cmd.send(WorkerCmd::Search(query.to_string()));
+    }
 }
 
 pub fn spawn(path: PathBuf, settings: RunnerSettings, tx: Sender<AppEvent>) -> RunnerHandle {
@@ -327,8 +351,19 @@ fn run(
         Err(e) => {
             let _ = tx.send(AppEvent::Log(format!("error: plugin {stem}: {e}")));
             let _ = tx.send(AppEvent::Plugin(error_data(&stem, &stem, e)));
-            while let Ok(WorkerCmd::Reconfigure(_) | WorkerCmd::RunNow) = cmds.recv() {}
-            return;
+            loop {
+                match cmds.recv() {
+                    Ok(WorkerCmd::Search(query)) => {
+                        let _ = tx.send(AppEvent::SearchResults {
+                            id: stem.clone(),
+                            query,
+                            result: Err("the plugin did not load, see the log".into()),
+                        });
+                    }
+                    Ok(WorkerCmd::Reconfigure(_) | WorkerCmd::RunNow) => {}
+                    Ok(WorkerCmd::Stop) | Err(_) => return,
+                }
+            }
         }
     };
     if let Ok(mut slot) = id_slot.lock() {
@@ -373,7 +408,7 @@ fn run(
             }
         }
         plugin.drop_idle_http();
-        trigger = match wait(&plugin, &mut settings, cmds) {
+        trigger = match wait(&plugin, &mut settings, cmds, tx) {
             Some(t) => t,
             None => return,
         };
@@ -387,6 +422,7 @@ fn wait(
     plugin: &Plugin,
     settings: &mut RunnerSettings,
     cmds: &mpsc::Receiver<WorkerCmd<RunnerSettings>>,
+    tx: &Sender<AppEvent>,
 ) -> Option<Trigger> {
     let ran = Instant::now();
     let mut due = ran + plugin.interval(settings);
@@ -407,6 +443,15 @@ fn wait(
                 };
             }
             Ok(WorkerCmd::RunNow) => return Some(Trigger::Key),
+            Ok(WorkerCmd::Search(query)) => {
+                let result = plugin.search(settings, &query);
+                plugin.drop_idle_http();
+                let _ = tx.send(AppEvent::SearchResults {
+                    id: plugin.id().to_string(),
+                    query,
+                    result,
+                });
+            }
             Err(RecvTimeoutError::Timeout) if changed => return Some(Trigger::Settings),
             Err(RecvTimeoutError::Timeout) => return Some(Trigger::Interval),
         }
@@ -564,6 +609,38 @@ mod tests {
         assert_eq!(next(Duration::from_secs(2)).unwrap().0, "settings");
         assert_eq!(next(Duration::from_secs(3)).unwrap().0, "interval");
         handle.stop();
+    }
+
+    #[test]
+    fn search_runs_on_the_plugin_thread_and_answers_with_an_event() {
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn(fixture("search.lua"), settings(), tx);
+        let answer = |rx: &mpsc::Receiver<AppEvent>| loop {
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(AppEvent::SearchResults { id, query, result }) => return (id, query, result),
+                Ok(_) => {}
+                Err(e) => panic!("no answer: {e}"),
+            }
+        };
+        handle.search("ab");
+        let (id, query, result) = answer(&rx);
+        assert_eq!((id.as_str(), query.as_str()), ("search", "ab"));
+        let options = result.unwrap();
+        assert_eq!(options[0].label, "Spot ab");
+        assert_eq!(
+            options[0].values[1],
+            ("spot".to_string(), crate::config::Value::Str("ab".into()))
+        );
+        handle.search("boom");
+        assert_eq!(answer(&rx).2, Err("no service".to_string()));
+        handle.stop();
+
+        let (tx, rx) = mpsc::channel();
+        let broken = spawn(fixture("broken.lua"), settings(), tx);
+        broken.search("ab");
+        let (_, _, result) = answer(&rx);
+        assert_eq!(result, Err("the plugin did not load, see the log".into()));
+        broken.stop();
     }
 
     #[test]

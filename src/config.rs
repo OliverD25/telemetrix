@@ -412,7 +412,9 @@ const PLUGIN_DEFAULTS: &str = r#"
 [plugin.weather]
 enabled = true
 interval = 600
-# city = "Kyiv"               # type it in the s box; looked up once per change
+# city = "Kyiv"               # search it in the s box, or type a name here
+# country = "UA"              # the s box search lists this country first; "" = any
+# place = "..."               # with lat/lon: the place the s box search saved
 # lat = 50.45                 # an exact place, used only when city is not set
 # lon = 30.52
 # label = "Home"              # the card title for lat/lon
@@ -1029,7 +1031,12 @@ fn read_plugin_tables(
                 message: format!("plugin.{id}.{key} = {} {what}, ignored", shown(value)),
             };
             let coordinate = key == "lat" || (key == "lon" && !table.contains_key("lat"));
-            if id == "weather" && coordinate && table.contains_key("city") {
+            // A place picked in the s box saves city, place, lat and lon together.
+            if id == "weather"
+                && coordinate
+                && table.contains_key("city")
+                && !table.contains_key("place")
+            {
                 problems.push(Problem {
                     line,
                     message: "plugin.weather has both city and lat/lon; lat/lon are ignored".into(),
@@ -1168,6 +1175,12 @@ fn invalid(msg: impl Into<String>) -> io::Error {
 
 /// Sets one dotted key in the file, keeping every other line as it was.
 pub fn set(path: &Path, key: &str, value: &Value) -> io::Result<()> {
+    set_many(path, &[(key.to_string(), value.clone())])
+}
+
+/// Sets several dotted keys in one atomic write, so a reader never sees
+/// only some of them (a picked place is a city plus its coordinates).
+pub fn set_many(path: &Path, values: &[(String, Value)]) -> io::Result<()> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == io::ErrorKind::NotFound => render_default_file(),
@@ -1179,21 +1192,23 @@ pub fn set(path: &Path, key: &str, value: &Value) -> io::Result<()> {
             e.message().trim()
         ))
     })?;
-    let parts: Vec<&str> = key.split('.').collect();
-    let (last, tables) = parts.split_last().ok_or_else(|| invalid("empty key"))?;
-    let mut table = doc.as_table_mut();
-    for part in tables {
-        table = table
-            .entry(part)
-            .or_insert_with(toml_edit::table)
-            .as_table_mut()
-            .ok_or_else(|| invalid(format!("{part} in {key} is not a table")))?;
+    for (key, value) in values {
+        let parts: Vec<&str> = key.split('.').collect();
+        let (last, tables) = parts.split_last().ok_or_else(|| invalid("empty key"))?;
+        let mut table = doc.as_table_mut();
+        for part in tables {
+            table = table
+                .entry(part)
+                .or_insert_with(toml_edit::table)
+                .as_table_mut()
+                .ok_or_else(|| invalid(format!("{part} in {key} is not a table")))?;
+        }
+        let mut new_value = value.to_toml();
+        if let Some(old) = table.get(last).and_then(Item::as_value) {
+            *new_value.decor_mut() = keep_comment_column(old, &new_value);
+        }
+        table.insert(last, Item::Value(new_value));
     }
-    let mut new_value = value.to_toml();
-    if let Some(old) = table.get(last).and_then(Item::as_value) {
-        *new_value.decor_mut() = keep_comment_column(old, &new_value);
-    }
-    table.insert(last, Item::Value(new_value));
     write_atomic(path, &doc.to_string())
 }
 
@@ -1419,6 +1434,11 @@ mod tests {
         let old =
             parse_text("[plugin.weather]\nlat = 50.45\nlon = 30.52\nlabel = \"Kyiv\"\n").unwrap();
         assert!(old.problems.is_empty(), "coordinates alone are fine");
+        let picked = parse_text(
+            "[plugin.weather]\ncity = \"Lviv\"\nlat = 49.84\nlon = 24.02\nplace = \"Lviv, Lviv Oblast, UA\"\n",
+        )
+        .unwrap();
+        assert!(picked.problems.is_empty(), "a picked place is fine");
         assert!(
             !Config::default().plugin_cfg["weather"]
                 .settings
@@ -1501,6 +1521,22 @@ mod tests {
         let created =
             parse_text(&std::fs::read_to_string(dir.join("new").join("t.toml")).unwrap()).unwrap();
         assert_eq!(created.config.general.theme, "minimalist");
+        set_many(
+            &file,
+            &[
+                ("plugin.weather.city".into(), text("Lviv")),
+                ("plugin.weather.lat".into(), Value::Float(49.84)),
+                ("plugin.weather.lon".into(), Value::Float(24.02)),
+                ("plugin.weather.place".into(), text("Lviv, Lviv Oblast, UA")),
+            ],
+        )
+        .unwrap();
+        let parsed = parse_text(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        let w = &parsed.config.plugin_cfg["weather"].settings;
+        assert_eq!(w["city"].as_str(), Some("Lviv"));
+        assert_eq!(w["lat"].as_float(), Some(49.84));
+        assert_eq!(w["place"].as_str(), Some("Lviv, Lviv Oblast, UA"));
+        assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

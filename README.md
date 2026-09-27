@@ -180,7 +180,9 @@ value, `Left` the previous one, `Shift` with `Left`/`Right` moves ten steps.
 Paths are shown but can only be changed in the file.
 
 Each plugin's section in the settings box also lists the plugin's own
-settings, like the weather city or the main bank. On a text setting,
+settings, like the weather city or the main bank. On the weather city, `Enter`
+opens a search list: type a few letters, pick the place with `Up`/`Down` and
+`Enter`. On a text setting,
 `Enter` opens an input line: type the text, `Enter` saves it and the plugin
 runs at once, `Esc` cancels. While you type, every key goes to the input;
 only `Ctrl+C` quits.
@@ -214,6 +216,7 @@ These need no terminal window, so scripts and agents can use them.
 | `telemetrix config show` | print every setting, its value and where it came from (default, file or flag) |
 | `telemetrix config reference` | print the settings table below |
 | `telemetrix plugin check <file> [--json] [--run]` | run a plugin once and print its card, its settings and any error; exit 1 on error. `--run` acts like the plugin's key, so the speed test really runs |
+| `telemetrix plugin check <file> --search <text> [--json]` | run the plugin's `search(text)` once and print the list the `s` box would show, for example the weather places for `lvov` |
 | `telemetrix plugin list` | list the plugins that would run, the plugin home, and whether each one is built-in, built-in-edited or yours |
 | `telemetrix plugin install [--force] [name...]` | install or update the built-in plugins now; `--force` also replaces your edits and restores deleted ones (all, or only the named ones) |
 | `telemetrix themes` | list the theme names |

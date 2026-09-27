@@ -1,7 +1,8 @@
 use mlua::{Function, Table, Value};
 
-use super::schema::{self, SchemaEntry};
+use super::schema::{self, SchemaEntry, SchemaKind};
 use super::{MetricItem, MetricStyle};
+use crate::config::Value as Setting;
 
 /// Trend lines outside this length become an error line.
 pub const TREND_POINTS: std::ops::RangeInclusive<usize> = 2..=400;
@@ -18,6 +19,8 @@ pub struct PluginManifest {
     /// Settings the `s` overlay shows and the runner checks, sorted by key.
     pub settings_schema: Vec<SchemaEntry>,
     pub update: Function,
+    /// `search(query)` for `kind = "search"` settings.
+    pub search: Option<Function>,
 }
 
 pub const MAX_CALL_TIMEOUT: u64 = 60;
@@ -70,6 +73,21 @@ impl PluginManifest {
             Value::Function(f) => f,
             _ => return Err("the returned table needs an update function".into()),
         };
+        let search = match t.get::<Value>("search").map_err(|e| e.to_string())? {
+            Value::Nil => None,
+            Value::Function(f) => Some(f),
+            _ => return Err("search must be a function".into()),
+        };
+        if search.is_none()
+            && let Some(e) = settings_schema
+                .iter()
+                .find(|e| e.kind == SchemaKind::Search)
+        {
+            return Err(format!(
+                "settings_schema.{} is a search setting, so the returned table needs a search function",
+                e.key
+            ));
+        }
         Ok(Self {
             id,
             title,
@@ -78,8 +96,75 @@ impl PluginManifest {
             call_timeout,
             settings_schema,
             update,
+            search,
         })
     }
+}
+
+/// The most places `search(query)` may offer; more are left out.
+pub const SEARCH_MAX: usize = 8;
+
+/// One choice from `search(query)`: what the list shows and the settings
+/// that picking it saves.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SearchOption {
+    pub label: String,
+    pub values: Vec<(String, Setting)>,
+}
+
+/// Reads `{ { label = "...", values = { key = value, ... } }, ... }`.
+pub fn search_options(v: Value) -> Result<Vec<SearchOption>, String> {
+    let Value::Table(list) = v else {
+        return Err("search() must return a list of { label, values }".into());
+    };
+    let mut out = Vec::new();
+    for (i, item) in list.sequence_values::<Value>().take(SEARCH_MAX).enumerate() {
+        let n = i + 1;
+        let Ok(Value::Table(item)) = item else {
+            return Err(format!("search result {n} must be a table"));
+        };
+        let label = match item.get::<Value>("label").map_err(|e| e.to_string())? {
+            Value::String(s) => s.to_string_lossy(),
+            _ => return Err(format!("search result {n} needs a text label")),
+        };
+        let Value::Table(values) = item.get::<Value>("values").map_err(|e| e.to_string())? else {
+            return Err(format!("search result {n} needs a values table"));
+        };
+        let mut settings = Vec::new();
+        for pair in values.pairs::<Value, Value>() {
+            let (k, v) = pair.map_err(|e| e.to_string())?;
+            let key = match k {
+                Value::String(s) => s.to_string_lossy(),
+                _ => return Err(format!("search result {n}: values keys must be names")),
+            };
+            if !schema::is_key(&key) || key == "enabled" || key == "interval" {
+                return Err(format!(
+                    "search result {n}: {key:?} cannot be a setting name"
+                ));
+            }
+            let value = match v {
+                Value::String(s) => Setting::Str(s.to_string_lossy().into()),
+                Value::Integer(i) => Setting::Int(i),
+                Value::Number(f) if f.is_finite() => Setting::Float(f),
+                Value::Boolean(b) => Setting::Bool(b),
+                _ => {
+                    return Err(format!(
+                        "search result {n}: {key} must be text, a number or true/false"
+                    ));
+                }
+            };
+            settings.push((key, value));
+        }
+        if settings.is_empty() {
+            return Err(format!("search result {n} has no values"));
+        }
+        settings.sort_by(|a, b| a.0.cmp(&b.0));
+        out.push(SearchOption {
+            label,
+            values: settings,
+        });
+    }
+    Ok(out)
 }
 
 /// What `update()` returns: `{ title?, metrics = { { label = "...", value = ... }, ... } }`.
@@ -276,5 +361,72 @@ mod tests {
             .unwrap();
         assert!(CardUpdate::from_value(v).is_err());
         assert!(CardUpdate::from_value(Value::Nil).is_err());
+    }
+
+    #[test]
+    fn a_search_setting_needs_a_search_function() {
+        let lua = Lua::new();
+        let schema = "settings_schema = { city = { kind = 'search', label = 'city' } }";
+        let t: Table = lua
+            .load(format!("return {{ {schema}, update = print }}"))
+            .eval()
+            .unwrap();
+        let err = PluginManifest::from_table(&t, "w").err().unwrap();
+        assert!(err.contains("needs a search function"), "{err}");
+        let t: Table = lua
+            .load(format!(
+                "return {{ {schema}, update = print, search = print }}"
+            ))
+            .eval()
+            .unwrap();
+        let m = PluginManifest::from_table(&t, "w").unwrap();
+        assert!(m.search.is_some());
+        assert_eq!(m.settings_schema[0].kind, SchemaKind::Search);
+        let t: Table = lua
+            .load("return { update = print, search = 5 }")
+            .eval()
+            .unwrap();
+        assert!(PluginManifest::from_table(&t, "w").is_err());
+    }
+
+    #[test]
+    fn search_options_are_read_and_capped() {
+        let lua = Lua::new();
+        let v: Value = lua
+            .load(
+                "local out = {} \
+                 for i = 1, 10 do out[i] = { label = 'Place ' .. i, \
+                   values = { city = 'Place', lat = 50.5, pop = i, exact = true } } end \
+                 return out",
+            )
+            .eval()
+            .unwrap();
+        let options = search_options(v).unwrap();
+        assert_eq!(options.len(), SEARCH_MAX);
+        assert_eq!(options[1].label, "Place 2");
+        assert_eq!(
+            options[1].values,
+            [
+                ("city".to_string(), Setting::Str("Place".into())),
+                ("exact".to_string(), Setting::Bool(true)),
+                ("lat".to_string(), Setting::Float(50.5)),
+                ("pop".to_string(), Setting::Int(2)),
+            ]
+        );
+        for bad in [
+            "5",
+            "{ 5 }",
+            "{ { values = { a = 1 } } }",
+            "{ { label = 'x' } }",
+            "{ { label = 'x', values = {} } }",
+            "{ { label = 'x', values = { enabled = false } } }",
+            "{ { label = 'x', values = { ['a.b'] = 1 } } }",
+            "{ { label = 'x', values = { a = {} } } }",
+        ] {
+            let v: Value = lua.load(format!("return {bad}")).eval().unwrap();
+            assert!(search_options(v).is_err(), "{bad}");
+        }
+        let v: Value = lua.load("return {}").eval().unwrap();
+        assert_eq!(search_options(v).unwrap(), [], "no places is not an error");
     }
 }

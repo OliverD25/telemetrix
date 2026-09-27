@@ -11,9 +11,16 @@ pub const TEXT_MAX: usize = 64;
 #[derive(Clone, Debug, PartialEq)]
 pub enum SchemaKind {
     Text,
+    /// Text chosen from a list the plugin's `search(query)` function
+    /// returns; picking one saves all of its `values`.
+    Search,
     Enum(Vec<String>),
     Bool,
-    Int { min: i64, max: i64, step: i64 },
+    Int {
+        min: i64,
+        max: i64,
+        step: i64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -28,6 +35,7 @@ impl SchemaEntry {
     pub fn kind_name(&self) -> &'static str {
         match self.kind {
             SchemaKind::Text => "text",
+            SchemaKind::Search => "search",
             SchemaKind::Enum(_) => "enum",
             SchemaKind::Bool => "bool",
             SchemaKind::Int { .. } => "int",
@@ -37,10 +45,10 @@ impl SchemaEntry {
     /// The file value when it fits this entry, else `Err` with the reason.
     pub fn check(&self, v: &toml_edit::Value) -> Result<Value, String> {
         match (&self.kind, v) {
-            (SchemaKind::Text, toml_edit::Value::String(s)) => {
+            (SchemaKind::Text | SchemaKind::Search, toml_edit::Value::String(s)) => {
                 Ok(Value::Str(s.value().clone().into()))
             }
-            (SchemaKind::Text, _) => Err("is not text".into()),
+            (SchemaKind::Text | SchemaKind::Search, _) => Err("is not text".into()),
             (SchemaKind::Bool, toml_edit::Value::Boolean(b)) => Ok(Value::Bool(*b.value())),
             (SchemaKind::Bool, _) => Err("is not true or false".into()),
             (SchemaKind::Enum(options), toml_edit::Value::String(s))
@@ -70,7 +78,7 @@ impl SchemaEntry {
     }
 }
 
-fn is_key(s: &str) -> bool {
+pub fn is_key(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 40
         && s.chars()
@@ -117,19 +125,24 @@ pub fn parse(t: &Table) -> Result<Vec<SchemaEntry>, String> {
 
 fn entry(key: &str, spec: &Table) -> Result<SchemaEntry, String> {
     let get = |name: &str| spec.get::<Lua>(name).map_err(|e| e.to_string());
-    let kind_name = text_of(&get("kind")?).ok_or("kind must be text, enum, bool or int")?;
+    let kind_name = text_of(&get("kind")?).ok_or("kind must be text, search, enum, bool or int")?;
     let label = match get("label")? {
         Lua::Nil => key.to_string(),
         v => text_of(&v).ok_or("label must be text")?,
     };
     let default = get("default")?;
     let (kind, default) = match kind_name.as_str() {
-        "text" => {
+        "text" | "search" => {
             let d = match default {
                 Lua::Nil => String::new(),
                 v => text_of(&v).ok_or("default must be text")?,
             };
-            (SchemaKind::Text, Value::Str(d.into()))
+            let kind = if kind_name == "text" {
+                SchemaKind::Text
+            } else {
+                SchemaKind::Search
+            };
+            (kind, Value::Str(d.into()))
         }
         "bool" => {
             let d = match default {
@@ -181,7 +194,7 @@ fn entry(key: &str, spec: &Table) -> Result<SchemaEntry, String> {
         }
         other => {
             return Err(format!(
-                "unknown kind {other:?}, use text, enum, bool or int"
+                "unknown kind {other:?}, use text, search, enum, bool or int"
             ));
         }
     };

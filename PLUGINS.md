@@ -63,6 +63,7 @@ The file must return a table with these fields:
 | `run_key` | no | One key that runs `update()` at once, like `"g"`. See [A key that runs the plugin now](#a-key-that-runs-the-plugin-now). |
 | `call_timeout` | no | Seconds one `update()` call may take, 1..60. Default: `plugins.call_timeout_s` (5). |
 | `settings_schema` | no | The settings a user can change in the `s` box. See [Settings the user can change in the dashboard](#settings-the-user-can-change-in-the-dashboard). |
+| `search` | only with a `search` setting | A function `search(query)` that returns choices for the `s` box's search list. See [A setting picked from a search list](#a-setting-picked-from-a-search-list). |
 
 `update()` must return a table:
 
@@ -173,7 +174,7 @@ return {
 
 | Field | Kinds | Meaning |
 |---|---|---|
-| `kind` | all | `"text"`, `"enum"`, `"bool"` or `"int"` |
+| `kind` | all | `"text"`, `"search"`, `"enum"`, `"bool"` or `"int"` |
 | `label` | all | The row name in the `s` box. Default: the key. |
 | `default` | all | Used when the file has no value or a wrong one. Without it: `""`, the first option, `false`, or `min`. |
 | `options` | enum | The choices, a list of text. |
@@ -205,6 +206,52 @@ line with a cursor:
 
 While the input is open, every key goes to it: `q` does not quit and `t`
 does not open the theme box. Only `Ctrl+C` still quits.
+
+### A setting picked from a search list
+
+Some values are hard to type exactly: a place name has official spellings,
+and the program needs its coordinates too. A `search` setting lets the
+user type a few letters and pick from a list that your plugin builds:
+
+```lua
+return {
+  settings_schema = {
+    city = { kind = "search", label = "city", default = "" },
+  },
+  search = function(query)
+    -- query: what the user typed, 2 or more characters
+    return {
+      { label = "Lviv, Lviv Oblast, UA",
+        values = { city = "Lviv", lat = 49.84, lon = 24.02, place = "Lviv, Lviv Oblast, UA" } },
+      -- up to 8 choices; more are left out
+    }
+  end,
+  update = function() ... end,
+}
+```
+
+- The row shows the setting's value, like a text row. `Enter` on it opens
+  the search box: a text line and a list under it.
+- After 2 or more characters and a pause of 400 ms in typing, telemetrix
+  asks the plugin's own thread to run `search(query)`. A spinner shows
+  while it waits. `Up` and `Down` choose, `Enter` saves, `Esc` closes the
+  box and saves nothing. As in the text input, every key goes to the box
+  and only `Ctrl+C` quits.
+- `Enter` saves **all** keys of the chosen `values` into `[plugin.<id>]`
+  in one write, then the plugin runs at once (trigger `"key"`). Values may
+  be text, numbers or `true`/`false`. `enabled` and `interval` cannot be
+  among them. Keys outside the schema (like `lat` above) are fine.
+- `search` has its own time limit of 5 seconds, and HTTP requests inside
+  it are cut to what is left. An error (`error("message", 0)`) shows in
+  the box. An empty list shows as "nothing found".
+- `search` sees `telemetrix.settings` like `update()` does, so it can read
+  other settings (the weather plugin reads its preferred `country`).
+- A plugin that declares a `search` setting must return a `search`
+  function, or it does not load.
+- The same Lua state runs `search` and `update()`, one after the other. A
+  search waits while `update()` runs.
+
+Try it without the dashboard: `telemetrix plugin check <file> --search <text>`.
 
 ## Functions telemetrix gives you
 
@@ -445,6 +492,7 @@ These commands work without the dashboard, so an agent can use them too:
 telemetrix plugin check plugins/hello.lua          # run update() once, print the card
 telemetrix plugin check plugins/hello.lua --json   # the same as JSON
 telemetrix plugin check plugins/hello.lua --run    # the same, with trigger() = "manual"
+telemetrix plugin check plugins/weather.lua --search lvov   # run search("lvov"), print the list
 telemetrix plugin list                             # every plugin with id, interval, state
 telemetrix snapshot --json --plugins               # metrics and every plugin card, once
 ```
@@ -481,7 +529,7 @@ only shows its stored result. With `--run` it really runs.
 | `network_ping.lua` | time to connect to a host | `host`, `port` | yes |
 | `currency.lua` | hryvnia rates from one bank (Monobank or PrivatBank, the other as backup), NBU graphs | `primary_bank`; file only: `currencies` | yes |
 | `crypto.lua` | coin prices from Binance, 7- and 30-day graphs | `quote`; file only: `coins` | yes |
-| `weather.lua` | now, tomorrow and the day after (Open-Meteo) | `city`; file only: `lat`, `lon`, `label` | yes |
+| `weather.lua` | now, tomorrow and the day after (Open-Meteo) | `city` (a search list), `country`; set by the search: `lat`, `lon`, `place`; file only: `label` | yes |
 | `speedtest.lua` | download, upload and ping against the nearest Ookla server (Cloudflare as backup), key `g` | `server`, `streams`, `seconds` | yes, about 700 MB per test at 1 Gbps |
 
 These files live in `plugins/` in the repository and are built into the
@@ -497,14 +545,34 @@ each data source and its free limits.
 - **weather:** Weather data by Open-Meteo.com (CC BY 4.0). The license
   requires attribution, so the card ends with a dim `data: Open-Meteo.com`
   line; keep it when you change the plugin. Temperatures follow
-  `telemetrix.units.temperature`. A city in the file (typed in the `s` box or written by
-  hand) wins over `lat` and `lon`. The coordinates are used only when no
-  city is set, and then `label` is the card title. Old v0.1 settings files
-  have exactly that: `lat`, `lon` and `label`, no city. Whenever `lat` or
-  `lon` exist, the plugin writes one line to the log saying which one it
-  uses, and `config check` warns about a section with both. The city's
-  schema default is empty, which the `s` box shows as `(not set)`; without
-  a city and without coordinates the card shows Kyiv.
+  `telemetrix.units.temperature`. The `city` row is a search list: picking
+  a place saves `city`, `lat`, `lon` and `place` (the list label). The
+  plugin decides in this order:
+  1. `place` with `lat` and `lon`, and `place` starts with `city`: the
+     picked place. The card title is the place name and country,
+     `Weather · Lviv, UA`.
+  2. Otherwise a `city`: looked up by name, with the same search as the
+     list. A city typed by hand in the file, without `place` or different
+     from it, lands here.
+  3. Otherwise `lat` and `lon` alone: those coordinates, with `label` as
+     the card title. Old v0.1 settings files have exactly that.
+
+  In cases 2 and 3 the plugin writes one line to the log saying what it
+  uses, and `config check` warns about `city` with `lat`/`lon` but no
+  `place`. The city's schema default is empty, which the `s` box shows as
+  `(not set)`; without a city and without coordinates the card shows Kyiv.
+
+  The search: the geocoding service finds only the official spelling or
+  its start, and Ukrainian Cyrillic only with `language=uk`. So the plugin
+  also tries about 45 old or Russian names (`kiev` → Kyiv, `lvov` → Lviv,
+  `киев` → Київ), fixes common Latin spellings (a leading `h` → `kh`,
+  `-iy`/`-yy` endings → `-yi`, `c` → `ts`, `i` ↔ `y` in the middle) and
+  Russian letters (`ы` → `и`, `-кий` → `-ький`), and at the end shorter
+  prefixes (never below 4 letters). It stops as soon as a place in the
+  preferred country turns up, and never sends more than 6 requests for
+  one search. Airports and regions are left out. Places in `country`
+  (default `"UA"`; empty = any) come first, then the biggest. Answers are
+  kept for 10 minutes, so typing the same letters again sends nothing.
 - **crypto:** old settings files list CoinGecko names (`"bitcoin"`); they
   still work. After an HTTP 429 from Binance the plugin sends no more
   requests until the next interval, because Binance bans addresses that

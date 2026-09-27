@@ -10,6 +10,7 @@ use crate::event::AppEvent;
 use crate::format;
 use crate::metrics::SystemSnapshot;
 use crate::metrics::network::NetDrive;
+use crate::plugins::manifest::SearchOption;
 use crate::plugins::schema::{SchemaEntry, TEXT_MAX};
 use crate::plugins::{PluginCard, PluginData, PluginStatus};
 use crate::selfmem::{self, MB, SelfMemory};
@@ -66,6 +67,9 @@ pub enum InputKey {
     Right,
     Home,
     End,
+    /// Up and Down choose in the search box's list.
+    Up,
+    Down,
     Save,
     Cancel,
 }
@@ -125,6 +129,129 @@ impl TextInput {
     }
 }
 
+/// After the last key, the search box waits this long before it asks.
+pub const SEARCH_PAUSE: Duration = Duration::from_millis(400);
+/// A search needs at least this many characters.
+pub const SEARCH_MIN_CHARS: usize = 2;
+/// The box gives up on an answer after this long (the plugin may be busy
+/// with a slow update before it gets to the search).
+pub const SEARCH_GIVE_UP: Duration = Duration::from_secs(20);
+
+/// The search box of a `kind = "search"` setting: a text line, the places
+/// the plugin's `search(query)` found, and the one chosen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SearchBox {
+    /// The plugin id; `input.key` is the setting and `label` its label.
+    pub input: TextInput,
+    pub label: String,
+    /// When the text last changed and has not been searched for yet.
+    edited: Option<Instant>,
+    /// The query sent to the plugin and when; `None` when nothing is pending.
+    pub sent: Option<(String, Instant)>,
+    /// The query whose results are shown.
+    pub shown: Option<String>,
+    pub results: Vec<SearchOption>,
+    pub selected: usize,
+    pub error: Option<String>,
+}
+
+impl SearchBox {
+    pub fn new(id: &str, key: &str, label: &str) -> Self {
+        Self {
+            input: TextInput::new(id, key, ""),
+            label: label.to_string(),
+            edited: None,
+            sent: None,
+            shown: None,
+            results: Vec::new(),
+            selected: 0,
+            error: None,
+        }
+    }
+
+    pub fn query(&self) -> &str {
+        self.input.text.trim()
+    }
+
+    /// Applies a key; Up and Down move in the list, other keys edit the text.
+    pub fn key(&mut self, key: InputKey, now: Instant) {
+        match key {
+            InputKey::Up => self.selected = self.selected.saturating_sub(1),
+            InputKey::Down => {
+                self.selected = (self.selected + 1).min(self.results.len().saturating_sub(1));
+            }
+            _ => {
+                let before = self.input.text.clone();
+                self.input.edit(key);
+                if self.input.text != before {
+                    self.edited = Some(now);
+                }
+            }
+        }
+    }
+
+    /// The query to send now: the pause after typing is over, the text is
+    /// long enough and it is not the one already shown or asked for.
+    pub fn due(&mut self, now: Instant) -> Option<String> {
+        if let Some((_, at)) = &self.sent
+            && now.duration_since(*at) >= SEARCH_GIVE_UP
+        {
+            self.sent = None;
+            self.error = Some("no answer from the plugin".into());
+        }
+        let edited = self.edited?;
+        if now.duration_since(edited) < SEARCH_PAUSE {
+            return None;
+        }
+        self.edited = None;
+        let query = self.query().to_string();
+        if query.chars().count() < SEARCH_MIN_CHARS {
+            self.sent = None;
+            self.shown = None;
+            self.results.clear();
+            self.error = None;
+            return None;
+        }
+        let pending = self.sent.as_ref().map(|(q, _)| q.as_str());
+        if pending == Some(query.as_str())
+            || (pending.is_none() && self.shown.as_deref() == Some(query.as_str()))
+        {
+            return None;
+        }
+        self.sent = Some((query.clone(), now));
+        Some(query)
+    }
+
+    /// Takes the plugin's answer; an answer to an older query is dropped.
+    pub fn answer(&mut self, query: &str, result: Result<Vec<SearchOption>, String>) {
+        if self.sent.as_ref().map(|(q, _)| q.as_str()) != Some(query) {
+            return;
+        }
+        self.sent = None;
+        self.shown = Some(query.to_string());
+        self.selected = 0;
+        match result {
+            Ok(results) => {
+                self.results = results;
+                self.error = None;
+            }
+            Err(e) => {
+                self.results.clear();
+                self.error = Some(e);
+            }
+        }
+    }
+
+    pub fn waiting(&self) -> bool {
+        self.sent.is_some() || self.edited.is_some()
+    }
+
+    /// The chosen place, when the list shows one.
+    pub fn chosen(&self) -> Option<&SearchOption> {
+        self.results.get(self.selected)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     Quit,
@@ -154,7 +281,8 @@ pub enum Action {
     Nothing,
 }
 
-/// While the text input is open every key goes to it; only Ctrl+C quits.
+/// While the text input or the search box is open every key goes to it;
+/// only Ctrl+C quits.
 pub fn input_key_action(key: &KeyEvent) -> Action {
     let m = key.modifiers;
     // AltGr arrives as Ctrl+Alt on Windows and types characters like @.
@@ -173,6 +301,8 @@ pub fn input_key_action(key: &KeyEvent) -> Action {
         KeyCode::Right => InputKey::Right,
         KeyCode::Home => InputKey::Home,
         KeyCode::End => InputKey::End,
+        KeyCode::Up => InputKey::Up,
+        KeyCode::Down => InputKey::Down,
         KeyCode::Enter => InputKey::Save,
         KeyCode::Esc => InputKey::Cancel,
         _ => return Action::Nothing,
@@ -271,6 +401,8 @@ pub struct AppState {
     pub plugin_schemas: BTreeMap<String, Vec<SchemaEntry>>,
     /// The open text input in the settings overlay.
     pub text_input: Option<TextInput>,
+    /// The open search box in the settings overlay.
+    pub search_box: Option<SearchBox>,
     /// Network drives; `None` until the first answer ("checking...").
     pub network: Option<Vec<NetDrive>>,
     log_sink: Option<LineWriter<File>>,
@@ -311,6 +443,7 @@ impl AppState {
             plugin_titles: BTreeMap::new(),
             plugin_schemas: BTreeMap::new(),
             text_input: None,
+            search_box: None,
             log_sink: None,
         };
         state.open_log_file();
@@ -406,6 +539,11 @@ impl AppState {
             }
             AppEvent::Log(text) => self.log(&text),
             AppEvent::Network(drives) => self.network = Some(drives),
+            AppEvent::SearchResults { id, query, result } => {
+                if let Some(b) = self.search_box.as_mut().filter(|b| b.input.id == id) {
+                    b.answer(&query, result);
+                }
+            }
         }
         self.dirty = true;
     }
@@ -841,7 +979,12 @@ mod tests {
         assert_eq!(k(KeyCode::Char(' ')), Action::Input(InputKey::Char(' ')));
         assert_eq!(k(KeyCode::Esc), Action::Input(InputKey::Cancel));
         assert_eq!(k(KeyCode::Enter), Action::Input(InputKey::Save));
-        assert_eq!(k(KeyCode::Up), Action::Nothing);
+        assert_eq!(
+            k(KeyCode::Up),
+            Action::Input(InputKey::Up),
+            "the text input ignores it; the search box moves"
+        );
+        assert_eq!(k(KeyCode::Tab), Action::Nothing);
         let shift_k = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT);
         assert_eq!(
             input_key_action(&shift_k),
@@ -879,6 +1022,87 @@ mod tests {
         assert_eq!(long.text.chars().count(), TEXT_MAX);
         long.edit(InputKey::Char('y'));
         assert_eq!(long.text.chars().count(), TEXT_MAX);
+    }
+
+    fn option(label: &str) -> SearchOption {
+        SearchOption {
+            label: label.into(),
+            values: vec![(
+                "city".into(),
+                crate::config::Value::Str(label.to_string().into()),
+            )],
+        }
+    }
+
+    #[test]
+    fn search_box_waits_for_a_pause_and_two_letters() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let mut b = SearchBox::new("weather", "city", "city");
+        b.key(InputKey::Char('L'), ms(0));
+        assert_eq!(b.due(ms(500)), None, "one letter is not enough");
+        b.key(InputKey::Char('v'), ms(600));
+        assert_eq!(b.due(ms(900)), None, "still typing");
+        assert_eq!(b.due(ms(1000)).as_deref(), Some("Lv"));
+        assert!(b.waiting());
+        b.key(InputKey::Char('i'), ms(1100));
+        assert_eq!(b.due(ms(1600)).as_deref(), Some("Lvi"));
+        // The answer to "Lv" arrives late: dropped.
+        b.answer("Lv", Ok(vec![option("Lviv"), option("Lvivka")]));
+        assert!(b.results.is_empty());
+        b.answer("Lvi", Ok(vec![option("Lviv"), option("Lvivka")]));
+        assert!(!b.waiting());
+        b.key(InputKey::Down, ms(1700));
+        b.key(InputKey::Down, ms(1700));
+        assert_eq!(b.chosen().map(|o| o.label.as_str()), Some("Lvivka"));
+        b.key(InputKey::Up, ms(1800));
+        assert_eq!(b.chosen().map(|o| o.label.as_str()), Some("Lviv"));
+        // Typing and deleting back to the shown query asks nothing new.
+        b.key(InputKey::Char('x'), ms(1900));
+        b.key(InputKey::Backspace, ms(1950));
+        assert_eq!(b.due(ms(2400)), None);
+        b.key(InputKey::Char('x'), ms(2500));
+        assert_eq!(b.due(ms(2900)).as_deref(), Some("Lvix"));
+        b.answer("Lvix", Err("Open-Meteo: HTTP 500".into()));
+        assert_eq!(b.error.as_deref(), Some("Open-Meteo: HTTP 500"));
+        assert!(b.chosen().is_none());
+        b.key(InputKey::Char('y'), ms(3000));
+        assert_eq!(b.due(ms(3400)).as_deref(), Some("Lvixy"));
+        assert_eq!(b.due(ms(3400) + SEARCH_GIVE_UP), None);
+        assert_eq!(b.error.as_deref(), Some("no answer from the plugin"));
+        assert!(!b.waiting());
+    }
+
+    #[test]
+    fn search_keys_reach_the_box_and_ctrl_c_still_quits() {
+        assert_eq!(
+            input_key_action(&key(KeyCode::Down)),
+            Action::Input(InputKey::Down)
+        );
+        assert_eq!(
+            input_key_action(&key(KeyCode::Char('q'))),
+            Action::Input(InputKey::Char('q'))
+        );
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(input_key_action(&ctrl_c), Action::Quit);
+        let mut state = AppState::new(Config::default(), ConfigStatus::Ok);
+        state.search_box = Some(SearchBox::new("weather", "city", "city"));
+        let b = state.search_box.as_mut().unwrap();
+        b.key(InputKey::Char('K'), Instant::now());
+        b.key(InputKey::Char('y'), Instant::now());
+        let query = b.due(Instant::now() + SEARCH_PAUSE).unwrap();
+        state.apply(AppEvent::SearchResults {
+            id: "other".into(),
+            query: query.clone(),
+            result: Ok(vec![option("x")]),
+        });
+        assert!(state.search_box.as_ref().unwrap().results.is_empty());
+        state.apply(AppEvent::SearchResults {
+            id: "weather".into(),
+            query,
+            result: Ok(vec![option("Kyiv")]),
+        });
+        assert_eq!(state.search_box.as_ref().unwrap().results.len(), 1);
     }
 
     #[test]

@@ -45,7 +45,15 @@ pub fn to_json(d: &PluginData) -> Value {
 pub fn run(cmd: PluginCmd, flags: &Flags) -> ExitCode {
     let (path, cfg, _) = config::load_effective(flags);
     match cmd {
-        PluginCmd::Check { file, json, run } => check(&file, json, run, &cfg),
+        PluginCmd::Check {
+            file,
+            json,
+            search: Some(query),
+            ..
+        } => search(&file, &query, json, &cfg),
+        PluginCmd::Check {
+            file, json, run, ..
+        } => check(&file, json, run, &cfg),
         PluginCmd::List => list(&cfg, &path),
         PluginCmd::Install { force, names } => {
             let home = bundled::home(&path);
@@ -112,7 +120,7 @@ fn schema_json(schema: &[SchemaEntry]) -> Value {
                     v["max"] = json!(max);
                     v["step"] = json!(step);
                 }
-                SchemaKind::Text | SchemaKind::Bool => {}
+                SchemaKind::Text | SchemaKind::Search | SchemaKind::Bool => {}
             }
             v
         })
@@ -132,7 +140,7 @@ fn schema_lines(schema: &[SchemaEntry]) -> Vec<String> {
                     format!(" ({min}..{max} step {step})")
                 }
                 SchemaKind::Int { min, max, .. } => format!(" ({min}..{max})"),
-                SchemaKind::Text | SchemaKind::Bool => String::new(),
+                SchemaKind::Text | SchemaKind::Search | SchemaKind::Bool => String::new(),
             };
             format!(
                 "  {:<width$}  {}{range}, default {}  \"{}\"",
@@ -198,6 +206,69 @@ fn check(file: &Path, json: bool, run: bool, cfg: &Config) -> ExitCode {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+/// A search result's values as `key=value` pairs, in key order.
+fn values_text(values: &[(String, ConfigValue)]) -> String {
+    values
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+/// `plugin check <file> --search <text>`: what the `s` box would list.
+fn search(file: &Path, query: &str, json: bool, cfg: &Config) -> ExitCode {
+    let settings = RunnerSettings::from_config(cfg);
+    let log = Rc::new(|msg: &str| eprintln!("log: {msg}"));
+    let stop = Arc::new(AtomicBool::new(false));
+    let result = Plugin::load(file, &settings, stop, log, runner::no_emit())
+        .and_then(|p| p.search(&settings, query));
+    match (result, json) {
+        (Ok(options), true) => {
+            let list: Vec<Value> = options
+                .iter()
+                .map(|o| {
+                    let values: serde_json::Map<String, Value> = o
+                        .values
+                        .iter()
+                        .map(|(k, v)| {
+                            let v = match v {
+                                ConfigValue::Str(s) => json!(s),
+                                ConfigValue::Int(n) => json!(n),
+                                ConfigValue::Float(f) => json!(f),
+                                ConfigValue::Bool(b) => json!(b),
+                                other => json!(other.to_string()),
+                            };
+                            (k.clone(), v)
+                        })
+                        .collect();
+                    json!({ "label": o.label, "values": values })
+                })
+                .collect();
+            println!(
+                "{:#}",
+                json!({ "query": query, "ok": true, "results": list })
+            );
+            ExitCode::SUCCESS
+        }
+        (Ok(options), false) => {
+            println!("search {query:?}: {} found", options.len());
+            for (i, o) in options.iter().enumerate() {
+                println!("  {}. {}", i + 1, o.label);
+                println!("     {}", values_text(&o.values));
+            }
+            ExitCode::SUCCESS
+        }
+        (Err(e), true) => {
+            println!("{:#}", json!({ "query": query, "ok": false, "error": e }));
+            ExitCode::FAILURE
+        }
+        (Err(e), false) => {
+            println!("search {query:?}: error: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 

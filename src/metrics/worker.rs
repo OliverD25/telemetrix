@@ -403,7 +403,7 @@ fn run(mut intervals: MetricsIntervals, tx: &Sender<AppEvent>, cmds: &mpsc::Rece
                 next = intervals.all().map(|iv| now + iv);
                 continue;
             }
-            Ok(WorkerCmd::RunNow) | Err(RecvTimeoutError::Timeout) => {}
+            Ok(WorkerCmd::RunNow | WorkerCmd::Search(_)) | Err(RecvTimeoutError::Timeout) => {}
         }
         let now = Instant::now();
         let due = next.map(|n| now >= n);

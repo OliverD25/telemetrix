@@ -10,7 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::{AppState, TextInput};
+use crate::app::{AppState, SEARCH_MIN_CHARS, SearchBox, TextInput};
 use crate::config::{self, Config, Kind, MATRIX_COLORS, PluginConfig, SETTINGS, Setting, Value};
 use crate::plugins::schema::{self, SchemaEntry, SchemaKind, TEXT_MAX};
 use crate::themes::common::{ACCENT, MUTED, WARN, fg};
@@ -84,6 +84,15 @@ pub fn text_row(row: &Row) -> Option<(&str, &str)> {
         Row::PluginSetting { id, entry } if entry.kind == SchemaKind::Text => {
             Some((id, &entry.key))
         }
+        _ => None,
+    }
+}
+
+/// The plugin id and schema entry of a `search` row, which Enter opens
+/// the search box for.
+pub fn search_row(row: &Row) -> Option<(&str, &SchemaEntry)> {
+    match row {
+        Row::PluginSetting { id, entry } if entry.kind == SchemaKind::Search => Some((id, entry)),
         _ => None,
     }
 }
@@ -266,7 +275,7 @@ pub fn step(row: &Row, cfg: &Config, dir: i32, big: bool) -> Option<Change> {
         Row::PluginSetting { id, entry } => {
             let current = schema_value(cfg, id, entry);
             let value = match &entry.kind {
-                SchemaKind::Text => return None,
+                SchemaKind::Text | SchemaKind::Search => return None,
                 SchemaKind::Bool => Value::Bool(!current.as_bool()),
                 SchemaKind::Enum(options) => {
                     let i = options
@@ -395,6 +404,76 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState) {
     };
     let footer_lines = vec![Line::styled(keys, fg(MUTED)), status];
     frame.render_widget(Paragraph::new(footer_lines), footer);
+    if let Some(b) = &state.search_box {
+        draw_search(frame, area, b);
+    }
+}
+
+const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
+
+/// The spinner character for this moment: a quarter turn every 250 ms.
+fn spinner() -> char {
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    SPINNER[(ms / 250 % 4) as usize]
+}
+
+/// The search box over the settings: the typed text, a status line and up
+/// to eight places, the chosen one highlighted.
+pub fn draw_search(frame: &mut Frame, area: Rect, b: &SearchBox) {
+    let rows = crate::plugins::manifest::SEARCH_MAX;
+    let height = u16::try_from(rows + 6).unwrap_or(u16::MAX);
+    let title = format!("search {}", b.label);
+    let inner = super::overlay_frame(frame, super::popup(area, 60, height), &title);
+    let width = usize::from(inner.width);
+    let highlight = Style::new().bg(Color::Rgb(62, 62, 62)).fg(Color::White);
+    let head = format!(" {}: ", b.label);
+    let room = width.saturating_sub(head.chars().count() + 1);
+    let mut first = vec![Span::styled(head, fg(ACCENT))];
+    first.extend(input_spans(&b.input, room, Style::new()));
+    let mut lines = vec![Line::from(first)];
+    let status = if b.waiting() && b.query().chars().count() >= SEARCH_MIN_CHARS {
+        Line::styled(format!(" {} searching...", spinner()), fg(MUTED))
+    } else if let Some(e) = &b.error {
+        Line::styled(format!(" {e}"), fg(WARN))
+    } else if b.query().chars().count() < SEARCH_MIN_CHARS {
+        Line::styled(
+            format!(" type {SEARCH_MIN_CHARS} or more letters"),
+            fg(MUTED),
+        )
+    } else if b.results.is_empty() && b.shown.is_some() {
+        Line::styled(" nothing found", fg(WARN))
+    } else {
+        Line::styled(format!(" {} found", b.results.len()), fg(MUTED))
+    };
+    lines.push(status);
+    for (i, option) in b.results.iter().enumerate() {
+        let text = format!(
+            " {} {}",
+            if i == b.selected { '>' } else { ' ' },
+            option.label
+        );
+        let text: String = text.chars().take(width).collect();
+        lines.push(if i == b.selected {
+            Line::styled(
+                format!("{text:<width$}"),
+                highlight.add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Line::raw(text)
+        });
+    }
+    let [list, footer] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
+    frame.render_widget(Paragraph::new(lines), list);
+    frame.render_widget(
+        Paragraph::new(Line::styled(
+            " Up/Down choose · Enter save · Esc cancel",
+            fg(MUTED),
+        )),
+        footer,
+    );
 }
 
 /// The text with a block cursor, scrolled so the cursor stays in `room`.
@@ -434,9 +513,14 @@ fn row_line(
         spans.push(Span::styled(" ".repeat(width.saturating_sub(used)), style));
         return Line::from(spans);
     }
-    if selected && text_row(row).is_some() {
+    if selected && (text_row(row).is_some() || search_row(row).is_some()) {
         let value = value_text(row, cfg);
-        let text = format!("  {key:<KEY_WIDTH$}  {value}  (Enter to edit)");
+        let hint = if search_row(row).is_some() {
+            "search"
+        } else {
+            "edit"
+        };
+        let text = format!("  {key:<KEY_WIDTH$}  {value}  (Enter to {hint})");
         return Line::styled(
             format!("{text:<width$}"),
             highlight.add_modifier(Modifier::BOLD),

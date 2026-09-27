@@ -168,6 +168,11 @@ impl Harness {
             .unwrap_or_else(|e| runner::error_data(self.plugin.id(), self.plugin.title(), e))
     }
 
+    /// Runs the plugin's `search(query)`, as the `s` box does.
+    pub fn search(&self, query: &str) -> Result<Vec<super::manifest::SearchOption>, String> {
+        self.plugin.search(&self.settings, query)
+    }
+
     pub fn asked_for(&self, pattern: &str) -> usize {
         self.asked
             .borrow()
@@ -692,8 +697,210 @@ mod weather {
         let d = h.run(Trigger::Key);
         assert_eq!(d.error.as_deref(), Some("place not found: Qwxzzy"));
         println!("{}", render_card(&d, 45));
+        assert_eq!(
+            h.asked_for("geocoding"),
+            2,
+            "as typed, then the prefix qwxz: {:?}",
+            h.asked.borrow()
+        );
         h.run(Trigger::Interval);
-        assert_eq!(h.asked_for("geocoding"), 1, "a miss is cached too");
+        assert_eq!(h.asked_for("geocoding"), 2, "a miss is cached too");
+    }
+
+    const KHM_UK: &str =
+        "name=%D0%A5%D0%BC%D0%B5%D0%BB%D1%8C%D0%BD%D0%B8%D1%86%D1%8C%D0%BA%D0%B8%D0%B9&";
+
+    /// Recorded answers (2026-09-27) for the search cases; anything else
+    /// finds nothing, as those spellings did live.
+    fn search_routes() -> Vec<(&'static str, Answer)> {
+        vec![
+            ("name=khmelnytskyi&", Answer::File("geo_khmelnytskyi.json")),
+            ("name=Khmelnytskyi&", Answer::File("geo_khmelnytskyi.json")),
+            (KHM_UK, Answer::File("geo_khmelnytskyi_uk.json")),
+            ("name=kiev&", Answer::File("geo_kiev.json")),
+            ("name=Kyiv&", Answer::File("geo_kyiv_list.json")),
+            ("name=lvov&", Answer::File("geo_lvov.json")),
+            ("name=Lviv&", Answer::File("geo_lviv_list.json")),
+            ("name=exampletow&", Answer::File("geo_exampletown.json")),
+            ("geocoding-api", Answer::File("geo_none.json")),
+            (
+                "api.open-meteo.com/v1/forecast",
+                Answer::File("forecast.json"),
+            ),
+        ]
+    }
+
+    fn labels(options: &[crate::plugins::manifest::SearchOption]) -> Vec<&str> {
+        options.iter().map(|o| o.label.as_str()).collect()
+    }
+
+    /// The search box as the `s` overlay draws it, `width` columns wide.
+    fn render_search(b: &crate::app::SearchBox, width: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let height = 16;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| crate::ui::settings_overlay::draw_search(f, f.area(), b))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_misspelled_latin_name_finds_the_official_one() {
+        let h = Harness::new("weather", "", &search_routes());
+        let found = h.search("hmelnitskiy").unwrap();
+        assert_eq!(
+            labels(&found),
+            [
+                "Khmelnytskyi, Khmelnytskyi Oblast, UA",
+                "Khmelnytskyi, Luhansk Oblast, UA",
+                "Khmelnytskyi, Kirovohrad Oblast, UA",
+            ],
+            "the airport and the heliport are left out, the biggest place first"
+        );
+        let values = &found[0].values;
+        let get = |k: &str| {
+            values
+                .iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.clone())
+        };
+        use crate::config::Value as V;
+        assert_eq!(get("city"), Some(V::Str("Khmelnytskyi".into())));
+        assert_eq!(get("lat"), Some(V::Float(49.41835)));
+        assert_eq!(get("lon"), Some(V::Float(26.97936)));
+        assert_eq!(
+            get("place"),
+            Some(V::Str("Khmelnytskyi, Khmelnytskyi Oblast, UA".into()))
+        );
+        let asked: Vec<String> = h.asked.borrow().clone();
+        assert_eq!(asked.len(), 3, "typed, kh + yi, then i -> y: {asked:?}");
+        assert!(asked[0].contains("name=hmelnitskiy&count=10&language=en"));
+        assert!(asked[1].contains("name=khmelnitskyi&"));
+        assert!(asked[2].contains("name=khmelnytskyi&"));
+
+        let mut b = crate::app::SearchBox::new("weather", "city", "city");
+        let t0 = std::time::Instant::now();
+        for c in "hmelnitskiy".chars() {
+            b.key(crate::app::InputKey::Char(c), t0);
+        }
+        let query = b.due(t0 + crate::app::SEARCH_PAUSE).unwrap();
+        b.answer(&query, Ok(found));
+        let text = render_search(&b, 62);
+        println!("{text}");
+        assert!(text.contains("city: hmelnitskiy"));
+        assert!(text.contains("3 found"));
+        assert!(text.contains("> Khmelnytskyi, Khmelnytskyi Oblast, UA"));
+        assert!(text.contains("Up/Down choose · Enter save · Esc cancel"));
+    }
+
+    #[test]
+    fn old_russian_names_find_todays_place_first() {
+        let h = Harness::new("weather", "", &search_routes());
+        let kiev = h.search("kiev").unwrap();
+        assert_eq!(kiev.len(), 8);
+        assert_eq!(kiev[0].label, "Kyiv, Kyiv City, UA");
+        assert!(
+            labels(&kiev).iter().all(|l| l.ends_with(", UA")),
+            "the preferred country fills the list: {:?}",
+            labels(&kiev)
+        );
+        let lvov = h.search("lvov").unwrap();
+        assert_eq!(
+            labels(&lvov)[..2],
+            ["Lviv, Lviv Oblast, UA", "Lvove, Kherson Oblast, UA"]
+        );
+        assert!(!labels(&lvov).iter().any(|l| l.contains("Airport")));
+    }
+
+    #[test]
+    fn without_a_country_the_biggest_places_come_first() {
+        let mut h = Harness::new("weather", "", &search_routes());
+        h.set("country", "''");
+        let kiev = h.search("kiev").unwrap();
+        let list = labels(&kiev);
+        assert_eq!(list[0], "Kyiv, Kyiv City, UA");
+        assert!(list.contains(&"Kievskiy, Moscow Oblast, RU"), "{list:?}");
+        assert!(
+            list.iter()
+                .position(|l| *l == "Kievskiy, Moscow Oblast, RU")
+                < list.iter().position(|l| *l == "Kyivka, Kherson Oblast, UA"),
+            "9,700 people before 325: {list:?}"
+        );
+    }
+
+    #[test]
+    fn russian_cyrillic_is_asked_in_ukrainian() {
+        let h = Harness::new("weather", "", &search_routes());
+        let found = h.search("Хмельницкий").unwrap();
+        assert_eq!(labels(&found), ["Хмельницький, Хмельницька область, UA"]);
+        let asked = h.asked.borrow();
+        assert_eq!(
+            asked.len(),
+            2,
+            "as typed, then the Ukrainian name: {asked:?}"
+        );
+        assert!(asked.iter().all(|u| u.contains("language=uk")));
+    }
+
+    #[test]
+    fn nothing_found_tries_shorter_prefixes() {
+        let h = Harness::new("weather", "", &search_routes());
+        let found = h.search("Exampletownz").unwrap();
+        assert_eq!(labels(&found), ["Exampletown, Example Region, XX"]);
+        assert!(h.asked.borrow().len() <= 6);
+        assert_eq!(h.asked_for("name=exampletow&"), 1);
+        assert_eq!(h.search("x").unwrap(), [], "one letter asks nothing");
+        let asked = h.asked.borrow().len();
+        h.search("Exampletownz").unwrap();
+        assert_eq!(h.asked.borrow().len(), asked, "the answers are cached");
+    }
+
+    #[test]
+    fn a_picked_place_uses_its_coordinates() {
+        let h = Harness::new(
+            "weather",
+            "city = \"Lviv\"\nlat = 49.83826\nlon = 24.02324\nplace = \"Lviv, Lviv Oblast, UA\"",
+            &search_routes(),
+        );
+        let d = h.run(Trigger::Settings);
+        assert_eq!(d.error, None);
+        assert_eq!(d.title, "Weather · Lviv, UA");
+        assert_eq!(h.asked_for("geocoding"), 0);
+        assert!(h.asked.borrow()[0].contains("latitude=49.83826&longitude=24.02324"));
+        assert!(h.log.borrow().is_empty(), "{:?}", h.log.borrow());
+    }
+
+    #[test]
+    fn a_city_typed_by_hand_wins_over_an_old_pick() {
+        let mut h = Harness::new(
+            "weather",
+            "city = \"lvov\"\nlat = 50.45\nlon = 30.52\nplace = \"Kyiv, Kyiv City, UA\"",
+            &search_routes(),
+        );
+        let d = h.run(Trigger::Settings);
+        assert_eq!(d.error, None);
+        assert_eq!(d.title, "Weather · Lviv, UA", "the alias finds Lviv");
+        assert_eq!(
+            h.log.borrow().as_slice(),
+            ["using city lvov; lat/lon are ignored"]
+        );
+        h.set("city", "'hmelnitskiy'");
+        h.set("place", "''");
+        let d = h.run(Trigger::Settings);
+        assert_eq!(d.title, "Weather · Khmelnytskyi, UA");
     }
 
     #[test]

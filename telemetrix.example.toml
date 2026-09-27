@@ -64,7 +64,9 @@ show_sparklines = true      # history graphs under CPU and RAM
 [plugin.weather]
 enabled = true
 interval = 600
-# city = "Kyiv"               # type it in the s box; looked up once per change
+# city = "Kyiv"               # search it in the s box, or type a name here
+# country = "UA"              # the s box search lists this country first; "" = any
+# place = "..."               # with lat/lon: the place the s box search saved
 # lat = 50.45                 # an exact place, used only when city is not set
 # lon = 30.52
 # label = "Home"              # the card title for lat/lon

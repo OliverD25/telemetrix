@@ -30,6 +30,9 @@ All notable changes to telemetrix. Versions follow
   it prints the swayidle or xautolock line instead. The watcher runs from a
   copy of the program, so it never blocks `cargo install`;
   `telemetrix screensaver update` refreshes that copy after an update.
+- **Search settings for plugins:** a `kind = "search"` setting and a
+  `search(query)` function give a plugin a pick-from-a-list row in the `s`
+  box. `plugin check <file> --search <text>` runs it without the dashboard.
 - **Memory soak test:** `selftest --memory --soak <minutes>` checks that
   memory does not grow over a long run.
 
@@ -37,8 +40,10 @@ All notable changes to telemetrix. Versions follow
 
 - Crypto prices come from Binance instead of CoinGecko, with 7- and 30-day
   graphs.
-- The weather card takes a city name typed in the `s` box and shows today,
-  tomorrow and the day after. Temperatures follow `units.temperature`.
+- The weather card shows today, tomorrow and the day after. Temperatures
+  follow `units.temperature`. Its city is picked from a search list in the
+  `s` box, which also finds misspelled, old Russian and Cyrillic names;
+  places in the `country` setting (default `UA`) come first.
 - The default total memory budget is 14 MB (was 13 MB); the core budget
   stays 10 MB.
 - On Windows the program uses the segment heap, so private memory stays flat
