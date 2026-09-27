@@ -27,6 +27,9 @@ Usage:
                                           without input (Windows; Linux prints a recipe)
   telemetrix screensaver uninstall [--dry-run]
                                           remove it again
+  telemetrix screensaver update [--dry-run]
+                                          copy the new program to the watcher after
+                                          `cargo install` and restart the watcher
   telemetrix screensaver status           show whether it is installed and running
   telemetrix screensaver watch --idle-minutes N [--dry-run]
                                           the watcher that install starts at logon
@@ -97,10 +100,23 @@ pub enum PluginCmd {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ScreensaverCmd {
-    Install { idle_minutes: u32, dry_run: bool },
-    Uninstall { dry_run: bool },
+    Install {
+        idle_minutes: u32,
+        dry_run: bool,
+    },
+    Uninstall {
+        dry_run: bool,
+    },
+    Update {
+        dry_run: bool,
+    },
     Status,
-    Watch { idle_minutes: u32, dry_run: bool },
+    Watch {
+        idle_minutes: u32,
+        dry_run: bool,
+        /// Hidden: the program the watcher opens, when it runs from a copy.
+        dashboard_exe: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -143,6 +159,7 @@ struct Switches {
     seconds: Option<u64>,
     idle_minutes: Option<u32>,
     dry_run: bool,
+    dashboard_exe: Option<PathBuf>,
 }
 
 pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
@@ -218,6 +235,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
                 sw.idle_minutes = Some(n);
             }
             Long("dry-run") => sw.dry_run = true,
+            Long("dashboard-exe") => {
+                sw.dashboard_exe = Some(parser.value().map_err(|e| e.to_string())?.into())
+            }
             Long("screensaver") => flags.screensaver = true,
             Long("data-dir") => {
                 flags.data_dir = Some(parser.value().map_err(|e| e.to_string())?.into())
@@ -292,11 +312,15 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
         ["screensaver", "uninstall"] => Command::Screensaver(ScreensaverCmd::Uninstall {
             dry_run: sw.dry_run,
         }),
+        ["screensaver", "update"] => Command::Screensaver(ScreensaverCmd::Update {
+            dry_run: sw.dry_run,
+        }),
         ["screensaver", "status"] => Command::Screensaver(ScreensaverCmd::Status),
         ["screensaver", "watch"] => match sw.idle_minutes {
             Some(idle_minutes) => Command::Screensaver(ScreensaverCmd::Watch {
                 idle_minutes,
                 dry_run: sw.dry_run,
+                dashboard_exe: sw.dashboard_exe.clone(),
             }),
             None => return Err("screensaver watch needs --idle-minutes".into()),
         },
@@ -329,11 +353,19 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
             Command::Screensaver(
                 ScreensaverCmd::Install { .. }
                     | ScreensaverCmd::Uninstall { .. }
+                    | ScreensaverCmd::Update { .. }
                     | ScreensaverCmd::Watch { .. }
             )
         )
     {
-        return Err("--dry-run only applies to screensaver install, uninstall and watch".into());
+        return Err(
+            "--dry-run only applies to screensaver install, uninstall, update and watch".into(),
+        );
+    }
+    if sw.dashboard_exe.is_some()
+        && !matches!(cmd, Command::Screensaver(ScreensaverCmd::Watch { .. }))
+    {
+        return Err("--dashboard-exe only applies to screensaver watch".into());
     }
     if sw.run && !matches!(cmd, Command::Plugin(PluginCmd::Check { .. })) {
         return Err("--run only applies to plugin check".into());
@@ -464,8 +496,37 @@ mod tests {
                 .command,
             Command::Screensaver(ScreensaverCmd::Watch {
                 idle_minutes: 1,
-                dry_run: false
+                dry_run: false,
+                dashboard_exe: None
             })
+        );
+        assert_eq!(
+            run(&[
+                "screensaver",
+                "watch",
+                "--idle-minutes",
+                "2",
+                "--dashboard-exe",
+                "t.exe"
+            ])
+            .unwrap()
+            .command,
+            Command::Screensaver(ScreensaverCmd::Watch {
+                idle_minutes: 2,
+                dry_run: false,
+                dashboard_exe: Some(PathBuf::from("t.exe"))
+            })
+        );
+        assert_eq!(
+            run(&["screensaver", "update", "--dry-run"])
+                .unwrap()
+                .command,
+            Command::Screensaver(ScreensaverCmd::Update { dry_run: true })
+        );
+        assert!(run(&["screensaver", "install", "--dashboard-exe", "t.exe"]).is_err());
+        assert!(
+            !HELP.contains("--dashboard-exe"),
+            "internal flag stays out of --help"
         );
         let cli = run(&["--screensaver"]).unwrap();
         assert!(cli.flags.screensaver && cli.command == Command::Tui);

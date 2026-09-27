@@ -131,6 +131,7 @@ log, `?` lists all keys, `q` quits. Every change you make is saved at once.
 | Settings file | `%APPDATA%\telemetrix\telemetrix.toml` | `~/.config/telemetrix/telemetrix.toml` |
 | Plugins (`.lua` files) | `%APPDATA%\telemetrix\plugins` | `~/.config/telemetrix/plugins` |
 | Plugin data (stored rates, results) | `%LOCALAPPDATA%\telemetrix\plugins` | `~/.local/share/telemetrix/plugins` |
+| Screensaver watcher's copy of the program | `%LOCALAPPDATA%\telemetrix\screensaver` | (none) |
 
 The settings file appears the first time you change something in the
 dashboard; `telemetrix config init` writes it now, with a comment on every
@@ -218,6 +219,7 @@ These need no terminal window, so scripts and agents can use them.
 | `telemetrix themes` | list the theme names |
 | `telemetrix screensaver install [--idle-minutes N] [--dry-run]` | open the dashboard full screen after N minutes without input (Windows); on Linux print the idle-daemon line. See [As a screensaver](#as-a-screensaver-when-the-pc-is-idle-windows) |
 | `telemetrix screensaver uninstall [--dry-run]` / `status` | remove it / show whether it is installed and running |
+| `telemetrix screensaver update [--dry-run]` | after `cargo install`: copy the new program to the watcher and restart it. See [Updating telemetrix](#updating-telemetrix) |
 | `telemetrix selftest --memory [--seconds N] [--json]` | measure memory against the budgets; exit 1 if over (see below) |
 
 ## Themes
@@ -699,8 +701,10 @@ in a normal console window.
 - `telemetrix screensaver status` shows whether it is installed, whether
   the watcher and a screensaver dashboard run, and how long the PC has
   been idle.
-- `telemetrix screensaver uninstall` removes it and ends the watcher
-  (`--dry-run` works here too).
+- `telemetrix screensaver uninstall` removes it, ends the watcher and
+  deletes the watcher's copy of the program (`--dry-run` works here too).
+- `telemetrix screensaver update` copies a new telemetrix to the watcher
+  after an update. See [Updating telemetrix](#updating-telemetrix).
 
 **How it works.** `install` creates a Task Scheduler task named
 "telemetrix screensaver" that starts a small watcher,
@@ -720,9 +724,32 @@ only when the CPU and disks are quiet too, and checks that only every few
 minutes, so the start comes late or never. The logon trigger that starts
 the watcher is reliable.
 
-The task starts the program from where it was when you ran `install`. If
-you move or reinstall telemetrix somewhere else, run `install` again. If
-you ran `install` with `--config <file>`, the dashboard uses that file.
+The watcher runs from a copy of the program,
+`%LOCALAPPDATA%\telemetrix\screensaver\telemetrix-watch.exe`. Windows
+cannot replace a program file while it runs. If the watcher ran your
+`telemetrix.exe` itself, `cargo install` could not update that file. The
+copy still opens the dashboard from the `telemetrix.exe` you ran `install`
+with; `install` writes down its path. If you move telemetrix somewhere
+else, run `install` again. If you ran `install` with `--config <file>`, the
+dashboard uses that file.
+
+### Updating telemetrix
+
+1. Close every telemetrix dashboard. A running dashboard locks
+   `telemetrix.exe`, so the update would fail with "Access is denied".
+2. Install the new version, for example
+   `cargo install --git https://github.com/OliverD25/telemetrix`.
+3. If you use the screensaver, run `telemetrix screensaver update`. It
+   ends the watcher, copies the new program to it and starts it again.
+   `telemetrix screensaver status` says `copy: older than ...` when you
+   forgot this step.
+
+A screensaver installed by a build without `screensaver update` runs
+`telemetrix.exe` itself and blocks step 2. Run
+`telemetrix screensaver uninstall` with that build first, then update,
+then run `telemetrix screensaver install` again. A newer build's
+`telemetrix screensaver update` also changes such an older task to use the
+copy, with the same settings.
 
 An older version of this README suggested a task with `/SC ONIDLE` and the
 same name. `install` replaces it, and `uninstall` removes it.

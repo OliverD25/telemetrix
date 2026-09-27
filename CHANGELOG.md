@@ -27,7 +27,9 @@ All notable changes to telemetrix. Versions follow
   registers a small watcher as a logon task. It opens the dashboard full
   screen after N minutes without input and closes on any key. `uninstall`
   and `status` go with it, and `--dry-run` shows what would change. On Linux
-  it prints the swayidle or xautolock line instead.
+  it prints the swayidle or xautolock line instead. The watcher runs from a
+  copy of the program, so it never blocks `cargo install`;
+  `telemetrix screensaver update` refreshes that copy after an update.
 - **Memory soak test:** `selftest --memory --soak <minutes>` checks that
   memory does not grow over a long run.
 

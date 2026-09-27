@@ -9,6 +9,12 @@
 //! watcher as a Task Scheduler logon task; the logon trigger is reliable,
 //! runs in the user's own session and needs no administrator rights.
 //!
+//! The task runs a copy of the program (`telemetrix-watch.exe` in the data
+//! folder), not the installed `telemetrix.exe`. A running exe cannot be
+//! replaced on Windows, so a watcher started from the installed file would
+//! make `cargo install` fail with "Access is denied". The copy still opens
+//! the dashboard from the installed file, whose path `install` records.
+//!
 //! On Linux the idle daemons (swayidle, xautolock) already do this job, so
 //! `install` only prints the line to add.
 
@@ -22,6 +28,8 @@ use std::time::Duration;
 use crate::cli::{Flags, ScreensaverCmd};
 
 pub const TASK_NAME: &str = "telemetrix screensaver";
+/// The file name of the copy the task runs.
+pub const WATCH_EXE: &str = "telemetrix-watch.exe";
 pub const DEFAULT_IDLE_MINUTES: u32 = 10;
 /// How often the watcher looks at the idle time.
 pub const POLL: Duration = Duration::from_secs(5);
@@ -95,8 +103,13 @@ fn xml_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// The watcher's arguments after the program path.
-pub fn watch_args(idle_minutes: u32, config: Option<&Path>) -> Vec<String> {
+/// The watcher's arguments after the program path. `dashboard` is the
+/// installed program the watcher opens when it runs from a copy.
+pub fn watch_args(
+    idle_minutes: u32,
+    config: Option<&Path>,
+    dashboard: Option<&Path>,
+) -> Vec<String> {
     let mut args = Vec::new();
     if let Some(c) = config {
         args.extend(["--config".to_string(), c.display().to_string()]);
@@ -107,7 +120,120 @@ pub fn watch_args(idle_minutes: u32, config: Option<&Path>) -> Vec<String> {
         "--idle-minutes".to_string(),
         idle_minutes.to_string(),
     ]);
+    if let Some(d) = dashboard {
+        args.extend(["--dashboard-exe".to_string(), d.display().to_string()]);
+    }
     args
+}
+
+/// Where `install` puts the copy the task runs:
+/// `%LOCALAPPDATA%\telemetrix\screensaver\telemetrix-watch.exe`.
+pub fn watch_copy_path(local_app_data: Option<PathBuf>) -> PathBuf {
+    local_app_data
+        .unwrap_or_else(std::env::temp_dir)
+        .join("telemetrix")
+        .join("screensaver")
+        .join(WATCH_EXE)
+}
+
+/// Splits a command line made by [`quote`] back into its arguments.
+fn split_args(line: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    let mut started = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if in_quotes && chars.peek() == Some(&'"') => {
+                cur.push('"');
+                chars.next();
+            }
+            '"' => {
+                in_quotes = !in_quotes;
+                started = true;
+            }
+            ' ' | '\t' if !in_quotes => {
+                if started {
+                    args.push(std::mem::take(&mut cur));
+                    started = false;
+                }
+            }
+            _ => {
+                cur.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        args.push(cur);
+    }
+    args
+}
+
+/// What the installed task runs, read back from its `conhost.exe` arguments.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TaskInfo {
+    /// The program the task starts: the copy, or the installed exe for a
+    /// task from before the copy existed.
+    pub program: PathBuf,
+    /// `--dashboard-exe`: the installed program the watcher opens.
+    pub dashboard: Option<PathBuf>,
+    pub config: Option<PathBuf>,
+    pub idle_minutes: Option<u32>,
+}
+
+pub fn parse_task_args(line: &str) -> Option<TaskInfo> {
+    let args = split_args(line);
+    let mut it = args.iter();
+    if it.next()? != "--headless" {
+        return None;
+    }
+    let program = PathBuf::from(it.next()?);
+    let mut info = TaskInfo {
+        program,
+        dashboard: None,
+        config: None,
+        idle_minutes: None,
+    };
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--config" => info.config = it.next().map(PathBuf::from),
+            "--dashboard-exe" => info.dashboard = it.next().map(PathBuf::from),
+            "--idle-minutes" => info.idle_minutes = it.next().and_then(|n| n.parse().ok()),
+            _ => {}
+        }
+    }
+    Some(info)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CopyState {
+    Missing,
+    UpToDate,
+    /// The installed program changed after the copy was made.
+    Older,
+}
+
+/// Compares the copy with the installed program. `fs::copy` keeps the
+/// modified time, so a copy made from the current file has the same time.
+pub fn copy_state(copy: &Path, installed: &Path) -> CopyState {
+    let meta = |p: &Path| {
+        std::fs::metadata(p)
+            .ok()
+            .map(|m| (m.modified().ok(), m.len()))
+    };
+    match (meta(copy), meta(installed)) {
+        (None, _) => CopyState::Missing,
+        (Some(_), None) => CopyState::UpToDate,
+        (Some((ct, cl)), Some((it, il))) => {
+            if cl != il || matches!((ct, it), (Some(c), Some(i)) if c < i) {
+                CopyState::Older
+            } else {
+                CopyState::UpToDate
+            }
+        }
+    }
 }
 
 /// The dashboard the watcher starts: Windows Terminal full screen with the
@@ -244,11 +370,23 @@ pub fn run(cmd: ScreensaverCmd, flags: &Flags) -> ExitCode {
                 ExitCode::SUCCESS
             }
         }
+        ScreensaverCmd::Update { dry_run } => {
+            if cfg!(windows) {
+                sys::update(&exe, dry_run)
+            } else {
+                println!("nothing to update on Linux: your idle daemon starts telemetrix itself");
+                ExitCode::SUCCESS
+            }
+        }
         ScreensaverCmd::Status => sys::status(),
         ScreensaverCmd::Watch {
             idle_minutes,
             dry_run,
-        } => sys::watch(&exe, config.as_deref(), idle_minutes, dry_run, flags),
+            dashboard_exe,
+        } => {
+            let dashboard = dashboard_exe.unwrap_or_else(|| exe.clone());
+            sys::watch(&dashboard, config.as_deref(), idle_minutes, dry_run, flags)
+        }
     }
 }
 
@@ -266,7 +404,7 @@ fn human(d: Duration) -> String {
 mod sys {
     use std::io::Write;
     use std::os::windows::process::CommandExt;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::process::{Command, ExitCode, Stdio};
     use std::time::Duration;
 
@@ -398,31 +536,103 @@ mod sys {
             .join(" ")
     }
 
+    /// The copy the task runs.
+    fn copy_path() -> PathBuf {
+        super::watch_copy_path(std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
+    }
+
+    fn same_file(a: &Path, b: &Path) -> bool {
+        match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => a == b,
+        }
+    }
+
+    /// Asks a running watcher to end and waits until it has; true when one ran.
+    fn stop_watcher() -> bool {
+        if !signal_stop(STOP_EVENT) {
+            return false;
+        }
+        for _ in 0..100 {
+            if !mutex_exists(WATCH_MUTEX) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        true
+    }
+
+    /// Copies the program for the task. The old watcher may hold its file
+    /// for a moment after it released the mutex, so a locked file is
+    /// retried for a few seconds.
+    fn copy_exe(from: &Path, to: &Path) -> Result<(), String> {
+        if let Some(dir) = to.parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+        }
+        let mut last = None;
+        for _ in 0..20 {
+            match std::fs::copy(from, to) {
+                Ok(_) => return Ok(()),
+                Err(e) => last = Some(e),
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        Err(format!(
+            "cannot copy {} to {}: {}",
+            from.display(),
+            to.display(),
+            last.map(|e| e.to_string()).unwrap_or_default()
+        ))
+    }
+
+    fn run_task() -> bool {
+        schtasks(&["/Run", "/TN", TASK_NAME]).is_ok_and(|o| o.status.success())
+    }
+
     pub fn install(
         exe: &Path,
         config: Option<&Path>,
         idle_minutes: u32,
         dry_run: bool,
     ) -> ExitCode {
-        let xml = task_xml(exe, &watch_args(idle_minutes, config), &user());
+        let copy = copy_path();
+        if same_file(exe, &copy) {
+            eprintln!(
+                "screensaver: this is the watcher's copy; run install from the installed telemetrix.exe"
+            );
+            return ExitCode::FAILURE;
+        }
+        let xml = task_xml(&copy, &watch_args(idle_minutes, config, Some(exe)), &user());
         let file = std::env::temp_dir().join("telemetrix-screensaver-task.xml");
         let file_text = file.display().to_string();
         let create = ["/Create", "/TN", TASK_NAME, "/XML", &file_text, "/F"];
         let start = ["/Run", "/TN", TASK_NAME];
         if dry_run {
             println!("--dry-run: nothing is changed. install would:");
-            println!("1. write this task definition to {file_text}:\n");
+            println!("1. ask a running watcher to end (event {STOP_EVENT}) and wait for it");
+            println!(
+                "2. copy {} to {}, so the watcher never locks the installed program",
+                exe.display(),
+                copy.display()
+            );
+            println!("3. write this task definition to {file_text}:\n");
             println!("{xml}");
             println!(
-                "2. register it (replacing a task with the same name): {}",
+                "4. register it (replacing a task with the same name): {}",
                 show(&create)
             );
-            println!("3. delete {file_text}");
+            println!("5. delete {file_text}");
             println!(
-                "4. start the watcher now instead of at the next logon: {}",
+                "6. start the watcher now instead of at the next logon: {}",
                 show(&start)
             );
             return ExitCode::SUCCESS;
+        }
+        stop_watcher();
+        if let Err(e) = copy_exe(exe, &copy) {
+            eprintln!("screensaver: {e}");
+            return ExitCode::FAILURE;
         }
         // schtasks reads the XML as UTF-16, the encoding the header names.
         let mut bytes = vec![0xFF, 0xFE];
@@ -447,14 +657,77 @@ mod sys {
                 return ExitCode::FAILURE;
             }
         }
-        let started = schtasks(&start).is_ok_and(|o| o.status.success());
+        let started = run_task();
         println!(
             "installed: after {idle_minutes} min without input the dashboard opens full screen.\n\
-             The watcher starts at every logon{}. Remove it with: telemetrix screensaver uninstall",
+             The watcher starts at every logon{}. It runs from {}.\n\
+             After `cargo install`, run: telemetrix screensaver update\n\
+             Remove it with: telemetrix screensaver uninstall",
             if started {
                 " and runs now"
             } else {
                 " (it could not be started now)"
+            },
+            copy.display()
+        );
+        ExitCode::SUCCESS
+    }
+
+    /// `update`: copy the installed program to the watcher again and restart
+    /// it. A task from before the copy existed is installed again with its
+    /// own settings.
+    pub fn update(exe: &Path, dry_run: bool) -> ExitCode {
+        let Some(info) = installed_arguments().and_then(|a| super::parse_task_args(&a)) else {
+            eprintln!(
+                "screensaver: no task \"{TASK_NAME}\" is installed; use: telemetrix screensaver install"
+            );
+            return ExitCode::FAILURE;
+        };
+        let Some(dashboard) = info.dashboard else {
+            println!(
+                "the task runs {} itself (an older install), so it locks that file.\n\
+                 It is installed again to run a copy, with the same settings:",
+                info.program.display()
+            );
+            let idle = info.idle_minutes.unwrap_or(super::DEFAULT_IDLE_MINUTES);
+            return install(exe, info.config.as_deref(), idle, dry_run);
+        };
+        if !same_file(exe, &dashboard) {
+            println!(
+                "note: the task opens {}, but this program is {}. \
+                 To switch, run install from the program you want.",
+                dashboard.display(),
+                exe.display()
+            );
+        }
+        let copy = info.program;
+        if dry_run {
+            println!("--dry-run: nothing is changed. update would:");
+            println!("1. ask a running watcher to end (event {STOP_EVENT}) and wait for it");
+            println!("2. copy {} to {}", dashboard.display(), copy.display());
+            println!(
+                "3. start the watcher again: {}",
+                show(&["/Run", "/TN", TASK_NAME])
+            );
+            return ExitCode::SUCCESS;
+        }
+        let was_running = stop_watcher();
+        if let Err(e) = copy_exe(&dashboard, &copy) {
+            eprintln!("screensaver: {e}");
+            if was_running {
+                run_task();
+            }
+            return ExitCode::FAILURE;
+        }
+        let started = run_task();
+        println!(
+            "updated: {} is a fresh copy of {}; the watcher {}",
+            copy.display(),
+            dashboard.display(),
+            if started {
+                "runs again"
+            } else {
+                "could not be started now (it starts at the next logon)"
             }
         );
         ExitCode::SUCCESS
@@ -462,13 +735,19 @@ mod sys {
 
     pub fn uninstall(dry_run: bool) -> ExitCode {
         let delete = ["/Delete", "/TN", TASK_NAME, "/F"];
+        let copy = installed_arguments()
+            .and_then(|a| super::parse_task_args(&a))
+            .filter(|i| i.dashboard.is_some())
+            .map(|i| i.program)
+            .unwrap_or_else(copy_path);
         if dry_run {
             println!("--dry-run: nothing is changed. uninstall would:");
             println!("1. ask a running watcher to end (it waits on the event {STOP_EVENT})");
             println!("2. remove the task: {}", show(&delete));
+            println!("3. delete the watcher's copy {}", copy.display());
             return ExitCode::SUCCESS;
         }
-        let stopped = signal_stop(STOP_EVENT);
+        let stopped = stop_watcher();
         let removed = match schtasks(&delete) {
             Ok(out) if out.status.success() => true,
             Ok(_) => false,
@@ -477,8 +756,9 @@ mod sys {
                 return ExitCode::FAILURE;
             }
         };
+        let copy_gone = remove_copy(&copy);
         println!(
-            "{}; {}",
+            "{}; {}; {}",
             if removed {
                 "the task is removed"
             } else {
@@ -488,9 +768,36 @@ mod sys {
                 "the watcher was asked to end"
             } else {
                 "no watcher was running"
+            },
+            match copy_gone {
+                Ok(true) => "the watcher's copy is deleted".to_string(),
+                Ok(false) => "there was no watcher copy".to_string(),
+                Err(e) => format!("the watcher's copy could not be deleted: {e}"),
             }
         );
         ExitCode::SUCCESS
+    }
+
+    /// Deletes the copy (retrying while the old watcher still holds it) and
+    /// its folder when that is empty; Ok(false) when there was none.
+    fn remove_copy(copy: &Path) -> Result<bool, String> {
+        if !copy.exists() {
+            return Ok(false);
+        }
+        let mut last = None;
+        for _ in 0..20 {
+            match std::fs::remove_file(copy) {
+                Ok(()) => {
+                    if let Some(dir) = copy.parent() {
+                        let _ = std::fs::remove_dir(dir);
+                    }
+                    return Ok(true);
+                }
+                Err(e) => last = Some(e),
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        Err(last.map(|e| e.to_string()).unwrap_or_default())
     }
 
     /// The watcher arguments of the installed task, from `schtasks /Query /XML`.
@@ -512,12 +819,36 @@ mod sys {
     }
 
     pub fn status() -> ExitCode {
-        let task = match installed_arguments() {
+        let args = installed_arguments();
+        let task = match &args {
             Some(args) => format!("installed (\"{TASK_NAME}\"): conhost.exe {args}"),
             None => "not installed".to_string(),
         };
         let yes_no = |b: bool| if b { "running" } else { "not running" };
         println!("task:       {task}");
+        if let Some(info) = args.as_deref().and_then(super::parse_task_args) {
+            println!("runs:       {}", info.program.display());
+            match &info.dashboard {
+                Some(dashboard) => {
+                    println!("opens:      {}", dashboard.display());
+                    let copy = match super::copy_state(&info.program, dashboard) {
+                        super::CopyState::UpToDate => "up to date".to_string(),
+                        super::CopyState::Older => format!(
+                            "older than {}: run telemetrix screensaver update",
+                            dashboard.display()
+                        ),
+                        super::CopyState::Missing => {
+                            "missing: run telemetrix screensaver update".to_string()
+                        }
+                    };
+                    println!("copy:       {copy}");
+                }
+                None => println!(
+                    "copy:       none (an older install that locks the program; \
+                     run telemetrix screensaver update)"
+                ),
+            }
+        }
         println!("watcher:    {}", yes_no(mutex_exists(WATCH_MUTEX)));
         println!("dashboard:  {}", yes_no(mutex_exists(DASHBOARD_MUTEX)));
         match idle_time() {
@@ -693,6 +1024,10 @@ mod sys {
         ExitCode::SUCCESS
     }
 
+    pub fn update(_: &Path, _: bool) -> ExitCode {
+        ExitCode::SUCCESS
+    }
+
     pub fn status() -> ExitCode {
         println!(
             "telemetrix installs no screensaver on Linux: use `telemetrix screensaver install` for the swayidle or xautolock line"
@@ -774,7 +1109,7 @@ mod tests {
     #[test]
     fn task_xml_starts_the_watcher_at_logon_without_a_window() {
         let exe = Path::new(r"C:\Program Files\tx & co\telemetrix.exe");
-        let args = watch_args(15, Some(Path::new(r"D:\cfg\t.toml")));
+        let args = watch_args(15, Some(Path::new(r"D:\cfg\t.toml")), None);
         let xml = task_xml(exe, &args, r"PC\someone");
         assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-16\"?>"));
         assert!(xml.contains(
@@ -790,6 +1125,87 @@ mod tests {
              --config D:\\cfg\\t.toml screensaver watch --idle-minutes 15</Arguments>"
         ));
         assert!(!xml.contains("RunOnlyIfIdle>true"));
+    }
+
+    #[test]
+    fn the_task_runs_the_copy_and_opens_the_installed_program() {
+        let copy = watch_copy_path(Some(PathBuf::from(r"C:\Data Local")));
+        assert_eq!(
+            copy,
+            Path::new(r"C:\Data Local")
+                .join("telemetrix")
+                .join("screensaver")
+                .join("telemetrix-watch.exe")
+        );
+        let installed = Path::new(r"C:\Program Files\tx & co\telemetrix.exe");
+        let args = watch_args(7, Some(Path::new(r"D:\my cfg\t.toml")), Some(installed));
+        assert_eq!(
+            &args[args.len() - 2..],
+            [
+                "--dashboard-exe",
+                r"C:\Program Files\tx & co\telemetrix.exe"
+            ]
+        );
+        let xml = task_xml(&copy, &args, r"PC\someone");
+        let start = xml.find("<Arguments>").unwrap() + "<Arguments>".len();
+        let end = xml.find("</Arguments>").unwrap();
+        let line = xml[start..end]
+            .replace("&quot;", "\"")
+            .replace("&amp;", "&");
+        assert_eq!(
+            parse_task_args(&line).unwrap(),
+            TaskInfo {
+                program: copy,
+                dashboard: Some(installed.to_path_buf()),
+                config: Some(PathBuf::from(r"D:\my cfg\t.toml")),
+                idle_minutes: Some(7),
+            }
+        );
+    }
+
+    #[test]
+    fn an_older_task_without_a_copy_is_recognised() {
+        let info = parse_task_args(
+            r#"--headless C:\t\telemetrix.exe screensaver watch --idle-minutes 10"#,
+        )
+        .unwrap();
+        assert_eq!(info.program, Path::new(r"C:\t\telemetrix.exe"));
+        assert_eq!(info.dashboard, None);
+        assert_eq!(info.config, None);
+        assert_eq!(info.idle_minutes, Some(10));
+        assert!(parse_task_args("/c something else").is_none());
+        assert_eq!(
+            split_args(r#"a "b c" "d \"e\"" """#),
+            ["a", "b c", "d \"e\"", ""]
+        );
+    }
+
+    #[test]
+    fn copy_state_compares_time_and_size() {
+        let dir = std::env::temp_dir().join(format!("telemetrix-copy-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let installed = dir.join("telemetrix.exe");
+        let copy = dir.join("telemetrix-watch.exe");
+        std::fs::write(&installed, b"version one").unwrap();
+        assert_eq!(copy_state(&copy, &installed), CopyState::Missing);
+        std::fs::copy(&installed, &copy).unwrap();
+        assert_eq!(copy_state(&copy, &installed), CopyState::UpToDate);
+        // A new build of the same size, written later.
+        std::fs::write(&installed, b"version two").unwrap();
+        let later = std::time::SystemTime::now() + Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&installed)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert_eq!(copy_state(&copy, &installed), CopyState::Older);
+        std::fs::write(&installed, b"a longer version three").unwrap();
+        std::fs::copy(&installed, &copy).unwrap();
+        assert_eq!(copy_state(&copy, &installed), CopyState::UpToDate);
+        std::fs::write(&installed, b"short").unwrap();
+        assert_eq!(copy_state(&copy, &installed), CopyState::Older);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
