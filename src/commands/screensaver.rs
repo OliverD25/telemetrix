@@ -190,6 +190,16 @@ pub fn watch_log_path(copy: &Path) -> PathBuf {
     copy.with_file_name("watch.log")
 }
 
+/// `\\?\C:\x` becomes `C:\x` and `\\?\UNC\srv\x` becomes `\\srv\x`: the
+/// plain form a task definition and a command line expect.
+pub fn strip_verbatim(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(path).to_string()
+    }
+}
+
 /// Splits a command line made by [`quote`] back into its arguments.
 fn split_args(line: &str) -> Vec<String> {
     let mut args = Vec::new();
@@ -615,6 +625,36 @@ mod sys {
         }
     }
 
+    /// Where the file really is, as Windows resolves it for this process:
+    /// `GetFinalPathNameByHandle` sees through AppData redirection.
+    fn real_path(p: &Path) -> Option<PathBuf> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
+        };
+        let file = std::fs::File::open(p).ok()?;
+        let mut buf = vec![0u16; 1024];
+        // SAFETY: an open file handle and a buffer of the given length.
+        let len = unsafe {
+            GetFinalPathNameByHandleW(
+                file.as_raw_handle(),
+                buf.as_mut_ptr(),
+                buf.len() as u32,
+                FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+            )
+        } as usize;
+        if len == 0 || len >= buf.len() {
+            return None;
+        }
+        let text = String::from_utf16(&buf[..len]).ok()?;
+        Some(PathBuf::from(super::strip_verbatim(&text)))
+    }
+
+    /// The same path, ignoring case (Windows paths are case-insensitive).
+    fn same_text(a: &Path, b: &Path) -> bool {
+        a.as_os_str().eq_ignore_ascii_case(b.as_os_str())
+    }
+
     enum Stop {
         NoneRunning,
         Stopped,
@@ -713,15 +753,18 @@ mod sys {
             );
             return ExitCode::FAILURE;
         }
-        let log = super::watch_log_path(&copy);
-        let watch = watch_args(
-            idle_minutes,
-            config,
-            Some(dashboard),
-            n.instance.as_deref(),
-            Some(&log),
-        );
-        let xml = task_xml(&copy, &watch, &user());
+        let plan = |copy: &Path| {
+            let log = super::watch_log_path(copy);
+            let watch = watch_args(
+                idle_minutes,
+                config,
+                Some(dashboard),
+                n.instance.as_deref(),
+                Some(&log),
+            );
+            (log, task_xml(copy, &watch, &user()))
+        };
+        let (log, xml) = plan(&copy);
         let file = std::env::temp_dir().join("telemetrix-screensaver-task.xml");
         let file_text = file.display().to_string();
         let create = ["/Create", "/TN", &n.task, "/XML", &file_text, "/F"];
@@ -753,6 +796,10 @@ mod sys {
                 super::VERIFY_AFTER.as_secs(),
                 log.display()
             );
+            println!(
+                "If Windows stores the copy somewhere else for the program running this\n\
+                 (a packaged app), steps 3 and 7 use the folder where the file really is."
+            );
             return ExitCode::SUCCESS;
         }
         if let Stop::StillRunning = stop_watcher(n) {
@@ -767,6 +814,22 @@ mod sys {
             eprintln!("screensaver: {e}");
             return ExitCode::FAILURE;
         }
+        // A packaged app (the Claude desktop app, for example) and every
+        // program it starts see AppData through a redirection: the copy
+        // really lands in the app's own folder. Task Scheduler runs outside
+        // that view and would not find the file at the usual path.
+        let real = real_path(&copy).unwrap_or_else(|| copy.clone());
+        let (copy, log, xml) = if same_text(&real, &copy) {
+            (copy, log, xml)
+        } else {
+            println!(
+                "note: Windows stored the copy in {} for the program running this; \
+                 the task uses that folder",
+                real.parent().unwrap_or(&real).display()
+            );
+            let (log, xml) = plan(&real);
+            (real, log, xml)
+        };
         // schtasks reads the XML as UTF-16, the encoding the header names.
         let mut bytes = vec![0xFF, 0xFE];
         bytes.extend(xml.encode_utf16().flat_map(u16::to_le_bytes));
@@ -1169,6 +1232,22 @@ mod sys {
         use super::*;
 
         #[test]
+        fn the_real_path_of_a_file_is_plain_and_absolute() {
+            let file = std::env::temp_dir().join(format!("tx-real-{}.txt", std::process::id()));
+            std::fs::write(&file, "x").unwrap();
+            let real = real_path(&file).unwrap();
+            let text = real.display().to_string();
+            assert!(!text.starts_with(r"\\?\"), "{text}");
+            assert!(real.is_absolute() && real.ends_with(file.file_name().unwrap()));
+            assert!(std::fs::metadata(&real).is_ok(), "the path opens");
+            std::fs::remove_file(&file).unwrap();
+            assert!(
+                real_path(&file).is_none(),
+                "a missing file has no real path"
+            );
+        }
+
+        #[test]
         fn named_objects_mark_stop_and_claim() {
             let tag = std::process::id();
             let stop_name = format!(r"Local	elemetrix-test-stop-{tag}");
@@ -1355,6 +1434,19 @@ mod tests {
                 log: Some(log),
             }
         );
+    }
+
+    #[test]
+    fn verbatim_paths_become_plain() {
+        assert_eq!(
+            strip_verbatim(r"\\?\D:\Store\Local\telemetrix\watch.exe"),
+            r"D:\Store\Local\telemetrix\watch.exe"
+        );
+        assert_eq!(
+            strip_verbatim(r"\\?\UNC\srv\share\t.exe"),
+            r"\\srv\share\t.exe"
+        );
+        assert_eq!(strip_verbatim(r"C:\plain\t.exe"), r"C:\plain\t.exe");
     }
 
     #[test]

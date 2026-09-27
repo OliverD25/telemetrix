@@ -762,6 +762,14 @@ in a normal console window.
   asked. Only one watcher can run at a time: a second one ends at once and
   writes `another screensaver watcher is already running; this one ends`
   to the log.
+- Run `install` and `update` from a normal terminal. A packaged app (the
+  Claude desktop app, for example) and the programs it starts see
+  `%LOCALAPPDATA%` through a redirection, so the copy really lands in the
+  app's own folder under `%LOCALAPPDATA%\Packages`. telemetrix then
+  registers that real folder, because Task Scheduler cannot see the
+  redirected path; `install` says so with a `note:` line. It works, but the
+  copy disappears if that app is removed or reset, and `status` then says
+  `copy: missing`. Running `update` from a normal terminal moves it back.
 - `telemetrix screensaver uninstall` removes it, ends the watcher and
   deletes the watcher's copy of the program (`--dry-run` works here too).
 - `telemetrix screensaver update` copies a new telemetrix to the watcher
