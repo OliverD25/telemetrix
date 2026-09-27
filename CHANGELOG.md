@@ -17,10 +17,12 @@ All notable changes to telemetrix. Versions follow
 - **Built-in plugins:** the default plugins are built into the program and
   are installed next to the settings file on the first start.
   `telemetrix plugin install` restores or updates them.
-- **GPU card** for NVIDIA GPUs: name, load, video memory, temperature and
-  power, read through NVML (loaded at run time, no link-time dependency).
-  Off by default (`gpu.enabled`), because NVML adds about 24 MB of memory.
-  `snapshot --json` lists the GPUs in `system.gpus`.
+- **GPU card:** name, load, video memory and temperature, one card per
+  GPU. `gpu.source = "auto"` reads the counters Task Manager uses on
+  Windows (every GPU, about 1.3 MB of memory) and the amdgpu files on
+  Linux; `gpu.source = "nvml"` reads NVIDIA's NVML library (loaded at run
+  time, also gives the power in watts, adds about 24 MB). Off by default
+  (`gpu.enabled`). `snapshot --json` lists the GPUs in `system.gpus`.
 - **Three new themes:** `tokyo-night`, `crt-amber` (with scanlines) and
   `cyberpunk`. All three are static, so they use almost no CPU.
 - **Screensaver command:** `telemetrix screensaver install [--idle-minutes N]`

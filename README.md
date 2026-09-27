@@ -248,26 +248,58 @@ medium ones and one on narrow ones. Below 40 by 10 cells the screen only says
 frames and background differ. The status bar and the boxes (`s`, `l`, `t`,
 `?`) look the same in every theme.
 
-### GPU card (NVIDIA)
+### GPU card
 
-Set `gpu.enabled = true`, or turn it on in the `s` box, to show a GPU card:
-the GPU's name, its load, the video memory used and total, the temperature
-and the power draw. The temperature follows `units.temperature` and turns
-red above `thresholds.temp_warn_c`. `gpu.interval_ms` sets how often the
-card is read (every 2 seconds by default). With three columns the card sits
-under Swap; with two or one column it comes after Disks.
+Set `gpu.enabled = true`, or turn it on in the `s` box, to show one card per
+GPU: the GPU's name, its load, the video memory used and total, and the
+temperature. The temperature follows `units.temperature` and turns red
+above `thresholds.temp_warn_c`. `gpu.interval_ms` sets how often the card
+is read (every 2 seconds by default). With three columns the cards sit
+under Swap; with two or one column they come after Disks. With two GPUs,
+the one with more video memory is `GPU 1`.
 
-The card reads NVIDIA's NVML library, which comes with the NVIDIA driver
-(`nvml.dll` on Windows, `libnvidia-ml.so.1` on Linux). telemetrix loads it
-only while the card is on. Without an NVIDIA driver the card stays hidden
-and the log (`l`) says why. AMD and Intel GPUs are not shown yet.
+`gpu.source` says where the numbers come from:
 
-**It is off by default because NVML is large.** On the test PC (an RTX
-4090) the dashboard's working set grows by about 24 MB when NVML starts,
-from about 8 MB to about 31 MB, and it stays at that size until the
-program ends. That is far above the memory budgets below, so turn it on
-only if the card is worth it to you. `telemetrix snapshot` always lists the
-GPUs, because it ends right after.
+- `auto` (the default). On Windows, the counters Task Manager uses: the
+  adapter statistics of the Windows display kernel (D3DKMT). Every GPU
+  with a current driver answers, NVIDIA, AMD and Intel alike. The load is
+  the busiest engine's share of the time, as in Task Manager's GPU column.
+  The memory is the dedicated video memory. The temperature shows when the
+  driver reports it. There is no power reading: Windows gives power only
+  as a share of the card's limit, not in watts. On Linux, `auto` reads the
+  files the amdgpu driver writes in `/sys/class/drm` (load, video memory,
+  and the temperature of the card's sensor). NVIDIA's own driver does not
+  write these files, so use `nvml` for an NVIDIA card on Linux.
+- `nvml`: NVIDIA's NVML library, which comes with the NVIDIA driver
+  (`nvml.dll` on Windows, `libnvidia-ml.so.1` on Linux). It also gives the
+  power draw in watts, but it shows NVIDIA GPUs only.
+
+The card needs no extra program. Without any readable GPU it stays hidden,
+and the log (`l`) says why.
+
+**Memory.** On the test PC (an RTX 4090 and an AMD Radeon iGPU) the
+`auto` source adds about 1.3 MB of working set and 0.3 MB of private
+memory (`selftest --memory`: 7.8 → 9.1 MB without plugins, 11.8 → 13.0 MB
+with the 7 default plugins). That leaves little room under the 14 MB total
+budget, so the card is still off by default. NVML is much larger: the
+working set grows by about 24 MB when it starts, and it stays at that size
+until the program ends. `telemetrix snapshot` always lists the GPUs from
+`gpu.source`, because it ends right after.
+
+Readings of both sources on the test PC, at rest, compared with Windows'
+own performance counters (the ones Task Manager shows):
+
+| RTX 4090 | `auto` (D3DKMT) | `nvml` | Windows counters |
+|---|---|---|---|
+| load | 0.0 – 0.2 % | 0 – 2 % | 0.08 % |
+| video memory used | 7.60 GiB | 8.0 GiB | 7.50 GiB |
+| video memory total | 23.6 GiB | 24.0 GiB | |
+| temperature | 54.2 °C | 54 °C | |
+| power | (none) | 49.3 W | |
+
+NVML counts the memory the driver keeps for itself as used and as part of
+the total; Windows leaves it out of both. The AMD iGPU (only `auto`
+shows it) read 0 % load, 0.22 GiB of 0.47 GiB video memory and 39 – 40 °C.
 
 ### Disks and network drives
 
@@ -455,8 +487,9 @@ no longer matches the program.
 | `thresholds.cpu_warn_pct` | `80` | 1..100 | yes | highlight CPU above this, 1..100 |
 | `thresholds.temp_warn_c` | `75` | 1..150 | yes | highlight temperature above this |
 | `thresholds.disk_warn_pct` | `90` | 1..100 | yes | highlight disks fuller than this |
-| `gpu.enabled` | `false` | true \| false | yes | NVIDIA GPU card; NVML adds about 24 MB, so it is off by default |
+| `gpu.enabled` | `false` | true \| false | yes | GPU card: load, video memory, temperature; about 1.3 MB more memory, so off by default |
 | `gpu.interval_ms` | `2000` | 500..60000 | yes | 500..60000 |
+| `gpu.source` | `"auto"` | auto \| nvml | yes | auto = the system's counters (Windows: as Task Manager; Linux: amdgpu files); nvml = NVIDIA's library, about 24 MB more |
 | `disks.show_network` | `true` | true \| false | yes | show mapped network drives in their own card |
 | `disks.network_interval_s` | `60` | 10..3600 | yes | how often network drives are asked, 10..3600 |
 | `disks.network_timeout_s` | `5` | 1..30 | yes | a drive that takes longer is shown offline, 1..30 |
@@ -475,7 +508,6 @@ no longer matches the program.
 | `theme.matrix.speed` | `1.0` | 0.1..5.0 | yes | 0.1..5.0 |
 | `theme.matrix.color` | `"green"` | green \| amber \| cyan \| white \| #rrggbb | yes | green \| amber \| cyan \| white \| #rrggbb |
 | `theme.minimalist.show_sparklines` | `true` | true \| false | yes | history graphs under CPU and RAM |
-<!-- reference:end -->
 
 ## Memory and CPU
 
@@ -511,6 +543,8 @@ memory that belongs to this program alone.
 | 5 plugins, minimalist | 11.0 MB | 3.4 MB |
 | 5 plugins, matrix (v0.1 default) | 11.0 MB | 3.3 MB |
 | 7 plugins, matrix (v0.2 default, `selftest --memory`, 30 s) | 12.5 MB | 4.5 MB |
+| no plugins, GPU card on (`auto`, RTX 4090 + iGPU, `selftest --memory`, 30 s) | 9.1 MB | 2.4 MB |
+| 7 plugins, GPU card on (`auto`, RTX 4090 + iGPU, `selftest --memory`, 30 s) | 13.0 MB | 4.0 MB |
 | no plugins, GPU card on (NVML, RTX 4090, `selftest --memory`, 30 s) | 31.1 MB | 21.9 MB |
 | 7 plugins, GPU card on (NVML, RTX 4090, `selftest --memory`, 30 s) | 35.5 MB | 23.6 MB |
 

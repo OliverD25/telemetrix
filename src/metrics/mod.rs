@@ -1,5 +1,9 @@
 pub mod cpu;
 pub mod gpu;
+#[cfg(windows)]
+pub mod gpu_d3dkmt;
+#[cfg(not(windows))]
+pub mod gpu_sysfs;
 pub mod network;
 pub mod worker;
 
@@ -14,7 +18,7 @@ pub struct SystemSnapshot {
     pub swap_used_bytes: u64,
     pub swap_total_bytes: u64,
     pub disks: Vec<DiskMetric>,
-    /// NVIDIA GPUs (NVML); empty without an NVIDIA driver or with `gpu.enabled = false`.
+    /// GPUs from `gpu.source`; empty without readings or with `gpu.enabled = false`.
     pub gpus: Vec<GpuMetric>,
     /// Network mounts on Linux; Windows has its own network-drive thread.
     pub network: Vec<NetDrive>,

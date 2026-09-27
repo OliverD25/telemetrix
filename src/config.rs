@@ -263,7 +263,7 @@ pub static SETTINGS: &[Setting] = &[
         Kind::Bool,
         Value::Bool(false),
         true,
-        "NVIDIA GPU card; NVML adds about 24 MB, so it is off by default",
+        "GPU card: load, video memory, temperature; about 1.3 MB more memory, so off by default",
     ),
     setting(
         "gpu.interval_ms",
@@ -271,6 +271,13 @@ pub static SETTINGS: &[Setting] = &[
         Value::Int(2000),
         true,
         "500..60000",
+    ),
+    setting(
+        "gpu.source",
+        Kind::Enum(&["auto", "nvml"]),
+        text("auto"),
+        true,
+        "auto = the system's counters (Windows: as Task Manager; Linux: amdgpu files); nvml = NVIDIA's library, about 24 MB more",
     ),
     setting(
         "disks.show_network",
@@ -500,6 +507,16 @@ pub struct Memory {
 pub struct Gpu {
     pub enabled: bool,
     pub interval_ms: u64,
+    pub source: GpuSource,
+}
+
+/// Where the GPU card's numbers come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GpuSource {
+    /// The system's own counters: D3DKMT on Windows, sysfs on Linux.
+    Auto,
+    /// NVIDIA's NVML library (adds about 24 MB).
+    Nvml,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -595,6 +612,7 @@ impl Default for Config {
             gpu: Gpu {
                 enabled: false,
                 interval_ms: 0,
+                source: GpuSource::Auto,
             },
             disks: Disks {
                 show_network: false,
@@ -680,6 +698,13 @@ impl Config {
             "thresholds.disk_warn_pct" => Value::Int(self.thresholds.disk_warn_pct as i64),
             "gpu.enabled" => Value::Bool(self.gpu.enabled),
             "gpu.interval_ms" => Value::Int(self.gpu.interval_ms as i64),
+            "gpu.source" => Value::Str(
+                match self.gpu.source {
+                    GpuSource::Auto => "auto",
+                    GpuSource::Nvml => "nvml",
+                }
+                .into(),
+            ),
             "disks.show_network" => Value::Bool(self.disks.show_network),
             "disks.network_interval_s" => Value::Int(self.disks.network_interval_s as i64),
             "disks.network_timeout_s" => Value::Int(self.disks.network_timeout_s as i64),
@@ -741,6 +766,13 @@ impl Config {
             "thresholds.disk_warn_pct" => self.thresholds.disk_warn_pct = v.as_f64() as f32,
             "gpu.enabled" => self.gpu.enabled = v.as_bool(),
             "gpu.interval_ms" => self.gpu.interval_ms = clamp_u64(v),
+            "gpu.source" => {
+                self.gpu.source = if v.as_str() == "nvml" {
+                    GpuSource::Nvml
+                } else {
+                    GpuSource::Auto
+                }
+            }
             "disks.show_network" => self.disks.show_network = v.as_bool(),
             "disks.network_interval_s" => self.disks.network_interval_s = clamp_u64(v),
             "disks.network_timeout_s" => self.disks.network_timeout_s = clamp_u64(v),

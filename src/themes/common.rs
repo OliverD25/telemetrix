@@ -338,7 +338,7 @@ fn system_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
     ]
 }
 
-/// One card per NVIDIA GPU; none without readings or with `gpu.enabled = false`.
+/// One card per GPU; none without readings or with `gpu.enabled = false`.
 fn gpu_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
     let cfg = &state.config;
     let gpus = match &state.snapshot {

@@ -28,8 +28,9 @@ temp_warn_c = 75            # highlight temperature above this
 disk_warn_pct = 90          # highlight disks fuller than this
 
 [gpu]
-enabled = false             # NVIDIA GPU card; NVML adds about 24 MB, so it is off by default
+enabled = false             # GPU card: load, video memory, temperature; about 1.3 MB more memory, so off by default
 interval_ms = 2000          # 500..60000
+source = "auto"             # auto = the system's counters (Windows: as Task Manager; Linux: amdgpu files); nvml = NVIDIA's library, about 24 MB more
 
 [disks]
 show_network = true         # show mapped network drives in their own card

@@ -173,8 +173,9 @@ pub fn host_name() -> String {
 
 pub fn run(json: bool, with_plugins: bool, flags: &Flags) -> ExitCode {
     let (path, cfg, _) = config::load_effective(flags);
-    // Always with GPUs: NVML's memory only matters in the long-running dashboard.
-    let snapshot = worker::read_once(true);
+    // Always with GPUs, even when the card is off: a source's memory only
+    // matters in the long-running dashboard.
+    let snapshot = worker::read_once(Some(cfg.gpu.source));
     let d = &cfg.disks;
     let drives = if !d.show_network {
         Vec::new()

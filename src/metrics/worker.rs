@@ -11,6 +11,7 @@ use super::gpu::Nvml;
 use super::network::{LINUX_NETWORK_FS, NetDrive, split_remote};
 use super::{DiskMetric, GpuMetric, SystemSnapshot};
 use crate::config::Config;
+use crate::config::GpuSource;
 use crate::event::{AppEvent, WorkerCmd};
 
 /// CPU usage needs two readings at least 200 ms apart for a real value.
@@ -29,6 +30,7 @@ pub struct MetricsIntervals {
     pub disks: Duration,
     pub gpu: Duration,
     pub gpu_enabled: bool,
+    pub gpu_source: GpuSource,
 }
 
 impl MetricsIntervals {
@@ -42,6 +44,7 @@ impl MetricsIntervals {
             disks: ms(m.disks_interval_ms),
             gpu: ms(cfg.gpu.interval_ms),
             gpu_enabled: cfg.gpu.enabled,
+            gpu_source: cfg.gpu.source,
         }
     }
 
@@ -54,6 +57,48 @@ fn disk_kind() -> DiskRefreshKind {
     DiskRefreshKind::nothing().with_storage()
 }
 
+/// The loaded GPU source.
+enum GpuReader {
+    Nvml(Nvml),
+    #[cfg(windows)]
+    D3dkmt(super::gpu_d3dkmt::D3dkmt),
+    #[cfg(not(windows))]
+    Sysfs(super::gpu_sysfs::Sysfs),
+}
+
+impl GpuReader {
+    /// The source and the log line naming its GPUs.
+    fn load(source: GpuSource) -> Result<(Self, String), String> {
+        let named = |what: &str, names: Vec<&str>| format!("gpu: {what}: {}", names.join(", "));
+        match source {
+            GpuSource::Nvml => Nvml::load().map(|n| {
+                let line = named("NVML loaded", n.names());
+                (Self::Nvml(n), line)
+            }),
+            #[cfg(windows)]
+            GpuSource::Auto => super::gpu_d3dkmt::D3dkmt::load().map(|d| {
+                let line = named("Windows GPU counters (D3DKMT)", d.names());
+                (Self::D3dkmt(d), line)
+            }),
+            #[cfg(not(windows))]
+            GpuSource::Auto => super::gpu_sysfs::Sysfs::load().map(|s| {
+                let line = named("sysfs", s.names());
+                (Self::Sysfs(s), line)
+            }),
+        }
+    }
+
+    fn read(&mut self) -> Vec<GpuMetric> {
+        match self {
+            Self::Nvml(n) => n.read(),
+            #[cfg(windows)]
+            Self::D3dkmt(d) => d.read(),
+            #[cfg(not(windows))]
+            Self::Sysfs(s) => s.read(),
+        }
+    }
+}
+
 pub struct Sampler {
     sys: System,
     cpu: CpuMeter,
@@ -62,7 +107,7 @@ pub struct Sampler {
     temps: bool,
     disks: Disks,
     /// Loaded only while `gpu.enabled`; `None` also when loading failed.
-    nvml: Option<Nvml>,
+    gpu: Option<GpuReader>,
     gpus: Vec<GpuMetric>,
 }
 
@@ -90,30 +135,26 @@ impl Sampler {
             components: if temps { components } else { Components::new() },
             temps,
             disks: Disks::new_with_refreshed_list_specifics(disk_kind()),
-            nvml: None,
+            gpu: None,
             gpus: Vec::new(),
         }
     }
 
-    /// Loads or unloads NVML; returns the line for the log. A failure only
-    /// means no GPU card.
-    pub fn set_gpu(&mut self, enabled: bool) -> String {
+    /// Loads the GPU source or drops it; returns the line for the log. A
+    /// failure only means no GPU card.
+    pub fn set_gpu(&mut self, enabled: bool, source: GpuSource) -> String {
         self.gpus.clear();
+        self.gpu = None;
         if !enabled {
-            self.nvml = None;
             return "gpu: off (gpu.enabled = false)".into();
         }
-        match Nvml::load() {
-            Ok(nvml) => {
-                let names = nvml.names().join(", ");
-                self.gpus = nvml.read();
-                self.nvml = Some(nvml);
-                format!("gpu: NVML loaded: {names}")
+        match GpuReader::load(source) {
+            Ok((mut reader, line)) => {
+                self.gpus = reader.read();
+                self.gpu = Some(reader);
+                line
             }
-            Err(reason) => {
-                self.nvml = None;
-                format!("gpu: {reason}; no GPU card")
-            }
+            Err(reason) => format!("gpu: {reason}; no GPU card"),
         }
     }
 
@@ -132,9 +173,9 @@ impl Sampler {
             self.disks.refresh_specifics(true, disk_kind());
         }
         if due[4]
-            && let Some(nvml) = &self.nvml
+            && let Some(gpu) = &mut self.gpu
         {
-            self.gpus = nvml.read();
+            self.gpus = gpu.read();
         }
     }
 
@@ -202,10 +243,20 @@ fn sensors_worth_loading() -> bool {
     }
 }
 
-pub fn read_once(gpu: bool) -> SystemSnapshot {
+/// How long `read_once` watches the GPU: the system counters give a load
+/// only from two readings.
+const GPU_SAMPLE: Duration = Duration::from_millis(250);
+
+pub fn read_once(gpu: Option<GpuSource>) -> SystemSnapshot {
     let mut sampler = Sampler::new();
-    if gpu {
-        sampler.set_gpu(true);
+    if let Some(source) = gpu {
+        sampler.set_gpu(true, source);
+        if let Some(reader) = &mut sampler.gpu
+            && source == GpuSource::Auto
+        {
+            thread::sleep(GPU_SAMPLE);
+            sampler.gpus = reader.read();
+        }
     }
     sampler.snapshot()
 }
@@ -385,7 +436,11 @@ fn run(mut intervals: MetricsIntervals, tx: &Sender<AppEvent>, cmds: &mpsc::Rece
         return;
     }
     // After the first snapshot, so starting NVML never delays the CPU and RAM cards.
-    if intervals.gpu_enabled && tx.send(AppEvent::Log(sampler.set_gpu(true))).is_err() {
+    if intervals.gpu_enabled
+        && tx
+            .send(AppEvent::Log(sampler.set_gpu(true, intervals.gpu_source)))
+            .is_err()
+    {
         return;
     }
     let start = Instant::now();
@@ -395,8 +450,11 @@ fn run(mut intervals: MetricsIntervals, tx: &Sender<AppEvent>, cmds: &mpsc::Rece
         match cmds.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(WorkerCmd::Stop) | Err(RecvTimeoutError::Disconnected) => return,
             Ok(WorkerCmd::Reconfigure(new)) => {
-                if new.gpu_enabled != intervals.gpu_enabled {
-                    let _ = tx.send(AppEvent::Log(sampler.set_gpu(new.gpu_enabled)));
+                if (new.gpu_enabled, new.gpu_source)
+                    != (intervals.gpu_enabled, intervals.gpu_source)
+                {
+                    let line = sampler.set_gpu(new.gpu_enabled, new.gpu_source);
+                    let _ = tx.send(AppEvent::Log(line));
                 }
                 intervals = new;
                 let now = Instant::now();
