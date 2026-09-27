@@ -9,7 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::PluginData;
-use super::host_api::{self, EmitFn, HostCtx, Http, LogFn, PluginMeta, Trigger};
+use super::commands::Commands;
+use super::host_api::{self, EmitFn, HostCtx, Http, LogFn, PluginMeta, RunCtx, Trigger};
 use super::manifest::{self, CardUpdate, PluginManifest, SearchOption};
 use super::sandbox::Sandbox;
 use super::schema::{self, SchemaEntry};
@@ -28,6 +29,10 @@ pub struct RunnerSettings {
     pub data_dir: PathBuf,
     /// `[units]`, which plugins read as `telemetrix.units`.
     pub units: crate::config::Units,
+    /// `[commands]` from the user's file, for `telemetrix.run`.
+    pub commands: Arc<Commands>,
+    /// Log every `telemetrix.run` (for `plugin check`).
+    pub trace_runs: bool,
 }
 
 impl RunnerSettings {
@@ -41,6 +46,15 @@ impl RunnerSettings {
             memory_limit: (p.memory_limit_mb as usize) << 20,
             data_dir: super::store::data_dir(),
             units: cfg.units.clone(),
+            commands: Arc::new(cfg.commands.clone()),
+            trace_runs: false,
+        }
+    }
+
+    fn run_ctx(&self) -> RunCtx {
+        RunCtx {
+            commands: self.commands.clone(),
+            trace: self.trace_runs,
         }
     }
 
@@ -94,6 +108,7 @@ pub struct Plugin {
     manifest: PluginManifest,
     http: Rc<RefCell<Http>>,
     trigger: Rc<Cell<Trigger>>,
+    run: Rc<RefCell<RunCtx>>,
     log: LogFn,
     /// Settings warnings already logged, so each is logged once.
     warned: RefCell<BTreeSet<String>>,
@@ -117,12 +132,14 @@ impl Plugin {
         let sandbox = Sandbox::new(s.memory_limit, stop).map_err(|e| short(&e))?;
         let http = Rc::new(RefCell::new(Http::new(s.http_timeout)));
         let trigger = Rc::new(Cell::new(Trigger::Start));
+        let run = Rc::new(RefCell::new(s.run_ctx()));
         let stem = stem(path);
         let meta = Rc::new(RefCell::new(PluginMeta {
             id: stem.clone(),
             title: stem.clone(),
         }));
         let ctx = HostCtx {
+            run: run.clone(),
             log: log.clone(),
             emit,
             meta: meta.clone(),
@@ -149,6 +166,7 @@ impl Plugin {
             manifest,
             http,
             trigger,
+            run,
             log,
             warned: RefCell::new(BTreeSet::new()),
         })
@@ -206,6 +224,7 @@ impl Plugin {
     }
 
     pub fn update(&self, s: &RunnerSettings, trigger: Trigger) -> Result<PluginData, String> {
+        *self.run.borrow_mut() = s.run_ctx();
         let settings = self.checked_settings(s);
         host_api::set_settings(&self.sandbox.lua, &settings).map_err(|e| short(&e))?;
         host_api::set_units(&self.sandbox.lua, &s.units).map_err(|e| short(&e))?;
@@ -229,6 +248,7 @@ impl Plugin {
         let Some(search) = &self.manifest.search else {
             return Err("this plugin has no search function".into());
         };
+        *self.run.borrow_mut() = s.run_ctx();
         let settings = self.checked_settings(s);
         host_api::set_settings(&self.sandbox.lua, &settings).map_err(|e| short(&e))?;
         host_api::set_units(&self.sandbox.lua, &s.units).map_err(|e| short(&e))?;
@@ -749,6 +769,7 @@ mod tests {
             "weather",
             "currency",
             "speedtest",
+            "hosts",
         ] {
             let path = dir.join(format!("{name}.lua"));
             let p = Plugin::load(

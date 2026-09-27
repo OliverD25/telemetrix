@@ -262,6 +262,8 @@ All of them live in the global table `telemetrix`.
 | `http_get(url [, timeout_s])` | `body, status, headers` or `nil, error_text` | HTTP GET. A status like 404 is not an error: check `status` yourself. `headers` is a table of the response headers with lower-case names, like `headers["retry-after"]`. The body is limited to 1 MiB. The timeout is `plugins.http_timeout_s` unless you give a shorter one. |
 | `json_decode(text)` | `table` or `nil, error_text` | JSON `null` becomes `nil`. A list with `null` holes then has gaps, so `#list` may be wrong. |
 | `tcp_ping_ms(host, port [, timeout_ms])` | `milliseconds` or `nil, error_text` | Time to open a TCP connection. The default timeout is 2000 ms. |
+| `run(name [, timeout_s])` | `stdout, exit_code, stderr` or `nil, error_text` | Runs the command the user listed as `name` in `[commands]`. See [Running commands](#running-commands). |
+| `run_all({ name, ... } [, timeout_s])` | a list of `{ stdout, code, stderr }` or `{ error }` tables | Runs several listed commands at the same time; the results come in the same order. |
 | `store_get()` | `table` or `nil` (nothing stored), or `nil, error_text` | What `store_set` saved last, also after a restart. |
 | `store_set(table)` | `true` or `nil, error_text` | Saves the table. See [Remembering things](#remembering-things-between-runs). |
 | `emit(card)` | `true`, or `false` when dropped | Shows a card at once, before `update()` returns. See [Showing progress](#showing-progress). |
@@ -277,6 +279,52 @@ All of them live in the global table `telemetrix`.
 | `units` | table | The `[units]` settings, read-only: `temperature` is `"celsius"` or `"fahrenheit"`, `bytes` is `"binary"` or `"decimal"`. |
 
 `print(...)` also writes to the log. It never writes to the screen.
+
+### Running commands
+
+A plugin can run programs on this computer, but only the ones the user
+listed by name in their own `telemetrix.toml`:
+
+```toml
+[commands]
+server-a-uptime = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "server-a", "uptime"]
+```
+
+```lua
+local out, code, err = telemetrix.run("server-a-uptime", 20)
+if not out then
+  error("uptime: " .. code, 0)   -- code holds the error text here
+end
+```
+
+**The security model: the user's file decides what can run, and a plugin
+only picks a name.**
+
+- `run` and `run_all` take a name and a time limit, nothing else. A plugin
+  cannot pass arguments, change the program, or add to the list.
+- Only `[commands]` in the user's settings file counts. The built-in
+  defaults have no commands, and a plugin's own settings cannot add any.
+- Each entry is a list: the program, then its arguments. It runs directly,
+  never through a shell on this computer, so `;`, `|`, `>` and `$` in an
+  argument are plain text. (A command string that `ssh` sends to a server
+  is run by the server's shell; that is the server's business.)
+- The time limit is 30 seconds unless the plugin asks for another, at most
+  120 seconds, and never longer than what is left of the plugin's
+  `call_timeout`. After it, the process is killed and `run` returns
+  `nil, "... did not end within N s and was stopped"`.
+- telemetrix keeps the first 64 KB of each output and drops the rest.
+- On Windows the program starts without a console window, so nothing
+  flashes up.
+- A wrong entry in `[commands]` (not a list of text, or a name with other
+  characters than `a-z`, `0-9`, `_` and `-`) is left out, and
+  `config check` says so.
+- `exit_code` is `nil` when the program ended without one (killed by a
+  signal on Linux).
+- `plugin check` prints one `log: run: <name>: exit 0 in 0.8 s, ...` line
+  on standard error for every run, so you can see what ran.
+
+The Lua sandbox is otherwise unchanged: there is still no `io`, no
+`os.execute` and no other way to start a program.
 
 ### Units
 
@@ -531,6 +579,7 @@ only shows its stored result. With `--run` it really runs.
 | `crypto.lua` | coin prices from Binance, 7- and 30-day graphs | `quote`; file only: `coins` | yes |
 | `weather.lua` | now, tomorrow and the day after (Open-Meteo) | `city` (a search list), `country`; set by the search: `lat`, `lon`, `place`; file only: `label` | yes |
 | `speedtest.lua` | download, upload and ping against the nearest Ookla server (Cloudflare as backup), key `g` | `server`, `streams`, `seconds` | yes, about 700 MB per test at 1 Gbps |
+| `hosts.lua` | the health, load, memory, disk, uptime and UPS of your servers, key `h`; off by default | file only: `hosts`, `timeout`; needs `[commands]` | only what your commands do |
 
 These files live in `plugins/` in the repository and are built into the
 program, which installs them into the plugin home. The README describes
@@ -573,6 +622,46 @@ each data source and its free limits.
   one search. Airports and regions are left out. Places in `country`
   (default `"UA"`; empty = any) come first, then the biggest. Answers are
   kept for 10 minutes, so typing the same letters again sends nothing.
+- **hosts:** a card for your own servers, filled by commands from
+  `[commands]` (see [Running commands](#running-commands)). It is off by
+  default (`enabled = false`); with no hosts listed it shows a dim
+  `no hosts configured (see PLUGINS.md)`. Each host names up to three
+  commands:
+
+  ```toml
+  [plugin.hosts]
+  enabled = true
+  hosts = [
+    { name = "server-a", health = "server-a-health", stats = "server-a-stats", ups = "server-a-ups" },
+  ]
+
+  [commands]
+  server-a-health = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "server-a", "/usr/local/bin/health"]
+  server-a-stats = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "server-a", 'nproc; cat /proc/loadavg; grep -E "^(MemTotal|MemAvailable):" /proc/meminfo; df -B1 --output=size,used,avail / | tail -1; cat /proc/uptime']
+  server-a-ups = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "server-a", 'upsc ups@localhost 2>/dev/null | grep -E "^(battery.charge|battery.runtime|input.voltage|ups.load|ups.status):"']
+  ```
+
+  The long form `[[plugin.hosts.hosts]]` with `name = ...` lines works too.
+
+  - `health`: a check script that prints `[ OK ]`, `[WARN]` and `[FAIL]`
+    lines and a line `== summary: 46 ok, 1 warning(s), 0 failure(s) ==`,
+    and exits with 0 (ok), 1 (warnings) or 2 (failures). The card shows
+    `server-a  ok 46 · 1 warn` (green when all is well, red otherwise) and
+    under it, dimmed, the first `[FAIL]` line, else the first `[WARN]` line.
+  - `stats`: the output of the command above. The card shows
+    `load 0.8/12  ram 37%  disk 7%  up 5d`: the 15-minute load average and
+    the number of CPUs, the memory in use (total minus available), the root
+    disk as `df` counts it, and the uptime.
+  - `ups` (optional): `upsc` lines. The card shows
+    `ups on mains 100% · 13 min` (charge and runtime left), in red
+    `on battery` or `low battery`.
+
+  All commands of all hosts run at the same time, each with `timeout`
+  seconds (default 30, at most 55), so the card waits at most about a
+  minute. When `ssh` cannot reach a host (exit code 255) or a command hits
+  its time limit, the host shows `unreachable` in red, and its last values
+  stay under it, dimmed, with a `last seen 14:32` line. The card never
+  sends alerts. It checks every 5 minutes, and at once when you press `h`.
 - **crypto:** old settings files list CoinGecko names (`"bitcoin"`); they
   still work. After an HTTP 429 from Binance the plugin sends no more
   requests until the next interval, because Binance bans addresses that

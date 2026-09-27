@@ -1,0 +1,5 @@
+battery.charge: 64
+battery.runtime: 420
+input.voltage: 0.0
+ups.load: 12
+ups.status: OB DISCHRG

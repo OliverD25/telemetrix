@@ -92,3 +92,19 @@ seconds = 3                   # per direction, 2..10; about 700 MB per test at 1
 interval = 30
 host = "1.1.1.1"
 port = 443
+
+[plugin.hosts]
+enabled = false               # turn on after you list hosts and their [commands]
+interval = 300                # every 5 minutes; press h to check now
+# timeout = 30                # seconds for each command, 1..55
+# hosts = [
+#   { name = "server-a", health = "server-a-health", stats = "server-a-stats", ups = "server-a-ups" },
+# ]
+
+# Programs that plugins may run, by name: name = ["program", "argument", ...].
+# Nothing goes through a local shell. Only the names listed here can run; a
+# plugin passes a name and nothing else. See "Running commands" in PLUGINS.md.
+# [commands]
+# server-a-health = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "server-a", "/usr/local/bin/health"]
+# server-a-stats = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "server-a", 'nproc; cat /proc/loadavg; grep -E "^(MemTotal|MemAvailable):" /proc/meminfo; df -B1 --output=size,used,avail / | tail -1; cat /proc/uptime']
+# server-a-ups = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "server-a", 'upsc ups@localhost 2>/dev/null | grep -E "^(battery.charge|battery.runtime|input.voltage|ups.load|ups.status):"']

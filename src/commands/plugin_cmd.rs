@@ -154,7 +154,8 @@ fn schema_lines(schema: &[SchemaEntry]) -> Vec<String> {
 }
 
 fn check(file: &Path, json: bool, run: bool, cfg: &Config) -> ExitCode {
-    let settings = RunnerSettings::from_config(cfg);
+    let mut settings = RunnerSettings::from_config(cfg);
+    settings.trace_runs = true;
     let progress = Rc::new(|d: crate::plugins::PluginData| {
         let rows: Vec<String> = d
             .metrics
@@ -380,7 +381,7 @@ mod tests {
         let home = std::env::temp_dir().join(format!("telemetrix-install-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         let lines = install(&home, false, &[]).unwrap();
-        assert_eq!(lines.len(), 7);
+        assert_eq!(lines.len(), 8);
         assert!(
             lines.iter().all(|l| l.ends_with(": installed")),
             "{lines:?}"

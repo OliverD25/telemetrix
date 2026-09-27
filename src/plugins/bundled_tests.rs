@@ -1414,3 +1414,202 @@ mod soak_parts {
         );
     }
 }
+
+mod hosts {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn fixture(name: &str) -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/hosts")
+            .join(name);
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    }
+
+    /// What each command name answers: stdout and exit code, or an error.
+    type Answers = BTreeMap<&'static str, Result<(String, i64), &'static str>>;
+
+    /// Replaces `telemetrix.run_all` with fixed answers and records the names.
+    fn fake_run_all(h: &Harness, answers: Answers) -> Rc<RefCell<Vec<Vec<String>>>> {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let seen = calls.clone();
+        let lua = h.plugin.lua();
+        let f = lua
+            .create_function(move |lua, (names, _t): (Vec<String>, Option<f64>)| {
+                seen.borrow_mut().push(names.clone());
+                let out = lua.create_table()?;
+                for (i, name) in names.iter().enumerate() {
+                    let row = lua.create_table()?;
+                    match answers.get(name.as_str()) {
+                        Some(Ok((stdout, code))) => {
+                            row.set("stdout", stdout.as_str())?;
+                            row.set("stderr", "")?;
+                            row.set("code", *code)?;
+                        }
+                        Some(Err(e)) => row.set("error", *e)?,
+                        None => row.set("error", format!("no command {name:?}"))?,
+                    }
+                    out.set(i + 1, row)?;
+                }
+                Ok(out)
+            })
+            .unwrap();
+        let t: Table = lua.globals().get("telemetrix").unwrap();
+        t.set("run_all", f).unwrap();
+        calls
+    }
+
+    const TWO_HOSTS: &str = "enabled = true\nhosts = [\n  { name = \"server-a\", health = \"a-health\", stats = \"a-stats\", ups = \"a-ups\" },\n  { name = \"server-b\", health = \"b-health\", stats = \"b-stats\" },\n]";
+
+    fn good_answers() -> Answers {
+        BTreeMap::from([
+            ("a-health", Ok((fixture("health.txt"), 1))),
+            ("a-stats", Ok((fixture("stats.txt"), 0))),
+            ("a-ups", Ok((fixture("ups.txt"), 0))),
+            ("b-health", Ok((fixture("health_fail.txt"), 2))),
+            ("b-stats", Ok((fixture("stats.txt"), 0))),
+        ])
+    }
+
+    fn rows(d: &PluginData) -> Vec<(String, String, Option<&'static str>)> {
+        d.metrics
+            .iter()
+            .map(|m| (m.label.clone(), m.value.clone(), m.style.map(|s| s.name())))
+            .collect()
+    }
+
+    #[test]
+    fn no_hosts_shows_a_hint() {
+        let h = Harness::new("hosts", "enabled = true", &[]);
+        let d = h.run(Trigger::Start);
+        assert_eq!(d.error, None);
+        assert_eq!(
+            rows(&d),
+            [(
+                "no hosts configured (see PLUGINS.md)".to_string(),
+                String::new(),
+                Some("dim")
+            )]
+        );
+        assert!(
+            !Config::default().plugin_cfg["hosts"].enabled,
+            "off until the user lists hosts"
+        );
+    }
+
+    #[test]
+    fn health_stats_and_ups_become_rows() {
+        let h = Harness::new("hosts", TWO_HOSTS, &[]);
+        let calls = fake_run_all(&h, good_answers());
+        let d = h.run(Trigger::Key);
+        assert_eq!(d.error, None, "{:?}", h.log.borrow());
+        assert_eq!(d.title, "Hosts");
+        assert_eq!(
+            calls.borrow().as_slice(),
+            [vec!["a-health", "a-stats", "a-ups", "b-health", "b-stats"]],
+            "every command of every host in one parallel call"
+        );
+        let s = |t: &str| t.to_string();
+        assert_eq!(
+            rows(&d),
+            [
+                (s("server-a"), s("ok 46 · 1 warn"), Some("bad")),
+                (
+                    s("1 sources suspect a block: some_source_name"),
+                    s(""),
+                    Some("dim")
+                ),
+                (s("load 0.8/12  ram 37%  disk 7%  up 5d"), s(""), None),
+                (s("ups on mains 100% · 13 min"), s(""), None),
+                (s("server-b"), s("ok 30 · 1 warn · 1 fail"), Some("bad")),
+                (
+                    s("service example-web is not running since 19:30 and has rest…"),
+                    s(""),
+                    Some("dim")
+                ),
+                (s("load 0.8/12  ram 37%  disk 7%  up 5d"), s(""), None),
+            ]
+        );
+        println!("{}", render_card(&d, 48));
+    }
+
+    #[test]
+    fn a_clean_host_is_good_and_a_ups_on_battery_is_bad() {
+        let h = Harness::new(
+            "hosts",
+            "enabled = true\nhosts = [ { name = \"server-a\", health = \"a-health\", ups = \"a-ups\" } ]",
+            &[],
+        );
+        let clean = fixture("health.txt")
+            .replace("[WARN] 1 sources suspect a block: some_source_name\n", "")
+            .replace("1 warning(s)", "0 warning(s)");
+        fake_run_all(
+            &h,
+            BTreeMap::from([
+                ("a-health", Ok((clean, 0))),
+                ("a-ups", Ok((fixture("ups_battery.txt"), 0))),
+            ]),
+        );
+        let d = h.run(Trigger::Interval);
+        let s = |t: &str| t.to_string();
+        assert_eq!(
+            rows(&d),
+            [
+                (s("server-a"), s("ok 46"), Some("good")),
+                (s("ups on battery 64% · 7 min"), s(""), Some("bad")),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unreachable_host_keeps_its_last_values_dimmed() {
+        let h = Harness::new("hosts", TWO_HOSTS, &[]);
+        fake_run_all(&h, good_answers());
+        h.run(Trigger::Start);
+        let mut down = good_answers();
+        down.insert("a-health", Ok((String::new(), 255)));
+        down.insert(
+            "a-stats",
+            Err("a-stats did not end within 30 s and was stopped"),
+        );
+        down.insert("a-ups", Ok((String::new(), 255)));
+        fake_run_all(&h, down);
+        let d = h.run(Trigger::Interval);
+        let r = rows(&d);
+        assert_eq!(r[0], ("server-a".into(), "unreachable".into(), Some("bad")));
+        assert_eq!(
+            r[1..4]
+                .iter()
+                .map(|(l, _, st)| (l.as_str(), *st))
+                .collect::<Vec<_>>(),
+            [
+                ("1 sources suspect a block: some_source_name", Some("dim")),
+                ("load 0.8/12  ram 37%  disk 7%  up 5d", Some("dim")),
+                ("ups on mains 100% · 13 min", Some("dim")),
+            ]
+        );
+        assert!(r[4].0.starts_with("last seen "), "{:?}", r[4]);
+        assert_eq!(r[4].2, Some("dim"));
+        assert_eq!(r[5].0, "server-b", "the other host is unaffected");
+        println!("{}", render_card(&d, 48));
+    }
+
+    #[test]
+    fn the_long_list_form_works_too() {
+        let h = Harness::new(
+            "hosts",
+            "enabled = true\n[[hosts]]\nname = \"server-a\"\nstats = \"a-stats\"\n",
+            &[],
+        );
+        fake_run_all(&h, good_answers());
+        let d = h.run(Trigger::Start);
+        let s = |t: &str| t.to_string();
+        assert_eq!(
+            rows(&d),
+            [
+                (s("server-a"), s(""), Some("header")),
+                (s("load 0.8/12  ram 37%  disk 7%  up 5d"), s(""), None),
+            ]
+        );
+    }
+}

@@ -1,0 +1,5 @@
+== server-a health check, 2026-09-27 19:45:10, up 5 days, 23 hours, 41 minutes ==
+[ OK ] root disk 7% used, 934G free
+[ OK ] backups ran 3 hours ago
+[WARN] 1 sources suspect a block: some_source_name
+== summary: 46 ok, 1 warning(s), 0 failure(s) ==

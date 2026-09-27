@@ -14,10 +14,11 @@ use crate::config;
 pub const RECORD: &str = ".bundled.json";
 
 /// File name and content of every built-in plugin.
-pub const FILES: [(&str, &str); 7] = [
+pub const FILES: [(&str, &str); 8] = [
     ("clock.lua", include_str!("../../plugins/clock.lua")),
     ("crypto.lua", include_str!("../../plugins/crypto.lua")),
     ("currency.lua", include_str!("../../plugins/currency.lua")),
+    ("hosts.lua", include_str!("../../plugins/hosts.lua")),
     (
         "network_ping.lua",
         include_str!("../../plugins/network_ping.lua"),
@@ -243,7 +244,7 @@ mod tests {
             assert_eq!(std::fs::read_to_string(home.join(file)).unwrap(), content);
         }
         let record = read_record(&home);
-        assert_eq!(record.len(), 7);
+        assert_eq!(record.len(), FILES.len());
         let again = sync(&home, &[], false).unwrap();
         assert!(again.iter().all(|(_, o)| *o == Outcome::UpToDate));
         std::fs::remove_dir_all(&home).unwrap();

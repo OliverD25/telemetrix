@@ -446,6 +446,22 @@ seconds = 3                   # per direction, 2..10; about 700 MB per test at 1
 interval = 30
 host = "1.1.1.1"
 port = 443
+
+[plugin.hosts]
+enabled = false               # turn on after you list hosts and their [commands]
+interval = 300                # every 5 minutes; press h to check now
+# timeout = 30                # seconds for each command, 1..55
+# hosts = [
+#   { name = "server-a", health = "server-a-health", stats = "server-a-stats", ups = "server-a-ups" },
+# ]
+
+# Programs that plugins may run, by name: name = ["program", "argument", ...].
+# Nothing goes through a local shell. Only the names listed here can run; a
+# plugin passes a name and nothing else. See "Running commands" in PLUGINS.md.
+# [commands]
+# server-a-health = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "server-a", "/usr/local/bin/health"]
+# server-a-stats = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "server-a", 'nproc; cat /proc/loadavg; grep -E "^(MemTotal|MemAvailable):" /proc/meminfo; df -B1 --output=size,used,avail / | tail -1; cat /proc/uptime']
+# server-a-ups = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "server-a", 'upsc ups@localhost 2>/dev/null | grep -E "^(battery.charge|battery.runtime|input.voltage|ups.load|ups.status):"']
 "#;
 
 pub fn find(path: &str) -> Option<&'static Setting> {
@@ -585,6 +601,9 @@ pub struct Config {
     pub theme_matrix: ThemeMatrix,
     pub theme_minimalist: ThemeMinimalist,
     pub plugin_cfg: BTreeMap<String, PluginConfig>,
+    /// `[commands]`: the programs plugins may run, by name, as argv lists.
+    /// Only the user's file fills it; the built-in defaults have none.
+    pub commands: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for Config {
@@ -648,6 +667,7 @@ impl Default for Config {
                 show_sparklines: false,
             },
             plugin_cfg: BTreeMap::new(),
+            commands: BTreeMap::new(),
         };
         for s in SETTINGS {
             cfg.assign(s.path, &s.default);
@@ -912,6 +932,7 @@ pub fn parse_text(text: &str) -> Result<Parsed, Problem> {
     }
     find_unknown(doc.as_table(), "", text, &mut problems);
     read_plugin_tables(&doc, text, &mut config.plugin_cfg, &mut problems);
+    read_commands(&doc, text, &mut config.commands, &mut problems);
     problems.sort_by_key(|p| p.line);
     Ok(Parsed {
         config,
@@ -1013,7 +1034,7 @@ fn find_unknown(table: &Table, prefix: &str, text: &str, problems: &mut Vec<Prob
         } else {
             format!("{prefix}.{key}")
         };
-        if path == "plugin" || find(&path).is_some() {
+        if path == "plugin" || path == "commands" || find(&path).is_some() {
             continue;
         }
         let is_section = SETTINGS
@@ -1087,6 +1108,52 @@ fn read_plugin_tables(
                     cfg.settings.insert(key, value.clone());
                 }
             }
+        }
+    }
+}
+
+/// `[commands]`: `name = ["program", "arg", ...]`. A wrong entry is left
+/// out with a warning, so it can never run.
+fn read_commands(
+    doc: &toml_edit::Document<&str>,
+    text: &str,
+    out: &mut BTreeMap<String, Vec<String>>,
+    problems: &mut Vec<Problem>,
+) {
+    let Some(item) = doc.get("commands") else {
+        return;
+    };
+    let Some(table) = item.as_table_like() else {
+        problems.push(Problem {
+            line: line_of(text, item.span()),
+            message: "commands is not a table, ignored".into(),
+        });
+        return;
+    };
+    for (name, value) in table.iter() {
+        let argv: Option<Vec<String>> = value.as_array().and_then(|a| {
+            a.iter()
+                .map(|v| v.as_str().map(str::to_string))
+                .collect::<Option<Vec<_>>>()
+        });
+        let valid_name = !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        match argv {
+            Some(argv) if valid_name && argv.first().is_some_and(|p| !p.trim().is_empty()) => {
+                out.insert(name.to_string(), argv);
+            }
+            _ => problems.push(Problem {
+                line: line_of(text, value.span()),
+                message: if valid_name {
+                    format!(
+                        "commands.{name} must be a list of text, the program first, like [\"ssh\", \"server-a\", \"uptime\"]; ignored"
+                    )
+                } else {
+                    format!("commands.{name}: a command name may use only a-z, 0-9, _ and -; ignored")
+                },
+            }),
         }
     }
 }
@@ -1451,6 +1518,50 @@ mod tests {
             Some("Lviv")
         );
         assert!(!c.plugin_cfg["crypto"].enabled);
+    }
+
+    #[test]
+    fn commands_come_only_from_the_file_and_bad_ones_are_left_out() {
+        assert!(
+            Config::default().commands.is_empty(),
+            "no built-in commands"
+        );
+        let parsed = parse_text(
+            "[commands]
+             server-a-health = [\"ssh\", \"-o\", \"BatchMode=yes\", \"server-a\", \"/usr/local/bin/health\"]
+             empty = []
+             shell = \"rm -rf /\"
+             mixed = [\"ssh\", 5]
+             \"bad name\" = [\"ls\"]
+",
+        )
+        .unwrap();
+        let c = &parsed.config.commands;
+        assert_eq!(c.len(), 1);
+        assert_eq!(
+            c["server-a-health"],
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "server-a",
+                "/usr/local/bin/health"
+            ]
+        );
+        assert_eq!(parsed.problems.len(), 4, "{:?}", parsed.problems);
+        assert!(
+            parsed
+                .problems
+                .iter()
+                .all(|p| p.message.starts_with("commands.") && p.message.ends_with("ignored"))
+        );
+        assert!(
+            !parsed
+                .problems
+                .iter()
+                .any(|p| p.message.contains("unknown key")),
+            "[commands] is a known table"
+        );
     }
 
     #[test]

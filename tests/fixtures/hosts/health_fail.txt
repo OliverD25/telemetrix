@@ -1,0 +1,5 @@
+== server-b health check, 2026-09-27 19:45:12, up 2 hours, 3 minutes ==
+[ OK ] root disk 40% used, 120G free
+[WARN] swap is 60% used
+[FAIL] service example-web is not running since 19:30 and has restarted 5 times in the last hour
+== summary: 30 ok, 1 warning(s), 1 failure(s) ==

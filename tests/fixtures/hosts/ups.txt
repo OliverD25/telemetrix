@@ -1,0 +1,5 @@
+battery.charge: 100
+battery.runtime: 800
+input.voltage: 226.0
+ups.load: 8
+ups.status: OL

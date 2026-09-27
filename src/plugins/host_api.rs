@@ -11,6 +11,7 @@ use mlua::{Function, Lua, LuaSerdeExt, Table, Value};
 use ureq::Agent;
 
 use super::PluginData;
+use super::commands::{self, Commands};
 use super::manifest::CardUpdate;
 use super::sandbox::{Deadline, remaining};
 use super::speed::{self, Multi};
@@ -110,7 +111,16 @@ impl Http {
     }
 }
 
+/// What `telemetrix.run` may start: the user's `[commands]`, and whether
+/// to log each run (`plugin check` does).
+#[derive(Clone, Debug, Default)]
+pub struct RunCtx {
+    pub commands: std::sync::Arc<Commands>,
+    pub trace: bool,
+}
+
 pub struct HostCtx {
+    pub run: Rc<RefCell<RunCtx>>,
     pub log: LogFn,
     pub emit: EmitFn,
     pub meta: Rc<RefCell<PluginMeta>>,
@@ -569,6 +579,58 @@ pub fn install(lua: &Lua, ctx: HostCtx) -> mlua::Result<()> {
         )?,
     )?;
 
+    // `run(name [, timeout_s])` -> stdout, exit_code, stderr; or nil, error.
+    let (run, deadline, log) = (ctx.run.clone(), ctx.deadline.clone(), ctx.log.clone());
+    t.set(
+        "run",
+        lua.create_function(move |lua, (name, timeout): (String, Option<f64>)| {
+            let ctx = run.borrow().clone();
+            let limit = cap(commands::timeout(timeout), &deadline);
+            let start = Instant::now();
+            let result = commands::run(&ctx.commands, &name, limit);
+            if ctx.trace {
+                log(&run_line(&name, &result, start.elapsed()));
+            }
+            Ok(match result {
+                Ok(out) => (
+                    Value::String(lua.create_string(out.stdout)?),
+                    out.code.map_or(Value::Nil, |c| Value::Integer(c.into())),
+                    Value::String(lua.create_string(out.stderr)?),
+                ),
+                Err(e) => (Value::Nil, Value::String(lua.create_string(e)?), Value::Nil),
+            })
+        })?,
+    )?;
+    // `run_all({ name, ... } [, timeout_s])`: the same at once, as a list of
+    // `{ stdout, code, stderr }` or `{ error }` tables in the same order.
+    let (run, deadline, log) = (ctx.run.clone(), ctx.deadline.clone(), ctx.log.clone());
+    t.set(
+        "run_all",
+        lua.create_function(move |lua, (names, timeout): (Vec<String>, Option<f64>)| {
+            let ctx = run.borrow().clone();
+            let limit = cap(commands::timeout(timeout), &deadline);
+            let start = Instant::now();
+            let results = commands::run_all(&ctx.commands, &names, limit);
+            let out = lua.create_table()?;
+            for (i, (name, result)) in names.iter().zip(results).enumerate() {
+                if ctx.trace {
+                    log(&run_line(name, &result, start.elapsed()));
+                }
+                let row = lua.create_table()?;
+                match result {
+                    Ok(o) => {
+                        row.set("stdout", o.stdout)?;
+                        row.set("stderr", o.stderr)?;
+                        row.set("code", o.code)?;
+                    }
+                    Err(e) => row.set("error", e)?,
+                }
+                out.set(i + 1, row)?;
+            }
+            Ok(out)
+        })?,
+    )?;
+
     t.set(
         "uptime_s",
         lua.create_function(|_, ()| Ok(sysinfo::System::uptime()))?,
@@ -579,6 +641,20 @@ pub fn install(lua: &Lua, ctx: HostCtx) -> mlua::Result<()> {
     )?;
     t.set("settings", lua.create_table()?)?;
     lua.globals().set("telemetrix", t)
+}
+
+/// The `plugin check` line for one run.
+fn run_line(name: &str, result: &Result<commands::Output, String>, took: Duration) -> String {
+    let secs = took.as_secs_f64();
+    match result {
+        Ok(o) => format!(
+            "run: {name}: exit {} in {secs:.1} s, {} bytes out, {} bytes err",
+            o.code.map_or("none".to_string(), |c| c.to_string()),
+            o.stdout.len(),
+            o.stderr.len()
+        ),
+        Err(e) => format!("run: {name}: {e}"),
+    }
 }
 
 fn toml_to_json(v: &toml_edit::Value) -> serde_json::Value {
@@ -621,7 +697,27 @@ pub fn set_units(lua: &Lua, units: &crate::config::Units) -> mlua::Result<()> {
 pub fn set_settings(lua: &Lua, settings: &toml_edit::Table) -> mlua::Result<()> {
     let map: serde_json::Map<String, serde_json::Value> = settings
         .iter()
-        .filter_map(|(k, item)| item.as_value().map(|v| (k.to_string(), toml_to_json(v))))
+        .filter_map(|(k, item)| {
+            let json = match item {
+                toml_edit::Item::Value(v) => toml_to_json(v),
+                // `[[plugin.x.list]]` blocks, the long form of a list of tables.
+                toml_edit::Item::ArrayOfTables(a) => serde_json::Value::Array(
+                    a.iter()
+                        .map(|t| {
+                            serde_json::Value::Object(
+                                t.iter()
+                                    .filter_map(|(k, i)| {
+                                        i.as_value().map(|v| (k.to_string(), toml_to_json(v)))
+                                    })
+                                    .collect(),
+                            )
+                        })
+                        .collect(),
+                ),
+                _ => return None,
+            };
+            Some((k.to_string(), json))
+        })
         .collect();
     let value = json_to_lua(lua, &serde_json::Value::Object(map))?;
     let t: Table = lua.globals().get("telemetrix")?;
@@ -725,7 +821,17 @@ mod tests {
         let lua = Lua::new();
         let lines = Rc::new(RefCell::new(Vec::new()));
         let sink = lines.clone();
+        let script = if cfg!(windows) {
+            ["cmd", "/C", "echo hi&& exit 2"]
+        } else {
+            ["sh", "-c", "echo hi; exit 2"]
+        };
+        let commands = Commands::from([("hi".to_string(), script.map(String::from).to_vec())]);
         let ctx = HostCtx {
+            run: Rc::new(RefCell::new(RunCtx {
+                commands: std::sync::Arc::new(commands),
+                trace: true,
+            })),
             log: Rc::new(move |m: &str| sink.borrow_mut().push(m.to_string())),
             emit: Rc::new(|_| {}),
             meta: Rc::new(RefCell::new(PluginMeta {
@@ -794,11 +900,38 @@ mod tests {
     }
 
     #[test]
+    fn run_starts_only_commands_from_the_settings_file() {
+        let (lua, lines) = lua_with_host();
+        let (out, code, err): (String, i64, String) =
+            lua.load("return telemetrix.run('hi', 10)").eval().unwrap();
+        assert_eq!((out.trim(), code, err.as_str()), ("hi", 2, ""));
+        let (none, why): (Value, String) =
+            lua.load("return telemetrix.run('del', 10)").eval().unwrap();
+        assert!(none.is_nil());
+        assert!(why.contains("no command \"del\""), "{why}");
+        let summary: String = lua
+            .load(
+                "local r = telemetrix.run_all({ 'hi', 'del' })                  return r[1].code .. ' ' .. r[1].stdout:gsub('%s', '') .. ' ' .. tostring(r[2].error ~= nil)",
+            )
+            .eval()
+            .unwrap();
+        assert_eq!(summary, "2 hi true");
+        assert!(
+            lines.borrow()[0].starts_with("run: hi: exit 2 in "),
+            "{:?}",
+            lines.borrow()
+        );
+        let bad: mlua::Result<Value> = lua.load("return telemetrix.run({ 'rm', '-rf' })").eval();
+        assert!(bad.is_err(), "only a name, never an argument list");
+    }
+
+    #[test]
     fn emit_is_limited_to_ten_per_second() {
         let lua = Lua::new();
         let got = Rc::new(RefCell::new(Vec::new()));
         let seen = got.clone();
         let ctx = HostCtx {
+            run: Rc::new(RefCell::new(RunCtx::default())),
             log: Rc::new(|_: &str| {}),
             emit: Rc::new(move |d: PluginData| seen.borrow_mut().push(d)),
             meta: Rc::new(RefCell::new(PluginMeta {

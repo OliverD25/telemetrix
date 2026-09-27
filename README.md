@@ -150,7 +150,7 @@ cargo build --release
 ```
 
 The program is `target/release/telemetrix` (`telemetrix.exe` on Windows),
-about 3.3 MB. It is all you need: the seven default plugins are built into
+about 3.3 MB. It is all you need: the eight built-in plugins are part of
 it, and it installs them on its first start (see
 [Where plugins live](#where-plugins-live)). It works the same from any
 folder.
@@ -344,7 +344,7 @@ old default `plugins_dir = "plugins"` from v0.1 settings files means the
 home too. The folder in use is written to the log (`l`) on every rescan,
 and an empty Plugins card shows it.
 
-**Built-in plugins.** The seven default plugins are built into the program.
+**Built-in plugins.** The eight built-in plugins are part of the program (seven run by default; Hosts is off until you set it up).
 On every start, telemetrix copies them into the home and remembers what it
 wrote in `.bundled.json` there:
 
@@ -370,7 +370,7 @@ folder, so a change to `plugins/weather.lua` shows after `r`.
 
 ## Plugins and where their data comes from
 
-telemetrix comes with seven plugins. None needs an account or a key. The
+telemetrix comes with eight plugins. None needs an account or a key. The
 network plugins stay far below the free limits of their services. When a
 service does not answer, a card keeps its last values and marks them
 stale. Rates, prices, the weather place and speed results are kept in a
@@ -386,6 +386,7 @@ cards are not empty after a restart.
 | Speed test | download, upload, ping, server | the nearest Ookla speed-test server; Cloudflare `speed.cloudflare.com` as the backup | No published limit. | Every 30 minutes, and when you press `g`. Never at start. The server list once a day. |
 | Internet latency | time to connect to 1.1.1.1:443 | a TCP connection, no service | none | every 30 seconds |
 | Clock, Uptime | time and date; computer name and uptime | this computer | none | every second; every 30 seconds |
+| Hosts (off by default) | health, load, memory, disk, uptime and UPS of your own servers | commands you list in `[commands]`, for example `ssh` | none | every 5 minutes, and when you press `h` |
 
 Weather data by Open-Meteo.com (CC BY 4.0). The weather card says so in its
 last line, `data: Open-Meteo.com`.
@@ -440,6 +441,13 @@ Settings you can change in the `s` box:
   forces one, `cloudflare` uses Cloudflare only), `streams` (parallel
   connections, 1..8) and `seconds` per direction (2..10). The old keys
   `download_mb`, `upload_mb` and `max_seconds` are ignored.
+
+- **Hosts:** set in the file only. List your servers under
+  `[plugin.hosts]` and the commands that read them under `[commands]`,
+  then set `enabled = true`. telemetrix runs only the commands you list
+  there, by name, never through a shell. See the hosts notes in
+  [PLUGINS.md](PLUGINS.md#the-default-plugins) and the commented example
+  in `telemetrix.example.toml`.
 
 To write your own plugin, see [PLUGINS.md](PLUGINS.md).
 
