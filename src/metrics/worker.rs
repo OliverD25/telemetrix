@@ -358,6 +358,9 @@ pub fn split_disks(disks: impl Iterator<Item = RawDisk>) -> (Vec<DiskMetric>, Ve
             }),
         }
     }
+    // Windows reports volumes in its own order (H: C: D: ...); every card
+    // and both snapshot formats read this list, so sort it once here.
+    local.sort_by_cached_key(|d| super::network::mount_order(&d.mount));
     (local, network)
 }
 
@@ -536,6 +539,29 @@ mod tests {
         assert_eq!(pick_cpu_temp(sensors.into_iter()), Some(55.0));
         assert_eq!(pick_cpu_temp([("acpitz", Some(40.0))].into_iter()), None);
         assert_eq!(pick_cpu_temp(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn disks_are_sorted_like_explorer() {
+        let raw = |mount: &str| RawDisk {
+            mount: mount.into(),
+            name: String::new(),
+            file_system: "ext4".into(),
+            total: 100,
+            available: 50,
+        };
+        let mounts: &[&str] = if cfg!(windows) {
+            &[r"H:", r"C:", r"d:", r"G:", r"E:"]
+        } else {
+            &["/mnt/d", "/home", "/", "/mnt/c", "/data"]
+        };
+        let (disks, _) = split_disks(mounts.iter().map(|m| raw(m)));
+        let order: Vec<&str> = disks.iter().map(|d| d.mount.as_str()).collect();
+        if cfg!(windows) {
+            assert_eq!(order, [r"C:", r"d:", r"E:", r"G:", r"H:"]);
+        } else {
+            assert_eq!(order, ["/", "/data", "/home", "/mnt/c", "/mnt/d"]);
+        }
     }
 
     #[test]

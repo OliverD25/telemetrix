@@ -109,6 +109,14 @@ pub fn normalize_mount(mount: &str) -> String {
     }
 }
 
+/// The order disks and network drives are listed in, as Windows Explorer
+/// does it: by drive letter (`C:` before `D:`). On Linux `/` comes first,
+/// then the other mount points alphabetically.
+pub fn mount_order(mount: &str) -> (bool, String) {
+    let mount = normalize_mount(mount);
+    (mount != "/", mount)
+}
+
 /// True when `disks.hide` lists this drive letter or mount point.
 pub fn is_hidden(mount: &str, hide: &[String]) -> bool {
     let mount = normalize_mount(mount);
@@ -124,7 +132,8 @@ pub fn rows(drives: &[NetDrive], group: bool, hide: &[String]) -> Vec<NetRow> {
         .iter()
         .filter(|d| !is_hidden(&d.mount, hide))
         .collect();
-    visible.sort_by(|a, b| a.mount.cmp(&b.mount));
+    // Groups take the place of their first letter, so rows stay in letter order.
+    visible.sort_by_cached_key(|d| mount_order(&d.mount));
     let key = |d: &NetDrive| {
         d.server
             .as_ref()
@@ -474,6 +483,30 @@ mod tests {
             ["M:", "R:", "W:", "X:"],
             "the offline drive leaves the group"
         );
+    }
+
+    #[test]
+    fn rows_are_in_letter_order_and_a_group_sorts_by_its_first_letter() {
+        let (t, f) = (1000, 400);
+        let drives = vec![
+            drive("z:", Some("srv"), "zeta", true, 10, 5),
+            drive("R:", Some("nas"), "projects", true, t, f),
+            drive("B:", Some("pc"), "backup", false, 0, 0),
+            drive("M:", Some("nas"), "music", true, t, f),
+            drive("P:", Some("nas"), "photos", true, t, f),
+            drive("Q:", Some("box"), "quiet", true, 20, 5),
+        ];
+        let titles: Vec<String> = rows(&drives, true, &[])
+            .into_iter()
+            .map(|r| r.title)
+            .collect();
+        assert_eq!(
+            titles,
+            ["backup (B:)", "nas  M: P: R:", "quiet (Q:)", "zeta (Z:)"]
+        );
+        assert!(mount_order("/") < mount_order("/data"));
+        assert!(mount_order("/mnt/c") < mount_order("/mnt/d"));
+        assert!(mount_order(r"c:\") < mount_order("D:"));
     }
 
     #[test]
