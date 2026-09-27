@@ -131,7 +131,7 @@ log, `?` lists all keys, `q` quits. Every change you make is saved at once.
 | Settings file | `%APPDATA%\telemetrix\telemetrix.toml` | `~/.config/telemetrix/telemetrix.toml` |
 | Plugins (`.lua` files) | `%APPDATA%\telemetrix\plugins` | `~/.config/telemetrix/plugins` |
 | Plugin data (stored rates, results) | `%LOCALAPPDATA%\telemetrix\plugins` | `~/.local/share/telemetrix/plugins` |
-| Screensaver watcher's copy of the program | `%LOCALAPPDATA%\telemetrix\screensaver` | (none) |
+| Screensaver watcher's copy of the program, and its log `watch.log` | `%LOCALAPPDATA%\telemetrix\screensaver` | (none) |
 
 The settings file appears the first time you change something in the
 dashboard; `telemetrix config init` writes it now, with a comment on every
@@ -753,8 +753,15 @@ in a normal console window.
 - `telemetrix screensaver install --dry-run` prints exactly what would be
   created and changes nothing.
 - `telemetrix screensaver status` shows whether it is installed, whether
-  the watcher and a screensaver dashboard run, and how long the PC has
-  been idle.
+  the watcher and a screensaver dashboard run, the last lines of the
+  watcher's log, and how long the PC has been idle.
+- `install` and `update` start the watcher and check 5 seconds later that
+  it still runs. If it does not, they say so, show the last lines of its
+  log (`watch.log` next to the copy) and end with exit code 1. They also
+  refuse to go on while another watcher runs that does not end when
+  asked. Only one watcher can run at a time: a second one ends at once and
+  writes `another screensaver watcher is already running; this one ends`
+  to the log.
 - `telemetrix screensaver uninstall` removes it, ends the watcher and
   deletes the watcher's copy of the program (`--dry-run` works here too).
 - `telemetrix screensaver update` copies a new telemetrix to the watcher

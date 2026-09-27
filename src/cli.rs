@@ -73,6 +73,9 @@ pub struct Flags {
     /// Hidden, used by the screensaver watcher: screensaver mode, and a
     /// marker that tells the watcher this dashboard runs.
     pub screensaver: bool,
+    /// Hidden `--instance <name>`: a separate screensaver task, copy and
+    /// watcher, for tests that must not touch the real install.
+    pub screensaver_instance: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -241,6 +244,17 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
                 sw.idle_minutes = Some(n);
             }
             Long("dry-run") => sw.dry_run = true,
+            Long("instance") => {
+                let tag = text(parser.value())?;
+                let ok = (1..=20).contains(&tag.len())
+                    && tag
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+                if !ok {
+                    return Err("--instance needs 1..20 characters of a-z, 0-9 and -".into());
+                }
+                flags.screensaver_instance = Some(tag);
+            }
             Long("dashboard-exe") => {
                 sw.dashboard_exe = Some(parser.value().map_err(|e| e.to_string())?.into())
             }
@@ -269,6 +283,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
     } else {
         command(&words, &sw)?
     };
+    if flags.screensaver_instance.is_some() && !matches!(command, Command::Screensaver(_)) {
+        return Err("--instance only applies to screensaver commands".into());
+    }
     Ok(Cli { flags, command })
 }
 
@@ -553,6 +570,14 @@ mod tests {
         assert!(run(&["screensaver", "install", "--dashboard-exe", "t.exe"]).is_err());
         assert!(
             !HELP.contains("--dashboard-exe"),
+            "internal flag stays out of --help"
+        );
+        let cli = run(&["screensaver", "status", "--instance", "test"]).unwrap();
+        assert_eq!(cli.flags.screensaver_instance.as_deref(), Some("test"));
+        assert!(run(&["snapshot", "--instance", "test"]).is_err());
+        assert!(run(&["screensaver", "status", "--instance", "Bad Name"]).is_err());
+        assert!(
+            !HELP.contains("--instance"),
             "internal flag stays out of --help"
         );
         let cli = run(&["--screensaver"]).unwrap();

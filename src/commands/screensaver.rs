@@ -33,10 +33,49 @@ pub const WATCH_EXE: &str = "telemetrix-watch.exe";
 pub const DEFAULT_IDLE_MINUTES: u32 = 10;
 /// How often the watcher looks at the idle time.
 pub const POLL: Duration = Duration::from_secs(5);
+/// `install` and `update` check this long after starting the task that
+/// the watcher still runs.
+pub const VERIFY_AFTER: Duration = Duration::from_secs(5);
+/// The watcher starts its log afresh when it is larger than this.
+const LOG_CAP: u64 = 256 * 1024;
 /// Held by the watcher, so a second one ends at once.
 const WATCH_MUTEX: &str = r"Local\telemetrix-screensaver-watch";
 /// `uninstall` sets it; the watcher sleeps on it and ends when it is set.
 const STOP_EVENT: &str = r"Local\telemetrix-screensaver-stop";
+
+/// The task, copy folder and named objects of one screensaver install.
+/// The hidden `--instance <name>` gives a second, separate set, so a test
+/// install never touches the real one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Names {
+    pub instance: Option<String>,
+    pub task: String,
+    pub watch_mutex: String,
+    pub stop_event: String,
+    /// The folder under `%LOCALAPPDATA%\telemetrix` that holds the copy.
+    pub folder: String,
+}
+
+impl Names {
+    pub fn new(instance: Option<&str>) -> Self {
+        match instance {
+            None => Self {
+                instance: None,
+                task: TASK_NAME.into(),
+                watch_mutex: WATCH_MUTEX.into(),
+                stop_event: STOP_EVENT.into(),
+                folder: "screensaver".into(),
+            },
+            Some(tag) => Self {
+                instance: Some(tag.into()),
+                task: format!("{TASK_NAME} {tag}"),
+                watch_mutex: format!("{WATCH_MUTEX}-{tag}"),
+                stop_event: format!("{STOP_EVENT}-{tag}"),
+                folder: format!("screensaver-{tag}"),
+            },
+        }
+    }
+}
 /// Held by a dashboard started with `--screensaver`, so the watcher does
 /// not start a second one while it runs.
 pub const DASHBOARD_MUTEX: &str = r"Local\telemetrix-screensaver-dashboard";
@@ -109,8 +148,13 @@ pub fn watch_args(
     idle_minutes: u32,
     config: Option<&Path>,
     dashboard: Option<&Path>,
+    instance: Option<&str>,
+    log: Option<&Path>,
 ) -> Vec<String> {
     let mut args = Vec::new();
+    if let Some(l) = log {
+        args.extend(["--log".to_string(), l.display().to_string()]);
+    }
     if let Some(c) = config {
         args.extend(["--config".to_string(), c.display().to_string()]);
     }
@@ -123,17 +167,27 @@ pub fn watch_args(
     if let Some(d) = dashboard {
         args.extend(["--dashboard-exe".to_string(), d.display().to_string()]);
     }
+    if let Some(tag) = instance {
+        args.extend(["--instance".to_string(), tag.to_string()]);
+    }
     args
 }
 
 /// Where `install` puts the copy the task runs:
 /// `%LOCALAPPDATA%\telemetrix\screensaver\telemetrix-watch.exe`.
-pub fn watch_copy_path(local_app_data: Option<PathBuf>) -> PathBuf {
+pub fn watch_copy_path(local_app_data: Option<PathBuf>, names: &Names) -> PathBuf {
     local_app_data
         .unwrap_or_else(std::env::temp_dir)
         .join("telemetrix")
-        .join("screensaver")
+        .join(&names.folder)
         .join(WATCH_EXE)
+}
+
+/// The watcher's log, next to its copy. Without it a watcher that ends at
+/// once (for example because another one already runs) says why to no one:
+/// the task starts it without a console.
+pub fn watch_log_path(copy: &Path) -> PathBuf {
+    copy.with_file_name("watch.log")
 }
 
 /// Splits a command line made by [`quote`] back into its arguments.
@@ -181,6 +235,8 @@ pub struct TaskInfo {
     pub dashboard: Option<PathBuf>,
     pub config: Option<PathBuf>,
     pub idle_minutes: Option<u32>,
+    /// `--log`: the watcher's log file.
+    pub log: Option<PathBuf>,
 }
 
 pub fn parse_task_args(line: &str) -> Option<TaskInfo> {
@@ -195,11 +251,13 @@ pub fn parse_task_args(line: &str) -> Option<TaskInfo> {
         dashboard: None,
         config: None,
         idle_minutes: None,
+        log: None,
     };
     while let Some(a) = it.next() {
         match a.as_str() {
             "--config" => info.config = it.next().map(PathBuf::from),
             "--dashboard-exe" => info.dashboard = it.next().map(PathBuf::from),
+            "--log" => info.log = it.next().map(PathBuf::from),
             "--idle-minutes" => info.idle_minutes = it.next().and_then(|n| n.parse().ok()),
             _ => {}
         }
@@ -348,13 +406,15 @@ fn config_arg(flags: &Flags) -> Option<PathBuf> {
 pub fn run(cmd: ScreensaverCmd, flags: &Flags) -> ExitCode {
     let exe = exe_path();
     let config = config_arg(flags);
+    let names = Names::new(flags.screensaver_instance.as_deref());
+    let n = &names;
     match cmd {
         ScreensaverCmd::Install {
             idle_minutes,
             dry_run,
         } => {
             if cfg!(windows) {
-                sys::install(&exe, config.as_deref(), idle_minutes, dry_run)
+                sys::install(n, &exe, config.as_deref(), idle_minutes, dry_run)
             } else {
                 print!("{}", linux_recipe(&exe, idle_minutes));
                 ExitCode::SUCCESS
@@ -362,7 +422,7 @@ pub fn run(cmd: ScreensaverCmd, flags: &Flags) -> ExitCode {
         }
         ScreensaverCmd::Uninstall { dry_run } => {
             if cfg!(windows) {
-                sys::uninstall(dry_run)
+                sys::uninstall(n, dry_run)
             } else {
                 println!(
                     "nothing to remove: on Linux, delete the swayidle or xautolock line you added"
@@ -372,20 +432,27 @@ pub fn run(cmd: ScreensaverCmd, flags: &Flags) -> ExitCode {
         }
         ScreensaverCmd::Update { dry_run } => {
             if cfg!(windows) {
-                sys::update(&exe, dry_run)
+                sys::update(n, &exe, dry_run)
             } else {
                 println!("nothing to update on Linux: your idle daemon starts telemetrix itself");
                 ExitCode::SUCCESS
             }
         }
-        ScreensaverCmd::Status => sys::status(),
+        ScreensaverCmd::Status => sys::status(n),
         ScreensaverCmd::Watch {
             idle_minutes,
             dry_run,
             dashboard_exe,
         } => {
             let dashboard = dashboard_exe.unwrap_or_else(|| exe.clone());
-            sys::watch(&dashboard, config.as_deref(), idle_minutes, dry_run, flags)
+            sys::watch(
+                n,
+                &dashboard,
+                config.as_deref(),
+                idle_minutes,
+                dry_run,
+                flags,
+            )
         }
     }
 }
@@ -424,8 +491,8 @@ mod sys {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 
     use super::{
-        DASHBOARD_MUTEX, Decision, IdleWatch, Observation, POLL, STOP_EVENT, TASK_NAME,
-        WATCH_MUTEX, human, idle_from_ticks, launch_args, task_xml, watch_args,
+        DASHBOARD_MUTEX, Decision, IdleWatch, Names, Observation, POLL, human, idle_from_ticks,
+        launch_args, task_xml, watch_args,
     };
     use crate::cli::Flags;
 
@@ -537,8 +604,8 @@ mod sys {
     }
 
     /// The copy the task runs.
-    fn copy_path() -> PathBuf {
-        super::watch_copy_path(std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
+    fn copy_path(n: &Names) -> PathBuf {
+        super::watch_copy_path(std::env::var_os("LOCALAPPDATA").map(PathBuf::from), n)
     }
 
     fn same_file(a: &Path, b: &Path) -> bool {
@@ -548,18 +615,32 @@ mod sys {
         }
     }
 
-    /// Asks a running watcher to end and waits until it has; true when one ran.
-    fn stop_watcher() -> bool {
-        if !signal_stop(STOP_EVENT) {
-            return false;
-        }
+    enum Stop {
+        NoneRunning,
+        Stopped,
+        /// Asked to end, but the watcher mutex is still held after 10 s.
+        StillRunning,
+    }
+
+    /// Asks a running watcher to end and waits until its mutex is gone.
+    fn stop_watcher(n: &Names) -> Stop {
+        let asked = signal_stop(&n.stop_event);
         for _ in 0..100 {
-            if !mutex_exists(WATCH_MUTEX) {
+            if !mutex_exists(&n.watch_mutex) {
+                return if asked {
+                    Stop::Stopped
+                } else {
+                    Stop::NoneRunning
+                };
+            }
+            if !asked {
+                // A watcher holds the mutex but has no stop event: too old or
+                // stuck to ask. Waiting will not help.
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
-        true
+        Stop::StillRunning
     }
 
     /// Copies the program for the task. The old watcher may hold its file
@@ -586,34 +667,74 @@ mod sys {
         ))
     }
 
-    fn run_task() -> bool {
-        schtasks(&["/Run", "/TN", TASK_NAME]).is_ok_and(|o| o.status.success())
+    fn run_task(n: &Names) -> bool {
+        schtasks(&["/Run", "/TN", &n.task]).is_ok_and(|o| o.status.success())
     }
 
-    pub fn install(
-        exe: &Path,
+    /// The last `count` lines of the watcher's log.
+    fn log_tail(log: &Path, count: usize) -> Vec<String> {
+        let text = std::fs::read_to_string(log).unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        lines[lines.len().saturating_sub(count)..]
+            .iter()
+            .map(|l| l.to_string())
+            .collect()
+    }
+
+    /// After `/Run`: the watcher claims its mutex at once. It must still hold
+    /// it after `super::VERIFY_AFTER`, so a watcher that ends right away (a
+    /// crash, or another watcher already running) is caught.
+    fn verify_running(n: &Names) -> bool {
+        std::thread::sleep(super::VERIFY_AFTER);
+        mutex_exists(&n.watch_mutex)
+    }
+
+    /// What install and update have in common: end the running watcher,
+    /// copy `source` to the watcher copy, register the task, start it and
+    /// check that it runs.
+    fn deploy(
+        n: &Names,
+        verb: &str,
+        source: &Path,
+        dashboard: &Path,
         config: Option<&Path>,
         idle_minutes: u32,
         dry_run: bool,
     ) -> ExitCode {
-        let copy = copy_path();
-        if same_file(exe, &copy) {
+        let done = if verb == "install" {
+            "installed"
+        } else {
+            "updated"
+        };
+        let copy = copy_path(n);
+        if same_file(source, &copy) {
             eprintln!(
-                "screensaver: this is the watcher's copy; run install from the installed telemetrix.exe"
+                "screensaver: this is the watcher's copy; run it from the installed telemetrix.exe"
             );
             return ExitCode::FAILURE;
         }
-        let xml = task_xml(&copy, &watch_args(idle_minutes, config, Some(exe)), &user());
+        let log = super::watch_log_path(&copy);
+        let watch = watch_args(
+            idle_minutes,
+            config,
+            Some(dashboard),
+            n.instance.as_deref(),
+            Some(&log),
+        );
+        let xml = task_xml(&copy, &watch, &user());
         let file = std::env::temp_dir().join("telemetrix-screensaver-task.xml");
         let file_text = file.display().to_string();
-        let create = ["/Create", "/TN", TASK_NAME, "/XML", &file_text, "/F"];
-        let start = ["/Run", "/TN", TASK_NAME];
+        let create = ["/Create", "/TN", &n.task, "/XML", &file_text, "/F"];
+        let start = ["/Run", "/TN", &n.task];
         if dry_run {
-            println!("--dry-run: nothing is changed. install would:");
-            println!("1. ask a running watcher to end (event {STOP_EVENT}) and wait for it");
+            println!("--dry-run: nothing is changed. {verb} would:");
+            println!(
+                "1. ask a running watcher to end (event {}) and wait for it",
+                n.stop_event
+            );
             println!(
                 "2. copy {} to {}, so the watcher never locks the installed program",
-                exe.display(),
+                source.display(),
                 copy.display()
             );
             println!("3. write this task definition to {file_text}:\n");
@@ -627,10 +748,22 @@ mod sys {
                 "6. start the watcher now instead of at the next logon: {}",
                 show(&start)
             );
+            println!(
+                "7. check after {} s that the watcher still runs (its log: {})",
+                super::VERIFY_AFTER.as_secs(),
+                log.display()
+            );
             return ExitCode::SUCCESS;
         }
-        stop_watcher();
-        if let Err(e) = copy_exe(exe, &copy) {
+        if let Stop::StillRunning = stop_watcher(n) {
+            eprintln!(
+                "screensaver: another watcher is still running and did not end when asked.\n\
+                 End it in Task Manager (telemetrix-watch.exe, or telemetrix.exe with\n\
+                 \"screensaver watch\" in its command line), then run this again."
+            );
+            return ExitCode::FAILURE;
+        }
+        if let Err(e) = copy_exe(source, &copy) {
             eprintln!("screensaver: {e}");
             return ExitCode::FAILURE;
         }
@@ -657,40 +790,77 @@ mod sys {
                 return ExitCode::FAILURE;
             }
         }
-        let started = run_task();
+        if !run_task(n) {
+            eprintln!(
+                "screensaver: the task \"{}\" is {done}, but schtasks could not start it now; \
+                 it starts at the next logon",
+                n.task
+            );
+            return ExitCode::FAILURE;
+        }
+        if !verify_running(n) {
+            eprintln!(
+                "screensaver: the task \"{}\" was started, but no watcher runs {} s later.",
+                n.task,
+                super::VERIFY_AFTER.as_secs()
+            );
+            let tail = log_tail(&log, 3);
+            if tail.is_empty() {
+                eprintln!("The watcher wrote nothing to {}.", log.display());
+            } else {
+                eprintln!("The last lines of {}:", log.display());
+                for line in tail {
+                    eprintln!("  {line}");
+                }
+            }
+            return ExitCode::FAILURE;
+        }
         println!(
-            "installed: after {idle_minutes} min without input the dashboard opens full screen.\n\
-             The watcher starts at every logon{}. It runs from {}.\n\
+            "{done}: after {idle_minutes} min without input the dashboard opens full screen.\n\
+             The watcher runs now and starts at every logon. It runs from {}.\n\
              After `cargo install`, run: telemetrix screensaver update\n\
              Remove it with: telemetrix screensaver uninstall",
-            if started {
-                " and runs now"
-            } else {
-                " (it could not be started now)"
-            },
             copy.display()
         );
         ExitCode::SUCCESS
     }
 
-    /// `update`: copy the installed program to the watcher again and restart
-    /// it. A task from before the copy existed is installed again with its
-    /// own settings.
-    pub fn update(exe: &Path, dry_run: bool) -> ExitCode {
-        let Some(info) = installed_arguments().and_then(|a| super::parse_task_args(&a)) else {
+    pub fn install(
+        n: &Names,
+        exe: &Path,
+        config: Option<&Path>,
+        idle_minutes: u32,
+        dry_run: bool,
+    ) -> ExitCode {
+        deploy(n, "install", exe, exe, config, idle_minutes, dry_run)
+    }
+
+    /// `update`: copy the installed program to the watcher again, register
+    /// the task in today's form with its own settings, and restart it.
+    pub fn update(n: &Names, exe: &Path, dry_run: bool) -> ExitCode {
+        let Some(info) = installed_arguments(n).and_then(|a| super::parse_task_args(&a)) else {
             eprintln!(
-                "screensaver: no task \"{TASK_NAME}\" is installed; use: telemetrix screensaver install"
+                "screensaver: no task \"{}\" is installed; use: telemetrix screensaver install",
+                n.task
             );
             return ExitCode::FAILURE;
         };
+        let idle = info.idle_minutes.unwrap_or(super::DEFAULT_IDLE_MINUTES);
         let Some(dashboard) = info.dashboard else {
             println!(
                 "the task runs {} itself (an older install), so it locks that file.\n\
                  It is installed again to run a copy, with the same settings:",
                 info.program.display()
             );
-            let idle = info.idle_minutes.unwrap_or(super::DEFAULT_IDLE_MINUTES);
-            return install(exe, info.config.as_deref(), idle, dry_run);
+            return deploy(
+                n,
+                "install",
+                exe,
+                exe,
+                info.config.as_deref(),
+                idle,
+                dry_run,
+            );
         };
         if !same_file(exe, &dashboard) {
             println!(
@@ -700,54 +870,40 @@ mod sys {
                 exe.display()
             );
         }
-        let copy = info.program;
-        if dry_run {
-            println!("--dry-run: nothing is changed. update would:");
-            println!("1. ask a running watcher to end (event {STOP_EVENT}) and wait for it");
-            println!("2. copy {} to {}", dashboard.display(), copy.display());
-            println!(
-                "3. start the watcher again: {}",
-                show(&["/Run", "/TN", TASK_NAME])
-            );
-            return ExitCode::SUCCESS;
-        }
-        let was_running = stop_watcher();
-        if let Err(e) = copy_exe(&dashboard, &copy) {
-            eprintln!("screensaver: {e}");
-            if was_running {
-                run_task();
-            }
-            return ExitCode::FAILURE;
-        }
-        let started = run_task();
-        println!(
-            "updated: {} is a fresh copy of {}; the watcher {}",
-            copy.display(),
-            dashboard.display(),
-            if started {
-                "runs again"
-            } else {
-                "could not be started now (it starts at the next logon)"
-            }
-        );
-        ExitCode::SUCCESS
+        deploy(
+            n,
+            "update",
+            &dashboard,
+            &dashboard,
+            info.config.as_deref(),
+            idle,
+            dry_run,
+        )
     }
 
-    pub fn uninstall(dry_run: bool) -> ExitCode {
-        let delete = ["/Delete", "/TN", TASK_NAME, "/F"];
-        let copy = installed_arguments()
+    pub fn uninstall(n: &Names, dry_run: bool) -> ExitCode {
+        let delete = ["/Delete", "/TN", &n.task, "/F"];
+        let copy = installed_arguments(n)
             .and_then(|a| super::parse_task_args(&a))
             .filter(|i| i.dashboard.is_some())
             .map(|i| i.program)
-            .unwrap_or_else(copy_path);
+            .unwrap_or_else(|| copy_path(n));
+        let log = super::watch_log_path(&copy);
         if dry_run {
             println!("--dry-run: nothing is changed. uninstall would:");
-            println!("1. ask a running watcher to end (it waits on the event {STOP_EVENT})");
+            println!(
+                "1. ask a running watcher to end (it waits on the event {})",
+                n.stop_event
+            );
             println!("2. remove the task: {}", show(&delete));
-            println!("3. delete the watcher's copy {}", copy.display());
+            println!(
+                "3. delete the watcher's copy {} and its log {}",
+                copy.display(),
+                log.display()
+            );
             return ExitCode::SUCCESS;
         }
-        let stopped = stop_watcher();
+        let stopped = stop_watcher(n);
         let removed = match schtasks(&delete) {
             Ok(out) if out.status.success() => true,
             Ok(_) => false,
@@ -756,6 +912,7 @@ mod sys {
                 return ExitCode::FAILURE;
             }
         };
+        let _ = std::fs::remove_file(&log);
         let copy_gone = remove_copy(&copy);
         println!(
             "{}; {}; {}",
@@ -764,10 +921,12 @@ mod sys {
             } else {
                 "there was no task to remove"
             },
-            if stopped {
-                "the watcher was asked to end"
-            } else {
-                "no watcher was running"
+            match stopped {
+                Stop::Stopped => "the watcher ended",
+                Stop::NoneRunning => "no watcher was running",
+                Stop::StillRunning => {
+                    "a watcher is still running: end it in Task Manager (telemetrix-watch.exe)"
+                }
             },
             match copy_gone {
                 Ok(true) => "the watcher's copy is deleted".to_string(),
@@ -801,8 +960,8 @@ mod sys {
     }
 
     /// The watcher arguments of the installed task, from `schtasks /Query /XML`.
-    fn installed_arguments() -> Option<String> {
-        let out = schtasks(&["/Query", "/TN", TASK_NAME, "/XML"]).ok()?;
+    fn installed_arguments(n: &Names) -> Option<String> {
+        let out = schtasks(&["/Query", "/TN", &n.task, "/XML"]).ok()?;
         if !out.status.success() {
             return None;
         }
@@ -818,15 +977,16 @@ mod sys {
         )
     }
 
-    pub fn status() -> ExitCode {
-        let args = installed_arguments();
+    pub fn status(n: &Names) -> ExitCode {
+        let args = installed_arguments(n);
         let task = match &args {
-            Some(args) => format!("installed (\"{TASK_NAME}\"): conhost.exe {args}"),
+            Some(args) => format!("installed (\"{}\"): conhost.exe {args}", n.task),
             None => "not installed".to_string(),
         };
         let yes_no = |b: bool| if b { "running" } else { "not running" };
         println!("task:       {task}");
-        if let Some(info) = args.as_deref().and_then(super::parse_task_args) {
+        let info = args.as_deref().and_then(super::parse_task_args);
+        if let Some(info) = &info {
             println!("runs:       {}", info.program.display());
             match &info.dashboard {
                 Some(dashboard) => {
@@ -849,7 +1009,25 @@ mod sys {
                 ),
             }
         }
-        println!("watcher:    {}", yes_no(mutex_exists(WATCH_MUTEX)));
+        let running = mutex_exists(&n.watch_mutex);
+        println!("watcher:    {}", yes_no(running));
+        if info.is_some() && !running {
+            println!(
+                "            the task is installed, but no watcher runs: run telemetrix screensaver update"
+            );
+        }
+        match info.as_ref().and_then(|i| i.log.as_ref()) {
+            Some(log) => {
+                println!("log:        {}", log.display());
+                for line in log_tail(log, 3) {
+                    println!("            {line}");
+                }
+            }
+            None if info.is_some() => println!(
+                "log:        none (an older install; telemetrix screensaver update adds one)"
+            ),
+            None => {}
+        }
         println!("dashboard:  {}", yes_no(mutex_exists(DASHBOARD_MUTEX)));
         match idle_time() {
             Some(d) => println!("idle now:   {}", human(d)),
@@ -891,6 +1069,7 @@ mod sys {
     }
 
     pub fn watch(
+        n: &Names,
         exe: &Path,
         config: Option<&Path>,
         idle_minutes: u32,
@@ -898,9 +1077,12 @@ mod sys {
         flags: &Flags,
     ) -> ExitCode {
         let mut log_file = flags.log.as_ref().and_then(|p| {
+            let full = std::fs::metadata(p).is_ok_and(|m| m.len() > super::LOG_CAP);
             std::fs::OpenOptions::new()
                 .create(true)
-                .append(true)
+                .append(!full)
+                .write(true)
+                .truncate(full)
                 .open(p)
                 .ok()
         });
@@ -922,11 +1104,11 @@ mod sys {
         if unsafe { GetConsoleWindow() }.is_null() {
             unsafe { FreeConsole() };
         }
-        let Some(_single) = claim(WATCH_MUTEX) else {
+        let Some(_single) = claim(&n.watch_mutex) else {
             say("another screensaver watcher is already running; this one ends");
             return ExitCode::SUCCESS;
         };
-        let Some(stop) = stop_event(STOP_EVENT) else {
+        let Some(stop) = stop_event(&n.stop_event) else {
             say("cannot create the stop event; the watcher ends");
             return ExitCode::FAILURE;
         };
@@ -1014,28 +1196,29 @@ mod sys {
     use std::path::Path;
     use std::process::ExitCode;
 
+    use super::Names;
     use crate::cli::Flags;
 
-    pub fn install(_: &Path, _: Option<&Path>, _: u32, _: bool) -> ExitCode {
+    pub fn install(_: &Names, _: &Path, _: Option<&Path>, _: u32, _: bool) -> ExitCode {
         ExitCode::SUCCESS
     }
 
-    pub fn uninstall(_: bool) -> ExitCode {
+    pub fn uninstall(_: &Names, _: bool) -> ExitCode {
         ExitCode::SUCCESS
     }
 
-    pub fn update(_: &Path, _: bool) -> ExitCode {
+    pub fn update(_: &Names, _: &Path, _: bool) -> ExitCode {
         ExitCode::SUCCESS
     }
 
-    pub fn status() -> ExitCode {
+    pub fn status(_: &Names) -> ExitCode {
         println!(
             "telemetrix installs no screensaver on Linux: use `telemetrix screensaver install` for the swayidle or xautolock line"
         );
         ExitCode::SUCCESS
     }
 
-    pub fn watch(_: &Path, _: Option<&Path>, _: u32, _: bool, _: &Flags) -> ExitCode {
+    pub fn watch(_: &Names, _: &Path, _: Option<&Path>, _: u32, _: bool, _: &Flags) -> ExitCode {
         eprintln!(
             "screensaver watch works on Windows only; on Linux use swayidle or xautolock (see screensaver install)"
         );
@@ -1109,7 +1292,7 @@ mod tests {
     #[test]
     fn task_xml_starts_the_watcher_at_logon_without_a_window() {
         let exe = Path::new(r"C:\Program Files\tx & co\telemetrix.exe");
-        let args = watch_args(15, Some(Path::new(r"D:\cfg\t.toml")), None);
+        let args = watch_args(15, Some(Path::new(r"D:\cfg\t.toml")), None, None, None);
         let xml = task_xml(exe, &args, r"PC\someone");
         assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-16\"?>"));
         assert!(xml.contains(
@@ -1129,7 +1312,8 @@ mod tests {
 
     #[test]
     fn the_task_runs_the_copy_and_opens_the_installed_program() {
-        let copy = watch_copy_path(Some(PathBuf::from(r"C:\Data Local")));
+        let names = Names::new(None);
+        let copy = watch_copy_path(Some(PathBuf::from(r"C:\Data Local")), &names);
         assert_eq!(
             copy,
             Path::new(r"C:\Data Local")
@@ -1137,8 +1321,17 @@ mod tests {
                 .join("screensaver")
                 .join("telemetrix-watch.exe")
         );
+        let log = watch_log_path(&copy);
+        assert_eq!(log, copy.with_file_name("watch.log"));
         let installed = Path::new(r"C:\Program Files\tx & co\telemetrix.exe");
-        let args = watch_args(7, Some(Path::new(r"D:\my cfg\t.toml")), Some(installed));
+        let args = watch_args(
+            7,
+            Some(Path::new(r"D:\my cfg\t.toml")),
+            Some(installed),
+            None,
+            Some(&log),
+        );
+        assert_eq!(args[0], "--log", "a global flag, before the command");
         assert_eq!(
             &args[args.len() - 2..],
             [
@@ -1159,8 +1352,28 @@ mod tests {
                 dashboard: Some(installed.to_path_buf()),
                 config: Some(PathBuf::from(r"D:\my cfg\t.toml")),
                 idle_minutes: Some(7),
+                log: Some(log),
             }
         );
+    }
+
+    #[test]
+    fn a_test_instance_has_its_own_task_copy_and_objects() {
+        let real = Names::new(None);
+        let test = Names::new(Some("test"));
+        assert_eq!(real.task, "telemetrix screensaver");
+        assert_eq!(test.task, "telemetrix screensaver test");
+        assert_ne!(real.watch_mutex, test.watch_mutex);
+        assert_ne!(real.stop_event, test.stop_event);
+        assert_eq!(
+            watch_copy_path(Some(PathBuf::from("L")), &test),
+            Path::new("L")
+                .join("telemetrix")
+                .join("screensaver-test")
+                .join(WATCH_EXE)
+        );
+        let args = watch_args(3, None, None, Some("test"), None);
+        assert_eq!(&args[args.len() - 2..], ["--instance", "test"]);
     }
 
     #[test]

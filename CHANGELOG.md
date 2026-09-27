@@ -32,6 +32,8 @@ All notable changes to telemetrix. Versions follow
   it prints the swayidle or xautolock line instead. The watcher runs from a
   copy of the program, so it never blocks `cargo install`;
   `telemetrix screensaver update` refreshes that copy after an update.
+  `install` and `update` check that the watcher really runs, and the
+  watcher writes a small log that `status` shows.
 - **Hosts plugin** (off by default): the health result, load, memory,
   disk, uptime and UPS of your own servers, read by commands you list in
   the new `[commands]` table of `telemetrix.toml`. Plugins run them with
