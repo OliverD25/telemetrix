@@ -5,6 +5,7 @@ pub mod matrix;
 pub mod minimalist;
 pub mod nasa;
 pub mod pip_boy;
+pub mod synthwave;
 pub mod tokyo_night;
 
 use std::time::Duration;
@@ -48,6 +49,7 @@ pub fn all() -> Vec<Box<dyn Theme>> {
         Box::new(cyberpunk::Cyberpunk),
         Box::new(nasa::Nasa),
         Box::new(pip_boy::PipBoy),
+        Box::new(synthwave::Synthwave::new()),
     ]
 }
 

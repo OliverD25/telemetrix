@@ -122,7 +122,7 @@ only `Ctrl+C` quits.
 | Flag | Meaning |
 |---|---|
 | `--config <path>` | use this settings file |
-| `--theme <name>` | `minimalist`, `matrix`, `tokyo-night`, `crt-amber`, `cyberpunk`, `nasa` or `pip-boy` |
+| `--theme <name>` | `minimalist`, `matrix`, `tokyo-night`, `crt-amber`, `cyberpunk`, `nasa`, `pip-boy` or `synthwave` |
 | `--fps <n>` | frames per second for animated themes, 1..60 |
 | `--plugins-dir <dir>` | folder with `.lua` plugins |
 | `--no-plugins` | run no plugins |
@@ -177,9 +177,15 @@ These need no terminal window, so scripts and agents can use them.
   brightness levels. Plain ASCII frames (`+--+`), bracketed tabs
   (`[STAT] [DATA] [RADIO]`) and `[▮▮▮▯▯]` gauges. A warning is the
   brightest shade. No rain. Static.
+- **synthwave**: an 80s neon sunset. The sky goes from deep purple to
+  magenta, a striped sun sits on the horizon, and a wireframe grid floor
+  moves slowly toward you. Card frames fade from purple at the top to
+  orange at the bottom. Animated: it follows `general.fps` and the `space`
+  pause, and like matrix it limits itself to 10 frames per second above
+  20 000 cells. Only the floor lines change between frames.
 
-Every theme except matrix is static: it redraws only when data changes, so
-it uses almost no CPU. Press `t` to try them with a live preview.
+Every theme except matrix and synthwave is static: it redraws only when
+data changes, so it uses almost no CPU. Press `t` to try them with a live preview.
 
 All themes lay the cards out in three columns on wide terminals, two on
 medium ones and one on narrow ones. Below 40 by 10 cells the screen only says
@@ -263,9 +269,9 @@ On Linux, mounts of type nfs, nfs4, cifs, smb3, smbfs, fuse.sshfs and 9p go
 to the Network card. A hung network mount can still delay the disk
 readings there; protecting against that is planned after v0.1.
 
-**Roadmap:** the original brief lists eight more themes; five of them are
-here (tokyo-night, crt-amber, cyberpunk, nasa, pip-boy). The other three
-are planned for later versions.
+**Roadmap:** the original brief lists eight more themes; six of them are
+here (tokyo-night, crt-amber, cyberpunk, nasa, pip-boy, synthwave). The
+other two are planned for later versions.
 
 ## Where plugins live
 
@@ -428,7 +434,7 @@ no longer matches the program.
 | Key | Default | Allowed values | In the `s` overlay | Meaning |
 |---|---|---|---|---|
 | `schema` | `1` | 1..1 | no, edit the file | format version of this file, do not change |
-| `general.theme` | `"matrix"` | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa \| pip-boy | yes | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa \| pip-boy |
+| `general.theme` | `"matrix"` | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa \| pip-boy \| synthwave | yes | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa \| pip-boy \| synthwave |
 | `general.fps` | `15` | 1..60 | yes | frames per second for animated themes, 1..60 |
 | `general.exit_on_any_key` | `false` | true \| false | yes | true = screensaver mode: any key quits |
 | `general.plugins_dir` | `""` | a file or folder path | no, edit the file | empty = the plugins folder next to this file; relative paths start there |

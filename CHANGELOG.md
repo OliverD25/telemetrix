@@ -13,6 +13,10 @@ All notable changes to telemetrix. Versions follow
   and the UTC time (GMT). Static.
 - **pip-boy theme:** a green wrist-computer screen in one hue: ASCII
   frames, bracketed tabs and `[▮▮▮▯▯]` gauges. Static.
+- **synthwave theme:** a neon sunset with a striped sun and a wireframe
+  grid floor that moves toward you, and card frames that fade from purple
+  to orange. Animated at `general.fps`, 10 frames per second at most on
+  very large screens.
 
 ## 0.2.0 (not released yet)
 
