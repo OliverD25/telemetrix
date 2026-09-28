@@ -43,7 +43,7 @@ Usage:
 
 Flags:
   --config <path>       settings file to use
-  --theme <name>        minimalist | matrix | tokyo-night | crt-amber | cyberpunk | nasa | pip-boy | synthwave
+  --theme <name>        minimalist | matrix | tokyo-night | crt-amber | cyberpunk | nasa | pip-boy | synthwave | kernel-log
   --fps <n>             frames per second for animated themes, 1..60
   --plugins-dir <dir>   folder with .lua plugins
   --no-plugins          run no plugins

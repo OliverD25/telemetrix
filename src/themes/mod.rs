@@ -1,6 +1,7 @@
 pub mod common;
 pub mod crt_amber;
 pub mod cyberpunk;
+pub mod kernel_log;
 pub mod matrix;
 pub mod minimalist;
 pub mod nasa;
@@ -50,6 +51,7 @@ pub fn all() -> Vec<Box<dyn Theme>> {
         Box::new(nasa::Nasa),
         Box::new(pip_boy::PipBoy),
         Box::new(synthwave::Synthwave::new()),
+        Box::new(kernel_log::KernelLog::new()),
     ]
 }
 

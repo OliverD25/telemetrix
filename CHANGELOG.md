@@ -17,6 +17,10 @@ All notable changes to telemetrix. Versions follow
   grid floor that moves toward you, and card frames that fade from purple
   to orange. Animated at `general.fps`, 10 frames per second at most on
   very large screens.
+- **kernel-log theme:** a scrolling boot log with `[  OK  ]`, `[ WARN ]`
+  and `[FAILED]` records for every change, timestamps like `dmesg`, and a
+  pinned status block with the current values. The log keeps 500 records.
+  Static: it redraws only on new data.
 
 ## 0.2.0 (not released yet)
 

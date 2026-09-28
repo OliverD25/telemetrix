@@ -122,7 +122,7 @@ only `Ctrl+C` quits.
 | Flag | Meaning |
 |---|---|
 | `--config <path>` | use this settings file |
-| `--theme <name>` | `minimalist`, `matrix`, `tokyo-night`, `crt-amber`, `cyberpunk`, `nasa`, `pip-boy` or `synthwave` |
+| `--theme <name>` | `minimalist`, `matrix`, `tokyo-night`, `crt-amber`, `cyberpunk`, `nasa`, `pip-boy`, `synthwave` or `kernel-log` |
 | `--fps <n>` | frames per second for animated themes, 1..60 |
 | `--plugins-dir <dir>` | folder with `.lua` plugins |
 | `--no-plugins` | run no plugins |
@@ -183,6 +183,13 @@ These need no terminal window, so scripts and agents can use them.
   orange at the bottom. Animated: it follows `general.fps` and the `space`
   pause, and like matrix it limits itself to 10 frames per second above
   20 000 cells. Only the floor lines change between frames.
+- **kernel-log**: a Linux boot log. Every change of a value adds a record
+  like `[ 1234.567890] [  OK  ] cpu0: load 23% temp 52.0C` or
+  `[ WARN ] disk C: 91% used`, and the view scrolls. The time is seconds
+  since the computer started, as `dmesg` counts it. A pinned status block
+  (on the right, or on top on narrow screens) always shows the current
+  values and every plugin row. The log keeps the last 500 records. Static:
+  it redraws only when new data arrives.
 
 Every theme except matrix and synthwave is static: it redraws only when
 data changes, so it uses almost no CPU. Press `t` to try them with a live preview.
@@ -191,7 +198,8 @@ All themes lay the cards out in three columns on wide terminals, two on
 medium ones and one on narrow ones. Below 40 by 10 cells the screen only says
 "terminal too small". They show the same values. Most themes show the same
 cards and rows, and only the colours, frames and background differ. `nasa`
-shows the values as table rows. The status bar and the boxes (`s`, `l`, `t`,
+shows the values as table rows, and `kernel-log` as log records next to a
+status block. The status bar and the boxes (`s`, `l`, `t`,
 `?`) look the same in every theme.
 
 ### GPU card
@@ -269,9 +277,9 @@ On Linux, mounts of type nfs, nfs4, cifs, smb3, smbfs, fuse.sshfs and 9p go
 to the Network card. A hung network mount can still delay the disk
 readings there; protecting against that is planned after v0.1.
 
-**Roadmap:** the original brief lists eight more themes; six of them are
-here (tokyo-night, crt-amber, cyberpunk, nasa, pip-boy, synthwave). The
-other two are planned for later versions.
+**Roadmap:** the original brief lists eight more themes; seven of them are
+here (tokyo-night, crt-amber, cyberpunk, nasa, pip-boy, synthwave,
+kernel-log). The last one is planned for a later version.
 
 ## Where plugins live
 
@@ -434,7 +442,7 @@ no longer matches the program.
 | Key | Default | Allowed values | In the `s` overlay | Meaning |
 |---|---|---|---|---|
 | `schema` | `1` | 1..1 | no, edit the file | format version of this file, do not change |
-| `general.theme` | `"matrix"` | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa \| pip-boy \| synthwave | yes | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa \| pip-boy \| synthwave |
+| `general.theme` | `"matrix"` | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa \| pip-boy \| synthwave \| kernel-log | yes | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa \| pip-boy \| synthwave \| kernel-log |
 | `general.fps` | `15` | 1..60 | yes | frames per second for animated themes, 1..60 |
 | `general.exit_on_any_key` | `false` | true \| false | yes | true = screensaver mode: any key quits |
 | `general.plugins_dir` | `""` | a file or folder path | no, edit the file | empty = the plugins folder next to this file; relative paths start there |

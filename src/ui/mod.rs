@@ -439,7 +439,7 @@ mod tests {
                 }
                 assert!(t.contains("45.0 °C") && t.contains("112.4 W"), "{at}");
                 assert!(t.contains(load), "{at}: the load");
-                assert!(lower.contains(" disks ") && lower.contains(" cpu "), "{at}");
+                assert!(lower.contains(" disk") && lower.contains(" cpu "), "{at}");
             }
         }
     }
