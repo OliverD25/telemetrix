@@ -24,6 +24,7 @@ pub const THEME_NAMES: &[&str] = &[
     "pip-boy",
     "synthwave",
     "kernel-log",
+    "ascii-dashboard",
 ];
 pub const MATRIX_COLORS: &[&str] = &["green", "amber", "cyan", "white"];
 const FILE_NAME: &str = "telemetrix.toml";
@@ -155,7 +156,7 @@ pub static SETTINGS: &[Setting] = &[
         Kind::Enum(THEME_NAMES),
         text("matrix"),
         true,
-        "minimalist | matrix | tokyo-night | crt-amber | cyberpunk | nasa | pip-boy | synthwave | kernel-log",
+        "minimalist | matrix | tokyo-night | crt-amber | cyberpunk | nasa | pip-boy | synthwave | kernel-log | ascii-dashboard",
     ),
     setting(
         "general.fps",
@@ -1449,7 +1450,7 @@ mod tests {
         let text = render_default_file();
         assert!(text.starts_with("# telemetrix settings."));
         assert!(text.contains(
-            "\ntheme = \"matrix\"            # minimalist | matrix | tokyo-night | crt-amber | cyberpunk | nasa | pip-boy | synthwave | kernel-log\n"
+            "\ntheme = \"matrix\"            # minimalist | matrix | tokyo-night | crt-amber | cyberpunk | nasa | pip-boy | synthwave | kernel-log | ascii-dashboard\n"
         ));
         assert!(text.contains("\nfps = 15                    # frames per second"));
         assert!(text.contains("\n[theme.matrix]\ndensity = 0.5"));

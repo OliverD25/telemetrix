@@ -1,3 +1,4 @@
+pub mod ascii_dashboard;
 pub mod common;
 pub mod crt_amber;
 pub mod cyberpunk;
@@ -52,6 +53,7 @@ pub fn all() -> Vec<Box<dyn Theme>> {
         Box::new(pip_boy::PipBoy),
         Box::new(synthwave::Synthwave::new()),
         Box::new(kernel_log::KernelLog::new()),
+        Box::new(ascii_dashboard::AsciiDashboard),
     ]
 }
 

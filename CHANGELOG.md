@@ -21,6 +21,9 @@ All notable changes to telemetrix. Versions follow
   and `[FAILED]` records for every change, timestamps like `dmesg`, and a
   pinned status block with the current values. The log keeps 500 records.
   Static: it redraws only on new data.
+- **ascii-dashboard theme:** large block-character charts of the CPU and
+  RAM history, and horizontal block bars for disks, GPUs and swap that
+  fill in eighths of a cell. Static.
 
 ## 0.2.0 (not released yet)
 

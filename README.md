@@ -122,7 +122,7 @@ only `Ctrl+C` quits.
 | Flag | Meaning |
 |---|---|
 | `--config <path>` | use this settings file |
-| `--theme <name>` | `minimalist`, `matrix`, `tokyo-night`, `crt-amber`, `cyberpunk`, `nasa`, `pip-boy`, `synthwave` or `kernel-log` |
+| `--theme <name>` | `minimalist`, `matrix`, `tokyo-night`, `crt-amber`, `cyberpunk`, `nasa`, `pip-boy`, `synthwave`, `kernel-log` or `ascii-dashboard` |
 | `--fps <n>` | frames per second for animated themes, 1..60 |
 | `--plugins-dir <dir>` | folder with `.lua` plugins |
 | `--no-plugins` | run no plugins |
@@ -190,16 +190,24 @@ These need no terminal window, so scripts and agents can use them.
   (on the right, or on top on narrow screens) always shows the current
   values and every plugin row. The log keeps the last 500 records. Static:
   it redraws only when new data arrives.
+- **ascii-dashboard**: large bar charts of the CPU and RAM history in block
+  characters (`▂▄▆█`), green at the bottom, yellow and red near the top,
+  with a 0..100 scale. They show as many samples as fit, up to
+  `metrics.history_len`, and grow taller when the screen has room. Disks,
+  GPUs and swap get horizontal block bars that fill in eighths of a cell.
+  Plugin cards look as usual, with their trend rows. Static.
 
 Every theme except matrix and synthwave is static: it redraws only when
-data changes, so it uses almost no CPU. Press `t` to try them with a live preview.
+data changes, so it uses almost no CPU. Press `t` to try them with a live
+preview.
 
-All themes lay the cards out in three columns on wide terminals, two on
-medium ones and one on narrow ones. Below 40 by 10 cells the screen only says
-"terminal too small". They show the same values. Most themes show the same
-cards and rows, and only the colours, frames and background differ. `nasa`
-shows the values as table rows, and `kernel-log` as log records next to a
-status block. The status bar and the boxes (`s`, `l`, `t`,
+All themes show the same values. Below 40 by 10 cells the screen only says
+"terminal too small". Most themes show the same cards and rows, and only
+the colours, frames and background differ. `nasa` shows the values as
+table rows, `kernel-log` as log records next to a status block, and
+`ascii-dashboard` draws the CPU and RAM history as large charts. The card
+themes lay the cards out in three columns on wide terminals, two on medium
+ones and one on narrow ones. The status bar and the boxes (`s`, `l`, `t`,
 `?`) look the same in every theme.
 
 ### GPU card
@@ -277,9 +285,9 @@ On Linux, mounts of type nfs, nfs4, cifs, smb3, smbfs, fuse.sshfs and 9p go
 to the Network card. A hung network mount can still delay the disk
 readings there; protecting against that is planned after v0.1.
 
-**Roadmap:** the original brief lists eight more themes; seven of them are
-here (tokyo-night, crt-amber, cyberpunk, nasa, pip-boy, synthwave,
-kernel-log). The last one is planned for a later version.
+All eight extra themes from the original brief are here: tokyo-night,
+crt-amber, cyberpunk, nasa, pip-boy, synthwave, kernel-log and
+ascii-dashboard.
 
 ## Where plugins live
 
@@ -442,7 +450,7 @@ no longer matches the program.
 | Key | Default | Allowed values | In the `s` overlay | Meaning |
 |---|---|---|---|---|
 | `schema` | `1` | 1..1 | no, edit the file | format version of this file, do not change |
-| `general.theme` | `"matrix"` | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa \| pip-boy \| synthwave \| kernel-log | yes | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa \| pip-boy \| synthwave \| kernel-log |
+| `general.theme` | `"matrix"` | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa \| pip-boy \| synthwave \| kernel-log \| ascii-dashboard | yes | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa \| pip-boy \| synthwave \| kernel-log \| ascii-dashboard |
 | `general.fps` | `15` | 1..60 | yes | frames per second for animated themes, 1..60 |
 | `general.exit_on_any_key` | `false` | true \| false | yes | true = screensaver mode: any key quits |
 | `general.plugins_dir` | `""` | a file or folder path | no, edit the file | empty = the plugins folder next to this file; relative paths start there |
