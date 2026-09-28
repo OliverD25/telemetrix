@@ -190,7 +190,8 @@ changes, the plugin runs again within a second (see
 ### Settings the user can change in the dashboard
 
 Declare a setting in `settings_schema`, and it gets a row in the `s` box,
-under the plugin's section after `enabled` and `interval`:
+on the plugin's own page (Plugins, then the plugin) after `enabled` and
+`interval`. The box's `/` search finds it by its label or key:
 
 ```lua
 return {

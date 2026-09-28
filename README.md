@@ -98,7 +98,7 @@ telemetrix --exit-on-any-key      # screensaver mode: any key quits
 | `q`, `Esc`, `Ctrl+C` | quit (`Esc` closes an open box first) |
 | `t` | open the theme box: `Up`/`Down` (or `t`/`T`) preview each theme live, `Enter` saves it, `Esc` goes back; `q` does not quit while the box is open. `Right` or `o` opens the options of the highlighted theme (see [Options per theme](#options-per-theme)) |
 | `v` | the next CPU view of the current theme: bar, chart, both (saved at once) |
-| `s` | settings: every change is saved at once |
+| `s` | settings: pages on the left, their settings on the right; `/` searches them all. Every change is saved at once (see [The settings box](#the-settings-box)) |
 | `+` / `-` | more / fewer frames per second (saved) |
 | `space` | pause the animation |
 | `l` | log, with the program's own memory use at the top |
@@ -107,19 +107,75 @@ telemetrix --exit-on-any-key      # screensaver mode: any key quits
 | `g` | run the speed test now (a plugin's own key) |
 | `?` | help |
 
-Inside the settings box: `Up`/`Down` move, `Enter` or `Right` pick the next
-value, `Left` the previous one, `Shift` with `Left`/`Right` moves ten steps.
-Paths are shown but can only be changed in the file. On the `check now` and
-`install now` rows of the `update` group, `Enter` runs them (see
-[From the settings box](#from-the-settings-box)).
+### The settings box
 
-Each plugin's section in the settings box also lists the plugin's own
-settings, like the weather city or the main bank. On the weather city, `Enter`
-opens a search list: type a few letters, pick the place with `Up`/`Down` and
-`Enter`. On a text setting,
-`Enter` opens an input line: type the text, `Enter` saves it and the plugin
-runs at once, `Esc` cancels. While you type, every key goes to the input;
-only `Ctrl+C` quits.
+`s` opens the settings. The categories are on the left, the settings of
+the chosen one on the right:
+
+```
+╭ Settings ─────────────────────────────────────────────────╮
+│ > Appearance │   theme                 matrix             │
+│   Cards      │   fps                   15                 │
+│   Plugins    │ [options of matrix]                        │
+│   Updates    │   cpu_view              bar                │
+│   System     │   ram_view              bar                │
+│              │   chart_height          medium             │
+│              │   color                 green              │
+│              │ [cards of matrix]                          │
+│              │   cpu                   on                 │
+│↑↓ choose · → open · / search · Esc close                  │
+│changes apply live and are saved at once                   │
+╰───────────────────────────────────────────────────────────╯
+```
+
+| Page | What is on it |
+|---|---|
+| Appearance | `theme` and `fps`; the options of the current theme (CPU and RAM view, chart height, accent) and its cards on or off; `units`; the keys of one theme only (`matrix` density, speed and colour, `minimalist` sparklines) |
+| Cards | the warning thresholds, the disk and network drive options, the GPU card, the history length |
+| Plugins | the switch for all plugins, then every plugin file with `on`, `off` or `error`. `Right` opens a plugin's own page: `enabled`, `interval` and its own settings, like the weather city or the main bank |
+| Updates | the version, the latest release, `check now`, `install now`, and the automatic update settings (see [From the settings box](#from-the-settings-box)) |
+| System | screensaver mode (`exit_on_any_key`), the log file and its length, the plugin folder, the memory budgets, the plugin limits and the metrics intervals |
+
+Keys:
+
+- **On the category list:** `Up`/`Down` choose a page, `Right` or `Enter`
+  opens it, `Esc` closes the box. The box always opens at Appearance.
+- **On a page:** `Up`/`Down` move, `Right` or `Enter` picks the next
+  value, `Left` the previous one, `Shift` with `Left`/`Right` moves ten
+  steps. On a plugin, `Right` or `Enter` opens its page. `Esc` or
+  `Backspace` goes back one level: from a plugin's page to the plugin
+  list, from a page to the category list.
+- **`Left` on a row without a value to step** also goes back one level:
+  on a plugin in the list, on `check now`, on a text setting and on the
+  paths, which are shown but can only be changed in the file. So `Left`
+  never does nothing, and it never changes a value by surprise on a row
+  that has no values.
+- **`/` searches** every setting on every page, including each plugin's
+  page, by its name and its key in the file, in any letter case. The
+  results show where each one is: `Cards › gpu › enabled`,
+  `Plugins › weather › city`. `Up`/`Down` choose, `Enter` opens that page
+  with the setting chosen, `Esc` goes back to where you were.
+- **Text:** on the weather city, `Enter` opens a search list: type a few
+  letters, pick the place with `Up`/`Down` and `Enter`. On a text setting,
+  `Enter` opens an input line: type the text, `Enter` saves it and the
+  plugin runs at once, `Esc` cancels. While you type in any of these, and
+  in the `/` search, every key goes to the text; only `Ctrl+C` quits.
+
+A page longer than the box scrolls. On a terminal narrower than 60
+columns or shorter than 11 rows (down to 40×10), the category list becomes
+one line of letters on top, `A C P U S`, followed by the name of the open
+page:
+
+```
+╭ Settings ──────────────────────────╮
+│  A  C  P  U  S  Appearance         │
+│  theme             matrix          │
+│  fps               15              │
+│[options of matrix]                 │
+│↑↓ · → open · / · Esc close         │
+│changes apply live and are saved at │
+╰────────────────────────────────────╯
+```
 
 ## Flags
 
@@ -266,8 +322,9 @@ Three ways to change them:
   off, `[` and `]` (or `Shift` with `Up`/`Down`) move a card in the order.
   Every change shows at once behind the box. `s` or the Save row writes
   all changes of that theme to the file in one step; `Esc` puts them back.
-- **The `s` box:** its first group, "theme: <current theme>", has the same
-  rows (without the order) and saves every change at once.
+- **The `s` box:** the Appearance page has the groups "options of
+  <current theme>" and "cards of <current theme>" with the same rows
+  (without the order) and saves every change at once.
 - **`v`** cycles the CPU view of the current theme and saves it.
 
 ### GPU card
@@ -955,7 +1012,7 @@ and starts the new version in the same window with the same arguments.
 
 ### From the settings box
 
-The `s` box has an `update` group:
+The Updates page of the `s` box has these rows:
 
 | Row | What it shows or does |
 |---|---|
@@ -966,7 +1023,8 @@ The `s` box has an `update` group:
 | `auto`, `check_interval_h` | the settings of the automatic updates above |
 
 Only one check or install runs at a time; `Enter` while one runs says
-`already running`. `Left` and `Right` do nothing on these rows.
+`already running`. `Right` does nothing on these rows, and `Left` goes
+back to the category list.
 
 ## Questions and bugs
 

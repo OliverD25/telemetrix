@@ -3,6 +3,41 @@
 All notable changes to telemetrix. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 0.4.0 — 2026-09-28
+
+### Changed
+
+- **The settings box has pages.** `s` no longer opens one long list of
+  about 60 rows. Five categories are on the left and the chosen one's
+  settings on the right: Appearance (theme, fps, the current theme's
+  options and cards, units, the keys of one theme), Cards (thresholds,
+  disks and network drives, GPU, history length), Plugins, Updates and
+  System (screensaver mode, log, plugin folder, memory budgets, plugin
+  limits, metrics intervals). Nothing is hidden; the technical settings
+  just have their own page. The box always opens at Appearance.
+- **One page per plugin.** The Plugins page lists every plugin file with
+  `on`, `off` or `error`, under the switch for all plugins. `Right` or
+  `Enter` opens a plugin's page with `enabled`, `interval` and its own
+  settings, including the weather city search and text inputs, which
+  work as before.
+- **Keys in the box:** `Up`/`Down` choose, `Right` or `Enter` opens a page
+  or a plugin, `Esc` or `Backspace` goes back one level, `Esc` on the
+  category list closes the box. `Left` still picks the previous value;
+  on a row that has no value to step (a plugin in the list, an action,
+  a text setting, a path) it goes back one level instead.
+- On a terminal narrower than 60 columns or shorter than 11 rows, the
+  categories become one line of letters (`A C P U S`) above the page;
+  a page longer than the box scrolls.
+
+### Added
+
+- **`/` in the settings box searches every setting** on every page and
+  every plugin's page, by name or file key, in any letter case. The
+  results show where each one is, like `Plugins › weather › city`;
+  `Enter` opens that page with the setting chosen, `Esc` goes back. While
+  the search line is open every key is typed into it; only `Ctrl+C`
+  quits.
+
 ## 0.3.2 — 2026-09-28
 
 ### Added
