@@ -1423,7 +1423,11 @@ mod hosts {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/hosts")
             .join(name);
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+        // A Windows checkout may turn the fixture's line ends into \r\n; tests
+        // edit the text by exact lines, so compare with \n only.
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+            .replace("\r\n", "\n")
     }
 
     /// What each command name answers: stdout and exit code, or an error.

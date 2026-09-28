@@ -1,0 +1,2 @@
+# Test fixtures are compared byte by byte; keep Unix line ends on every checkout.
+tests/fixtures/** text eol=lf
