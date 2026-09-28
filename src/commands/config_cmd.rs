@@ -61,11 +61,24 @@ fn read(path: &Path) -> Option<Result<config::Parsed, Problem>> {
 
 fn check(path: &Path, json: bool) -> ExitCode {
     let parsed = read(path);
-    let problems: Vec<Problem> = match &parsed {
+    let mut problems: Vec<Problem> = match &parsed {
         None => Vec::new(),
         Some(Ok(p)) => p.problems.clone(),
         Some(Err(p)) => vec![p.clone()],
     };
+    if let Some(Ok(p)) = &parsed {
+        let dir = crate::plugins::manager::plugins_dir(&p.config, path);
+        let known = crate::plugins::manager::known_card_ids(&dir);
+        for (key, id) in config::unknown_cards(&p.config, &known) {
+            problems.push(Problem {
+                line: None,
+                message: format!(
+                    "{key}: no card {id:?} (not a system card or a plugin in {}), ignored",
+                    dir.display()
+                ),
+            });
+        }
+    }
     if json {
         let list: Vec<_> = problems
             .iter()
@@ -118,7 +131,7 @@ fn show(path: &Path, flags: &Flags) -> ExitCode {
     config::apply_flags(&mut cfg, flags);
     let flagged = config::flag_keys(flags);
     println!("# {} ({status})", path.display());
-    for s in SETTINGS {
+    for s in SETTINGS.iter() {
         let source = if flagged.contains(s.path) {
             "flag"
         } else if from_file.contains(s.path) {

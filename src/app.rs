@@ -396,6 +396,8 @@ pub struct AppState {
     pub memory_paused: bool,
     /// A newer version waits: the status bar offers `u` to restart into it.
     pub update: Option<crate::update::Pending>,
+    /// `hide`/`order` entries already reported as naming no card.
+    pub warned_cards: BTreeSet<(String, String)>,
     plugins_over_budget: BTreeSet<String>,
     /// While the theme picker is open: the theme that Esc goes back to.
     pub picker_original: usize,
@@ -444,6 +446,7 @@ impl AppState {
             over_budget: false,
             memory_paused: false,
             update: None,
+            warned_cards: BTreeSet::new(),
             plugins_over_budget: BTreeSet::new(),
             picker_original: theme_idx,
             network: None,

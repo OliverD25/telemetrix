@@ -9,6 +9,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use toml_edit::{DocumentMut, Item, Table};
 
@@ -27,6 +28,26 @@ pub const THEME_NAMES: &[&str] = &[
     "ascii-dashboard",
 ];
 pub const MATRIX_COLORS: &[&str] = &["green", "amber", "cyan", "white"];
+/// `cpu_view` and `ram_view` of a theme: the one-line gauge, the tall
+/// history chart, or both.
+pub const VIEWS: &[&str] = &["bar", "chart", "both"];
+pub const CHART_HEIGHTS: &[&str] = &["small", "medium", "tall"];
+/// Accent colour names a theme's `accent` accepts, besides `#rrggbb`.
+pub const ACCENT_NAMES: &[&str] = &[
+    "default", "red", "orange", "amber", "yellow", "green", "cyan", "blue", "purple", "magenta",
+    "pink", "white",
+];
+/// The cards that are not plugins, as `hide` and `order` name them.
+pub const SYSTEM_CARDS: [&str; 6] = ["cpu", "ram", "swap", "gpu", "disks", "network"];
+/// The keys every `[theme.<name>]` table has (matrix keeps `color` as its accent).
+pub const THEME_KEYS: [&str; 6] = [
+    "cpu_view",
+    "ram_view",
+    "chart_height",
+    "hide",
+    "order",
+    "accent",
+];
 const FILE_NAME: &str = "telemetrix.toml";
 const PLUGIN_MIN_INTERVAL: i64 = 5;
 /// The v0.2 default setup (Matrix + 7 plugins) peaked at 12.5-12.7 MB working set
@@ -37,6 +58,7 @@ pub const CORE_BUDGET_MB: u64 = 10;
 
 // Str has no registry key yet; plugin settings may use it later.
 #[allow(dead_code)]
+#[derive(Clone)]
 pub enum Kind {
     Enum(&'static [&'static str]),
     Int {
@@ -53,6 +75,10 @@ pub enum Kind {
     StrList,
     /// A name from [`MATRIX_COLORS`] or `#rrggbb`.
     Color,
+    /// A name from [`ACCENT_NAMES`] or `#rrggbb`.
+    Accent,
+    /// Card ids: [`SYSTEM_CARDS`] or plugin ids.
+    CardList,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -117,6 +143,8 @@ pub struct Setting {
     pub default: Value,
     pub tui_editable: bool,
     pub help: &'static str,
+    /// One of the generated `[theme.<name>]` options (see [`THEME_KEYS`]).
+    pub theme_option: bool,
 }
 
 const fn setting(
@@ -132,6 +160,7 @@ const fn setting(
         default,
         tui_editable,
         help,
+        theme_option: false,
     }
 }
 
@@ -143,7 +172,182 @@ const fn text(s: &'static str) -> Value {
     Value::Str(Cow::Borrowed(s))
 }
 
-pub static SETTINGS: &[Setting] = &[
+/// Every setting: the fixed ones, then the options of every theme.
+pub static SETTINGS: LazyLock<Vec<Setting>> = LazyLock::new(|| {
+    let mut all: Vec<Setting> = BASE_SETTINGS
+        .iter()
+        .map(|s| Setting {
+            path: s.path,
+            kind: s.kind.clone(),
+            default: s.default.clone(),
+            tui_editable: s.tui_editable,
+            help: s.help,
+            theme_option: false,
+        })
+        .collect();
+    for theme in THEME_NAMES {
+        for key in THEME_KEYS {
+            if theme == &"matrix" && key == "accent" {
+                continue;
+            }
+            // Leaked once: the registry lives as long as the program.
+            let path: &'static str = Box::leak(format!("theme.{theme}.{key}").into_boxed_str());
+            let (kind, default, help) = theme_option(theme, key);
+            all.push(Setting {
+                path,
+                kind,
+                default,
+                tui_editable: true,
+                help,
+                theme_option: true,
+            });
+        }
+    }
+    all
+});
+
+/// The kind, default and help of one generated theme option. Every
+/// default keeps the theme's look from before the options existed.
+fn theme_option(theme: &str, key: &str) -> (Kind, Value, &'static str) {
+    let view = if theme == "ascii-dashboard" {
+        "chart"
+    } else {
+        "bar"
+    };
+    match key {
+        "cpu_view" => (Kind::Enum(VIEWS), text(view), "bar | chart | both"),
+        "ram_view" => (Kind::Enum(VIEWS), text(view), "bar | chart | both"),
+        "chart_height" => (
+            Kind::Enum(CHART_HEIGHTS),
+            text("medium"),
+            "small | medium | tall: the most rows a chart takes",
+        ),
+        "hide" => (
+            Kind::CardList,
+            Value::List(Vec::new()),
+            "cards not shown: cpu, ram, swap, gpu, disks, network or a plugin id",
+        ),
+        "order" => (
+            Kind::CardList,
+            Value::List(Vec::new()),
+            "cards shown first, in this order; empty = system cards left, plugins right",
+        ),
+        _ => (
+            Kind::Accent,
+            text("default"),
+            "the theme's main colour: default, a colour name or #rrggbb",
+        ),
+    }
+}
+
+/// The key that holds a theme's accent: matrix had `color` first.
+pub fn accent_key(theme: &str) -> String {
+    if theme == "matrix" {
+        "theme.matrix.color".into()
+    } else {
+        format!("theme.{theme}.accent")
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    Bar,
+    Chart,
+    Both,
+}
+
+impl View {
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "chart" => Self::Chart,
+            "both" => Self::Both,
+            _ => Self::Bar,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Bar => "bar",
+            Self::Chart => "chart",
+            Self::Both => "both",
+        }
+    }
+
+    pub fn chart(self) -> bool {
+        self != Self::Bar
+    }
+
+    pub fn bar(self) -> bool {
+        self != Self::Chart
+    }
+}
+
+/// The options of one theme, from its `[theme.<name>]` table.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ThemeOptions {
+    pub cpu_view: View,
+    pub ram_view: View,
+    /// `small`, `medium` or `tall`.
+    pub chart_height: String,
+    pub hide: Vec<String>,
+    pub order: Vec<String>,
+    /// `default`, a name from [`ACCENT_NAMES`] or `#rrggbb`.
+    pub accent: String,
+}
+
+impl Default for ThemeOptions {
+    fn default() -> Self {
+        Self {
+            cpu_view: View::Bar,
+            ram_view: View::Bar,
+            chart_height: "medium".into(),
+            hide: Vec::new(),
+            order: Vec::new(),
+            accent: "default".into(),
+        }
+    }
+}
+
+impl ThemeOptions {
+    pub fn hidden(&self, id: &str) -> bool {
+        self.hide.iter().any(|h| h == id)
+    }
+
+    /// The most rows a history chart may take.
+    pub fn chart_cap(&self) -> usize {
+        match self.chart_height.as_str() {
+            "small" => 4,
+            "tall" => 20,
+            _ => 10,
+        }
+    }
+}
+
+/// A card id is lower-case letters, digits, `_` and `-`, like a plugin file name.
+pub fn is_card_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
+/// `(key, id)` for every `hide`/`order` entry that names no card in `known`.
+pub fn unknown_cards(cfg: &Config, known: &BTreeSet<String>) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (theme, opts) in THEME_NAMES.iter().zip(&cfg.theme_opts) {
+        for (key, list) in [("hide", &opts.hide), ("order", &opts.order)] {
+            for id in list {
+                if !SYSTEM_CARDS.contains(&id.as_str()) && !known.contains(id) {
+                    out.push((format!("theme.{theme}.{key}"), id.clone()));
+                }
+            }
+        }
+    }
+    out
+}
+
+static BASE_SETTINGS: &[Setting] = &[
     setting(
         "schema",
         int(1, 1),
@@ -627,6 +831,8 @@ pub struct Config {
     pub update: Update,
     pub theme_matrix: ThemeMatrix,
     pub theme_minimalist: ThemeMinimalist,
+    /// `[theme.<name>]` options, in the order of [`THEME_NAMES`].
+    pub theme_opts: Vec<ThemeOptions>,
     pub plugin_cfg: BTreeMap<String, PluginConfig>,
     /// `[commands]`: the programs plugins may run, by name, as argv lists.
     /// Only the user's file fills it; the built-in defaults have none.
@@ -697,10 +903,11 @@ impl Default for Config {
             theme_minimalist: ThemeMinimalist {
                 show_sparklines: false,
             },
+            theme_opts: vec![ThemeOptions::default(); THEME_NAMES.len()],
             plugin_cfg: BTreeMap::new(),
             commands: BTreeMap::new(),
         };
-        for s in SETTINGS {
+        for s in SETTINGS.iter() {
             cfg.assign(s.path, &s.default);
         }
         let doc =
@@ -716,8 +923,59 @@ fn clamp_u64(v: &Value) -> u64 {
 }
 
 impl Config {
+    /// The options of a theme; the defaults for an unknown name.
+    pub fn theme(&self, name: &str) -> &ThemeOptions {
+        static FALLBACK: LazyLock<ThemeOptions> = LazyLock::new(ThemeOptions::default);
+        THEME_NAMES
+            .iter()
+            .position(|t| *t == name)
+            .and_then(|i| self.theme_opts.get(i))
+            .unwrap_or(&FALLBACK)
+    }
+
+    /// `theme.<name>.<key>` of a generated option: the theme's index and the key.
+    fn theme_slot(path: &str) -> Option<(usize, &str)> {
+        let rest = path.strip_prefix("theme.")?;
+        let (name, key) = rest.rsplit_once('.')?;
+        let i = THEME_NAMES.iter().position(|t| *t == name)?;
+        THEME_KEYS.contains(&key).then_some((i, key))
+    }
+
+    fn get_theme_option(&self, i: usize, key: &str) -> Value {
+        let o = &self.theme_opts[i];
+        match key {
+            "cpu_view" => text(o.cpu_view.name()),
+            "ram_view" => text(o.ram_view.name()),
+            "chart_height" => Value::Str(o.chart_height.clone().into()),
+            "hide" => Value::List(o.hide.clone()),
+            "order" => Value::List(o.order.clone()),
+            _ => Value::Str(o.accent.clone().into()),
+        }
+    }
+
+    fn assign_theme_option(&mut self, i: usize, key: &str, v: &Value) {
+        let o = &mut self.theme_opts[i];
+        let list = |v: &Value| match v {
+            Value::List(items) => items.clone(),
+            _ => Vec::new(),
+        };
+        match key {
+            "cpu_view" => o.cpu_view = View::parse(v.as_str()),
+            "ram_view" => o.ram_view = View::parse(v.as_str()),
+            "chart_height" => o.chart_height = v.as_str().to_string(),
+            "hide" => o.hide = list(v),
+            "order" => o.order = list(v),
+            _ => o.accent = v.as_str().to_string(),
+        }
+    }
+
     /// Current value of one registry key.
     pub fn get(&self, path: &str) -> Option<Value> {
+        if let Some((i, key)) = Self::theme_slot(path)
+            && path != "theme.matrix.accent"
+        {
+            return Some(self.get_theme_option(i, key));
+        }
         let g = &self.general;
         let m = &self.metrics;
         let p = &self.plugins;
@@ -785,6 +1043,12 @@ impl Config {
 
     /// Stores an already validated value for one registry key.
     pub fn assign(&mut self, path: &str, v: &Value) {
+        if let Some((i, key)) = Self::theme_slot(path)
+            && path != "theme.matrix.accent"
+        {
+            self.assign_theme_option(i, key, v);
+            return;
+        }
         let g = &mut self.general;
         let m = &mut self.metrics;
         let p = &mut self.plugins;
@@ -950,10 +1214,37 @@ pub fn parse_text(text: &str) -> Result<Parsed, Problem> {
     let mut config = Config::default();
     let mut problems = Vec::new();
     let mut from_file = BTreeSet::new();
-    for s in SETTINGS {
+    for s in SETTINGS.iter() {
         let Some(item) = lookup(doc.as_table(), s.path) else {
             continue;
         };
+        if matches!(s.kind, Kind::CardList)
+            && let Some(ids) = item.as_value().and_then(|v| v.as_array())
+        {
+            // One bad id does not throw away the good ones.
+            let mut good = Vec::new();
+            let mut bad = Vec::new();
+            for v in ids.iter() {
+                match v.as_str() {
+                    Some(id) if is_card_id(id) => good.push(id.to_string()),
+                    _ => bad.push(bare(v)),
+                }
+            }
+            if !bad.is_empty() {
+                problems.push(Problem {
+                    line: line_of(text, item.span()),
+                    message: format!(
+                        "{}: {} {} not a card id, ignored",
+                        s.path,
+                        bad.join(", "),
+                        if bad.len() == 1 { "is" } else { "are" }
+                    ),
+                });
+            }
+            config.assign(s.path, &Value::List(good));
+            from_file.insert(s.path);
+            continue;
+        }
         match validate(s, item) {
             Ok(v) => {
                 config.assign(s.path, &v);
@@ -1054,12 +1345,31 @@ fn validate(s: &Setting, item: &Item) -> Result<Value, String> {
                 ))
             }
         }
+        Kind::Accent => {
+            let text = v.as_str().ok_or("is not a text value")?;
+            if ACCENT_NAMES.contains(&text) || is_hex_color(text) {
+                Ok(Value::Str(text.to_string().into()))
+            } else {
+                Err(format!(
+                    "is not one of {} or #rrggbb",
+                    ACCENT_NAMES.join(", ")
+                ))
+            }
+        }
+        Kind::CardList => v
+            .as_array()
+            .and_then(|a| a.iter().map(|x| x.as_str().map(str::to_string)).collect())
+            .map(Value::List)
+            .ok_or_else(|| "is not a list of card ids".into()),
     }
 }
 
+pub fn is_hex_color(s: &str) -> bool {
+    s.len() == 7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
 pub fn is_color(s: &str) -> bool {
-    MATRIX_COLORS.contains(&s)
-        || (s.len() == 7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit()))
+    MATRIX_COLORS.contains(&s) || is_hex_color(s)
 }
 
 fn find_unknown(table: &Table, prefix: &str, text: &str, problems: &mut Vec<Problem>) {
@@ -1257,7 +1567,10 @@ pub fn reference_markdown() -> String {
     let mut out = String::from(
         "| Key | Default | Allowed values | In the `s` overlay | Meaning |\n|---|---|---|---|---|\n",
     );
-    for s in SETTINGS {
+    for s in SETTINGS.iter() {
+        if s.theme_option {
+            continue;
+        }
         let allowed = match &s.kind {
             Kind::Enum(options) => options.join(r" \| "),
             Kind::Int { min, max } => format!("{min}..{max}"),
@@ -1267,6 +1580,8 @@ pub fn reference_markdown() -> String {
             Kind::Path => "a file or folder path".into(),
             Kind::StrList => "list of texts".into(),
             Kind::Color => format!(r"{} \| #rrggbb", MATRIX_COLORS.join(r" \| ")),
+            Kind::Accent => format!(r"{} \| #rrggbb", ACCENT_NAMES.join(r" \| ")),
+            Kind::CardList => "list of card ids".into(),
         };
         let overlay = if s.tui_editable {
             "yes"
@@ -1286,7 +1601,7 @@ pub fn reference_markdown() -> String {
 pub fn render_default_file() -> String {
     let mut out = String::from(HEADER);
     let mut section = "";
-    for s in SETTINGS {
+    for s in SETTINGS.iter().filter(|s| !s.theme_option) {
         let (table, key) = split_path(s.path);
         if table != section {
             out.push_str(&format!("\n[{table}]\n"));
@@ -1496,6 +1811,60 @@ mod tests {
             readme.contains(&reference_markdown()),
             "README.md is out of date: paste the output of `telemetrix config reference`"
         );
+    }
+
+    #[test]
+    fn theme_options_parse_per_theme_and_leniently() {
+        let text = "[theme.synthwave]\ncpu_view = \"chart\"\nram_view = \"both\"\n\
+                    chart_height = \"huge\"\naccent = \"nope\"\n\
+                    hide = [\"swap\", \"BAD ID!\", \"clock\", 3]\norder = [\"crypto\"]\n\
+                    [theme.matrix]\naccent = \"red\"\n";
+        let parsed = parse_text(text).unwrap();
+        let c = &parsed.config;
+        let o = c.theme("synthwave");
+        assert_eq!((o.cpu_view, o.ram_view), (View::Chart, View::Both));
+        assert_eq!(o.chart_height, "medium", "a wrong value falls back");
+        assert_eq!(o.accent, "default");
+        assert_eq!(o.hide, ["swap", "clock"], "the good ids stay");
+        assert_eq!(o.order, ["crypto"]);
+        assert_eq!(
+            c.theme("minimalist"),
+            &ThemeOptions::default(),
+            "never shared"
+        );
+        assert_eq!(c.theme("ascii-dashboard").cpu_view, View::Chart);
+        let messages: Vec<&str> = parsed.problems.iter().map(|p| p.message.as_str()).collect();
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.starts_with("theme.synthwave.chart_height")),
+            "{messages:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.starts_with("theme.synthwave.accent"))
+        );
+        assert!(
+            messages.contains(&"theme.synthwave.hide: \"BAD ID!\", 3 are not a card id, ignored"),
+            "{messages:?}"
+        );
+        assert!(
+            messages.contains(&"unknown key theme.matrix.accent ignored"),
+            "matrix uses color: {messages:?}"
+        );
+        assert_eq!(parsed.problems.len(), 4, "{messages:?}");
+        assert!(c.get("theme.matrix.accent").is_none());
+        let known: BTreeSet<String> = ["crypto".to_string()].into();
+        assert_eq!(
+            unknown_cards(c, &known),
+            [("theme.synthwave.hide".to_string(), "clock".to_string())]
+        );
+        let accent = Value::Str("#12abef".into());
+        let mut c = Config::default();
+        c.assign("theme.nasa.accent", &accent);
+        assert_eq!(c.get("theme.nasa.accent"), Some(accent));
+        assert_eq!(c.theme("nasa").chart_cap(), 10);
     }
 
     #[test]
@@ -1765,7 +2134,7 @@ mod tests {
     #[test]
     fn get_and_assign_cover_every_setting() {
         let cfg = Config::default();
-        for s in SETTINGS {
+        for s in SETTINGS.iter() {
             assert_eq!(cfg.get(s.path).as_ref(), Some(&s.default), "{}", s.path);
         }
     }

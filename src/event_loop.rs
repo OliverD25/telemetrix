@@ -329,13 +329,13 @@ impl Loop {
                 s.dirty = true;
             }
             Action::SettingsDown => {
-                let rows = settings_overlay::rows(&s.plugin_ids, &s.plugin_schemas);
+                let rows = settings_overlay::rows_for(s);
                 let last = settings_overlay::selectable(&rows).len().saturating_sub(1);
                 s.settings_cursor = (s.settings_cursor + 1).min(last);
                 s.dirty = true;
             }
             Action::SettingsStep { dir, big } => {
-                let rows = settings_overlay::rows(&s.plugin_ids, &s.plugin_schemas);
+                let rows = settings_overlay::rows_for(s);
                 let sel = settings_overlay::selectable(&rows);
                 let row = &rows[sel[s.settings_cursor.min(sel.len() - 1)]];
                 if let Some((id, entry)) = settings_overlay::search_row(row) {
@@ -490,6 +490,19 @@ impl Loop {
         self.state.plugins_dir = self.plugins.dir().to_path_buf();
         self.state.plugins_running = report.running;
         self.state.dirty = true;
+        self.check_card_ids();
+    }
+
+    /// One log warning for each `hide`/`order` entry that names no card.
+    fn check_card_ids(&mut self) {
+        let mut known = manager::known_card_ids(self.plugins.dir());
+        known.extend(self.state.plugins.keys().cloned());
+        for (key, id) in config::unknown_cards(&self.state.config, &known) {
+            if self.state.warned_cards.insert((key.clone(), id.clone())) {
+                self.state
+                    .log(&format!("warning: {key}: no card {id:?}, ignored"));
+            }
+        }
     }
 
     fn rescan_plugins(&mut self, announce: bool) {
@@ -676,6 +689,7 @@ fn looks_different(old: &Config, new: &Config) -> bool {
         || old.thresholds != new.thresholds
         || old.theme_matrix != new.theme_matrix
         || old.theme_minimalist != new.theme_minimalist
+        || old.theme_opts != new.theme_opts
         || old.disks != new.disks
 }
 
@@ -857,7 +871,7 @@ mod tests {
             .insert("weather".into(), weather_schema());
         lp.state.overlay = Overlay::Settings;
         lp.state.plugin_ids = vec!["weather".into()];
-        let rows = settings_overlay::rows(&lp.state.plugin_ids, &lp.state.plugin_schemas);
+        let rows = settings_overlay::rows_for(&lp.state);
         let sel = settings_overlay::selectable(&rows);
         lp.state.settings_cursor = sel
             .iter()

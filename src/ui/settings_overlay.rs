@@ -11,7 +11,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::{AppState, SEARCH_MIN_CHARS, SearchBox, TextInput};
-use crate::config::{self, Config, Kind, MATRIX_COLORS, PluginConfig, SETTINGS, Setting, Value};
+use crate::config::{
+    self, ACCENT_NAMES, Config, Kind, MATRIX_COLORS, PluginConfig, SETTINGS, Setting, Value,
+};
 use crate::plugins::schema::{self, SchemaEntry, SchemaKind, TEXT_MAX};
 use crate::themes::common::{ACCENT, MUTED, WARN, fg};
 
@@ -28,6 +30,52 @@ pub enum Row {
         id: String,
         entry: SchemaEntry,
     },
+    /// A card of a theme: on, or listed in the theme's `hide`.
+    ThemeCard {
+        theme: String,
+        id: String,
+    },
+}
+
+/// Every card id a theme can show: the system cards, then `plugins`.
+pub fn card_ids(plugins: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut ids: Vec<String> = config::SYSTEM_CARDS.iter().map(|s| s.to_string()).collect();
+    for id in plugins {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+/// The options of `theme` that a settings box shows: views, chart height
+/// and accent, then one on/off row per card.
+pub fn theme_rows(theme: &str, cards: &[String]) -> Vec<Row> {
+    let mut rows = vec![Row::Section(format!("theme: {theme}"))];
+    let keys = ["cpu_view", "ram_view", "chart_height"]
+        .iter()
+        .map(|k| format!("theme.{theme}.{k}"))
+        .chain(std::iter::once(config::accent_key(theme)));
+    for key in keys {
+        if let Some(s) = config::find(&key) {
+            rows.push(Row::Setting(s));
+        }
+    }
+    for id in cards {
+        rows.push(Row::ThemeCard {
+            theme: theme.to_string(),
+            id: id.clone(),
+        });
+    }
+    rows
+}
+
+/// The rows of the `s` box: the current theme's options first.
+pub fn rows_for(state: &AppState) -> Vec<Row> {
+    let cards = card_ids(state.plugin_ids.iter().cloned());
+    let mut all = theme_rows(state.theme_name(), &cards);
+    all.extend(rows(&state.plugin_ids, &state.plugin_schemas));
+    all
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -48,7 +96,10 @@ impl Change {
 pub fn rows(plugin_ids: &[String], schemas: &BTreeMap<String, Vec<SchemaEntry>>) -> Vec<Row> {
     let mut rows = Vec::new();
     let mut section = "";
-    for s in SETTINGS.iter().filter(|s| s.path != "schema") {
+    for s in SETTINGS
+        .iter()
+        .filter(|s| s.path != "schema" && !s.theme_option)
+    {
         let (table, _) = s.path.rsplit_once('.').unwrap_or(("", s.path));
         if table != section {
             rows.push(Row::Section(table.to_string()));
@@ -117,6 +168,7 @@ fn key_label(row: &Row) -> &str {
         Row::PluginEnabled(_) => "enabled",
         Row::PluginInterval(_) => "interval",
         Row::PluginSetting { entry, .. } => &entry.label,
+        Row::ThemeCard { id, .. } => id,
     }
 }
 
@@ -145,7 +197,31 @@ pub fn value_text(row: &Row, cfg: &Config) -> String {
             Value::Str(text) => text.into_owned(),
             v => v.to_string(),
         },
+        Row::ThemeCard { theme, id } => on_off(!cfg.theme(theme).hidden(id)),
     }
+}
+
+/// A theme option this theme draws nothing for, like the CPU view of kernel-log.
+pub fn unused(row: &Row) -> bool {
+    match row {
+        Row::Setting(s) if s.theme_option => {
+            let rest = s.path.strip_prefix("theme.").unwrap_or(s.path);
+            let (theme, key) = rest.rsplit_once('.').unwrap_or(("", rest));
+            !crate::themes::uses_option(theme, key)
+        }
+        _ => false,
+    }
+}
+
+/// The `hide` list after switching one card on or off.
+pub fn toggle_card(cfg: &Config, theme: &str, id: &str) -> Change {
+    let mut hide = cfg.theme(theme).hide.clone();
+    if let Some(i) = hide.iter().position(|h| h == id) {
+        hide.remove(i);
+    } else {
+        hide.push(id.to_string());
+    }
+    Change::Set(format!("theme.{theme}.hide"), Value::List(hide))
 }
 
 fn on_off(b: bool) -> String {
@@ -156,9 +232,16 @@ pub fn editable(row: &Row) -> bool {
     match row {
         Row::Section(_) => false,
         Row::Setting(s) => {
-            s.tui_editable && !matches!(s.kind, Kind::Path | Kind::Str | Kind::StrList)
+            s.tui_editable
+                && !matches!(
+                    s.kind,
+                    Kind::Path | Kind::Str | Kind::StrList | Kind::CardList
+                )
         }
-        Row::PluginEnabled(_) | Row::PluginInterval(_) | Row::PluginSetting { .. } => true,
+        Row::PluginEnabled(_)
+        | Row::PluginInterval(_)
+        | Row::PluginSetting { .. }
+        | Row::ThemeCard { .. } => true,
     }
 }
 
@@ -246,7 +329,12 @@ pub fn step(row: &Row, cfg: &Config, dir: i32, big: bool) -> Option<Change> {
                     let next = i.map_or(0, |i| cycle(i, MATRIX_COLORS.len(), dir));
                     Value::Str(MATRIX_COLORS[next].into())
                 }
-                Kind::Str | Kind::Path | Kind::StrList => return None,
+                Kind::Accent => {
+                    let i = ACCENT_NAMES.iter().position(|c| *c == current.as_str());
+                    let next = i.map_or(0, |i| cycle(i, ACCENT_NAMES.len(), dir));
+                    Value::Str(ACCENT_NAMES[next].into())
+                }
+                Kind::Str | Kind::Path | Kind::StrList | Kind::CardList => return None,
             };
             Some(Change::Set(s.path.to_string(), value))
         }
@@ -295,6 +383,7 @@ pub fn step(row: &Row, cfg: &Config, dir: i32, big: bool) -> Option<Change> {
             };
             Some(Change::Set(format!("plugin.{id}.{}", entry.key), value))
         }
+        Row::ThemeCard { theme, id } => Some(toggle_card(cfg, theme, id)),
     }
 }
 
@@ -368,7 +457,7 @@ pub fn save(path: &std::path::Path, change: &Change) -> std::io::Result<()> {
 }
 
 pub fn draw(frame: &mut Frame, area: Rect, state: &AppState) {
-    let rows = rows(&state.plugin_ids, &state.plugin_schemas);
+    let rows = rows_for(state);
     let sel = selectable(&rows);
     let current = sel[state.settings_cursor.min(sel.len() - 1)];
     let height = u16::try_from(rows.len() + 5).unwrap_or(u16::MAX);
@@ -527,6 +616,15 @@ fn row_line(
         );
     }
     let value = value_text(row, cfg);
+    if unused(row) {
+        let text = format!("  {key:<KEY_WIDTH$}  {value:<8}(not used by this theme)");
+        let style = if selected {
+            highlight.fg(MUTED)
+        } else {
+            fg(MUTED)
+        };
+        return Line::styled(format!("{text:<width$}"), style);
+    }
     if !editable(row) {
         let text = format!("  {key:<KEY_WIDTH$}  {value:<12}edit in file");
         let style = if selected {
@@ -598,6 +696,67 @@ mod tests {
             .find(|r| matches!(r, Row::PluginEnabled(_)))
             .unwrap();
         assert_eq!(value_text(enabled, &cfg), "on");
+    }
+
+    #[test]
+    fn the_current_theme_comes_first_with_its_cards() {
+        let mut state = crate::ui::demo::state("synthwave");
+        state.plugin_ids = vec!["clock".into(), "weather".into()];
+        let rows = rows_for(&state);
+        let labels: Vec<&str> = rows.iter().take(12).map(key_label).collect();
+        assert_eq!(
+            labels,
+            [
+                "theme: synthwave",
+                "cpu_view",
+                "ram_view",
+                "chart_height",
+                "accent",
+                "cpu",
+                "ram",
+                "swap",
+                "gpu",
+                "disks",
+                "network",
+                "clock"
+            ]
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|r| matches!(r, Row::Section(s) if s == "theme.synthwave")),
+            "no second listing of the generated keys"
+        );
+        let cfg = &state.config;
+        assert_eq!(value_text(&rows[1], cfg), "bar");
+        let swap = &rows[7];
+        assert_eq!(value_text(swap, cfg), "on");
+        assert_eq!(
+            step(swap, cfg, 1, false),
+            Some(Change::Set(
+                "theme.synthwave.hide".into(),
+                Value::List(vec!["swap".into()])
+            ))
+        );
+        assert_eq!(
+            step(&rows[1], cfg, 1, false),
+            Some(Change::Set(
+                "theme.synthwave.cpu_view".into(),
+                Value::Str("chart".into())
+            ))
+        );
+        assert_eq!(
+            step(&rows[4], cfg, 1, false),
+            Some(Change::Set(
+                "theme.synthwave.accent".into(),
+                Value::Str("red".into())
+            ))
+        );
+        assert!(!unused(&rows[1]));
+        let klog = rows_for(&crate::ui::demo::state("kernel-log"));
+        assert!(unused(&klog[1]) && unused(&klog[3]) && !unused(&klog[4]));
+        let matrix = rows_for(&crate::ui::demo::state("matrix"));
+        assert!(matches!(&matrix[4], Row::Setting(s) if s.path == "theme.matrix.color"));
     }
 
     #[test]

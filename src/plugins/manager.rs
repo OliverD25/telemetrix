@@ -14,6 +14,18 @@ pub fn plugins_dir(cfg: &Config, settings_path: &Path) -> PathBuf {
     bundled::plugins_dir(&cfg.general.plugins_dir, settings_path)
 }
 
+/// Every plugin id a theme's `hide` and `order` may name: the built-in
+/// plugins and the plugin files in `dir`.
+pub fn known_card_ids(dir: &Path) -> std::collections::BTreeSet<String> {
+    let mut ids: std::collections::BTreeSet<String> = bundled::FILES
+        .iter()
+        .map(|(file, _)| file.trim_end_matches(".lua").to_string())
+        .collect();
+    ids.extend(discover(dir).iter().map(|(p, _)| super::runner::stem(p)));
+    ids.insert("plugins".into());
+    ids
+}
+
 /// Every `*.lua` file in `dir`, sorted, with its modification time.
 pub fn discover(dir: &Path) -> Vec<(PathBuf, Option<SystemTime>)> {
     let Ok(entries) = std::fs::read_dir(dir) else {

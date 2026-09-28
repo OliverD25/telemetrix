@@ -29,22 +29,29 @@ const FRAME: border::Set<'static> = border::Set {
     horizontal_bottom: "-",
 };
 
+#[cfg(test)]
 pub fn palette() -> Palette {
+    palette_for(GREEN)
+}
+
+/// Every colour is a brightness of `hue`: green, or the theme's accent.
+pub fn palette_for(hue: (u8, u8, u8)) -> Palette {
+    let (r, g, b) = hue;
     Palette {
-        bg: Some(scale(GREEN, 0.09)),
-        border: scale(GREEN, 0.6),
-        title: mix_white(GREEN, 0.35),
-        label: scale(GREEN, 0.62),
-        value: scale(GREEN, 0.95),
-        bar: scale(GREEN, 0.9),
-        bar_empty: scale(GREEN, 0.3),
-        spark: scale(GREEN, 0.8),
+        bg: Some(scale(hue, 0.09)),
+        border: scale(hue, 0.6),
+        title: mix_white(hue, 0.35),
+        label: scale(hue, 0.62),
+        value: scale(hue, 0.95),
+        bar: scale(hue, 0.9),
+        bar_empty: scale(hue, 0.3),
+        spark: scale(hue, 0.8),
         border_set: FRAME,
         brackets: ("[ ", " ]"),
         // One hue only, so a warning is the brightest shade, close to white.
-        warn: mix_white(GREEN, 0.75),
-        rise: Color::Rgb(GREEN.0, GREEN.1, GREEN.2),
-        muted: scale(GREEN, 0.42),
+        warn: mix_white(hue, 0.75),
+        rise: Color::Rgb(r, g, b),
+        muted: scale(hue, 0.42),
         gauge: Gauge {
             full: '▮',
             empty: '▯',
@@ -52,20 +59,21 @@ pub fn palette() -> Palette {
             eighths: false,
         },
         borders: Borders::ALL,
+        levels: [scale(hue, 0.6), scale(hue, 0.95), mix_white(hue, 0.75)],
     }
 }
 
 /// `[STAT] [INV] [DATA] [MAP] [RADIO]` with STAT lit, as on the wrist unit.
-fn tabs() -> Line<'static> {
+fn tabs(hue: (u8, u8, u8)) -> Line<'static> {
     let mut spans = vec![Span::raw(" ")];
     for (i, tab) in TABS.iter().enumerate() {
         let style = if i == 0 {
             Style::new()
-                .bg(mix_white(GREEN, 0.2))
+                .bg(mix_white(hue, 0.2))
                 .fg(SCREEN)
                 .add_modifier(Modifier::BOLD)
         } else {
-            fg(scale(GREEN, 0.55))
+            fg(scale(hue, 0.55))
         };
         spans.push(Span::styled(format!("[{tab}]"), style));
         spans.push(Span::raw(" "));
@@ -91,8 +99,9 @@ impl Theme for PipBoy {
         let body = common::body_area(frame.area(), state);
         // The tabs sit in the empty margin row above the cards.
         let top = Rect { height: 1, ..body };
-        frame.render_widget(Paragraph::new(tabs()), top);
-        common::draw_columns(frame, body, state, &palette(), true);
+        let hue = common::accent(state).unwrap_or(GREEN);
+        frame.render_widget(Paragraph::new(tabs(hue)), top);
+        common::draw_columns(frame, body, state, &palette_for(hue), true);
     }
 }
 

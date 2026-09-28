@@ -21,6 +21,7 @@ impl Theme for Minimalist {
 
     fn draw(&mut self, frame: &mut Frame, state: &AppState) {
         let body = common::body_area(frame.area(), state);
-        common::draw_columns(frame, body, state, &common::minimalist_palette(), false);
+        let pal = common::accented(common::minimalist_palette(), state);
+        common::draw_columns(frame, body, state, &pal, false);
     }
 }

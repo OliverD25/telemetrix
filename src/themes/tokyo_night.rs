@@ -30,6 +30,11 @@ pub fn palette() -> Palette {
         muted: Color::Rgb(0x56, 0x5f, 0x89),
         gauge: common::BLOCK_GAUGE,
         borders: Borders::ALL,
+        levels: [
+            Color::Rgb(0x7a, 0xa2, 0xf7),
+            Color::Rgb(0xe0, 0xaf, 0x68),
+            Color::Rgb(0xf7, 0x76, 0x8e),
+        ],
     }
 }
 
@@ -48,6 +53,12 @@ impl Theme for TokyoNight {
     fn draw(&mut self, frame: &mut Frame, state: &AppState) {
         common::fill_screen(frame, SCREEN);
         let body = common::body_area(frame.area(), state);
-        common::draw_columns(frame, body, state, &palette(), true);
+        common::draw_columns(
+            frame,
+            body,
+            state,
+            &common::accented(palette(), state),
+            true,
+        );
     }
 }

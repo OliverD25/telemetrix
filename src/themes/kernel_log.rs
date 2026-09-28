@@ -11,7 +11,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use super::Theme;
 use super::common::{self, Palette, fg, fit};
 use crate::app::AppState;
-use crate::config::{Config, TempUnit};
+use crate::config::{Config, TempUnit, ThemeOptions};
 use crate::format;
 use crate::metrics::{self, network};
 use crate::plugins::{MetricStyle, PluginStatus};
@@ -52,6 +52,7 @@ fn palette() -> Palette {
         muted: DIM,
         gauge: common::BLOCK_GAUGE,
         borders: Borders::TOP,
+        levels: [OK, WARN, FAIL],
     }
 }
 
@@ -196,12 +197,49 @@ fn status_row(name: &str, value: String, warn: bool, w: usize) -> Line<'static> 
     ])
 }
 
+/// Lines grouped by the card they stand for, so `hide` and `order` apply.
+#[derive(Default)]
+struct Sections(Vec<(String, Vec<Line<'static>>)>);
+
+impl Sections {
+    fn add(&mut self, id: &str, line: Line<'static>) {
+        match self.0.last_mut() {
+            Some((last, lines)) if last == id => lines.push(line),
+            _ => self.0.push((id.to_string(), vec![line])),
+        }
+    }
+
+    /// The lines of the shown cards, the ones in `order` first.
+    fn lines(mut self, opts: &ThemeOptions) -> Vec<Line<'static>> {
+        self.0.retain(|(id, _)| !opts.hidden(id));
+        self.0.sort_by_key(|(id, _)| {
+            opts.order
+                .iter()
+                .position(|o| o == id)
+                .unwrap_or(usize::MAX)
+        });
+        self.0.into_iter().flat_map(|(_, lines)| lines).collect()
+    }
+}
+
+/// The card a log source belongs to: `mem` is `ram`, `disk C:` is `disks`.
+fn card_of(key: &str) -> &str {
+    match key.split(' ').next().unwrap_or(key) {
+        "mem" => "ram",
+        "disk" => "disks",
+        "net" => "network",
+        "plugin" => key.split_once(' ').map_or(key, |(_, id)| id),
+        k if k.starts_with("gpu") => "gpu",
+        k => k,
+    }
+}
+
 /// The current value of everything, like `systemctl status` for the machine.
-fn status_lines(state: &AppState, pal: &Palette, w: usize) -> Vec<Line<'static>> {
+fn status_lines(state: &AppState, pal: &Palette, w: usize, accent: Color) -> Vec<Line<'static>> {
     let cfg = &state.config;
     let th = &cfg.thresholds;
     let temp = |c: f32| format::temperature(c, cfg.units.temperature);
-    let mut lines = Vec::new();
+    let mut out = Sections::default();
     if let Some(s) = &state.snapshot {
         let mut cpu = format!("load {:.0}%", s.cpu_usage);
         let mut hot = s.cpu_usage > th.cpu_warn_pct;
@@ -209,17 +247,17 @@ fn status_lines(state: &AppState, pal: &Palette, w: usize) -> Vec<Line<'static>>
             cpu += &format!("  temp {}", temp(t));
             hot |= t > th.temp_warn_c;
         }
-        lines.push(status_row("cpu", cpu, hot, w));
+        out.add("cpu", status_row("cpu", cpu, hot, w));
         for (name, used, total) in [
             ("ram", s.ram_used_bytes, s.ram_total_bytes),
             ("swap", s.swap_used_bytes, s.swap_total_bytes),
         ] {
             let pct = metrics::pct(used, total);
             let text = format!("{}  {pct:.0}%", common::used_of(used, total, state));
-            lines.push(status_row(name, text, pct > FULL_WARN_PCT, w));
+            out.add(name, status_row(name, text, pct > FULL_WARN_PCT, w));
         }
         for g in s.gpus.iter().filter(|_| cfg.gpu.enabled) {
-            lines.push(status_row("gpu", g.name.clone(), false, w));
+            out.add("gpu", status_row("gpu", g.name.clone(), false, w));
             let mut now = Vec::new();
             if let Some(pct) = g.usage_pct {
                 now.push(format!("load {pct:.0}%"));
@@ -232,11 +270,11 @@ fn status_lines(state: &AppState, pal: &Palette, w: usize) -> Vec<Line<'static>>
             }
             if !now.is_empty() {
                 let hot = g.temp_c.is_some_and(|t| t > th.temp_warn_c);
-                lines.push(status_row("", now.join("  "), hot, w));
+                out.add("gpu", status_row("", now.join("  "), hot, w));
             }
             if let (Some(used), Some(total)) = (g.mem_used_bytes, g.mem_total_bytes) {
                 let text = format!("vram {}", common::used_of(used, total, state));
-                lines.push(status_row("", text, false, w));
+                out.add("gpu", status_row("", text, false, w));
             }
         }
         for d in &s.disks {
@@ -249,14 +287,20 @@ fn status_lines(state: &AppState, pal: &Palette, w: usize) -> Vec<Line<'static>>
             let text = format!("{pct:.0}%  {used}  {label}");
             let name = network::normalize_mount(&d.mount);
             let warn = pct > th.disk_warn_pct;
-            lines.push(status_row(&name, text.trim_end().to_string(), warn, w));
+            out.add(
+                "disks",
+                status_row(&name, text.trim_end().to_string(), warn, w),
+            );
         }
     } else {
-        lines.push(status_row("cpu", "waiting for metrics".into(), false, w));
+        out.add(
+            "cpu",
+            status_row("cpu", "waiting for metrics".into(), false, w),
+        );
     }
     if cfg.disks.show_network {
         match &state.network {
-            None => lines.push(status_row("net", "checking…".into(), false, w)),
+            None => out.add("network", status_row("net", "checking…".into(), false, w)),
             Some(drives) => {
                 for r in network::rows(drives, cfg.disks.group_network, &cfg.disks.hide) {
                     let (text, warn) = if r.online {
@@ -267,24 +311,27 @@ fn status_lines(state: &AppState, pal: &Palette, w: usize) -> Vec<Line<'static>>
                     } else {
                         (format!("offline  {}", r.title), true)
                     };
-                    lines.push(status_row("net", text, warn, w));
+                    out.add("network", status_row("net", text, warn, w));
                 }
             }
         }
     }
     for card in common::plugin_cards(state, pal, w.saturating_sub(2)) {
-        let color = card.title_color.unwrap_or(BRIGHT);
-        lines.push(Line::styled(
-            fit(&format!(" ▸ {}", card.title), w),
-            fg(color).add_modifier(Modifier::BOLD),
-        ));
+        let color = card.title_color.unwrap_or(accent);
+        out.add(
+            &card.id,
+            Line::styled(
+                fit(&format!(" ▸ {}", card.title), w),
+                fg(color).add_modifier(Modifier::BOLD),
+            ),
+        );
         for line in card.lines {
             let mut spans = vec![Span::raw("  ")];
             spans.extend(line.spans);
-            lines.push(Line::from(spans));
+            out.add(&card.id, Line::from(spans));
         }
     }
-    lines
+    out.lines(common::options(state))
 }
 
 /// A `dmesg -w` view with a pinned status block: every change of a value
@@ -319,7 +366,11 @@ impl KernelLog {
         if self.log.is_empty() {
             self.push(ts, Level::Ok, "Started telemetrix live status log.".into());
         }
+        let opts = common::options(state);
         for (key, level, text) in entries(state) {
+            if opts.hidden(card_of(&key)) {
+                continue;
+            }
             if self.last.get(&key) != Some(&text) {
                 self.last.insert(key, text.clone());
                 self.push(ts, level, text);
@@ -360,13 +411,13 @@ impl KernelLog {
     }
 }
 
-fn titled(title: &'static str) -> Block<'static> {
+fn titled(title: &'static str, color: Color) -> Block<'static> {
     Block::new()
         .borders(Borders::TOP)
         .border_style(fg(RULE))
         .title(Span::styled(
             format!(" {title} "),
-            fg(BRIGHT).add_modifier(Modifier::BOLD),
+            fg(color).add_modifier(Modifier::BOLD),
         ))
 }
 
@@ -383,6 +434,7 @@ impl Theme for KernelLog {
         self.ingest(state);
         common::fill_screen(frame, SCREEN);
         let pal = palette();
+        let accent = common::accent(state).map_or(BRIGHT, |(r, g, b)| Color::Rgb(r, g, b));
         let body = common::body_area(frame.area(), state);
         let (log_area, status_area) = if body.width >= SIDE_BY_SIDE_W {
             let side = (body.width * 2 / 5).clamp(40, 60);
@@ -394,18 +446,18 @@ impl Theme for KernelLog {
             .areas(body);
             (log, status)
         } else {
-            let want = status_lines(state, &pal, usize::from(body.width)).len() + 1;
+            let want = status_lines(state, &pal, usize::from(body.width), accent).len() + 1;
             let cap = usize::from(body.height) * 3 / 5;
             let h = u16::try_from(want.min(cap)).unwrap_or(u16::MAX);
             let [status, log] =
                 Layout::vertical([Constraint::Length(h), Constraint::Fill(1)]).areas(body);
             (log, status)
         };
-        let status = titled("status");
+        let status = titled("status", accent);
         let inner = status.inner(status_area);
-        let lines = status_lines(state, &pal, usize::from(inner.width));
+        let lines = status_lines(state, &pal, usize::from(inner.width), accent);
         frame.render_widget(Paragraph::new(lines).block(status), status_area);
-        let log = titled("dmesg --follow");
+        let log = titled("dmesg --follow", accent);
         let inner = log.inner(log_area);
         let lines = self.log_lines(usize::from(inner.width), usize::from(inner.height));
         frame.render_widget(Paragraph::new(lines).block(log), log_area);

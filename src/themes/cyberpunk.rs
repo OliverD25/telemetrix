@@ -44,6 +44,7 @@ pub fn palette() -> Palette {
         muted: Color::Rgb(125, 95, 165),
         gauge: common::BLOCK_GAUGE,
         borders: Borders::ALL,
+        levels: [CYAN, YELLOW, Color::Rgb(255, 50, 80)],
     }
 }
 
@@ -63,6 +64,12 @@ impl Theme for Cyberpunk {
     fn draw(&mut self, frame: &mut Frame, state: &AppState) {
         common::fill_screen(frame, SCREEN);
         let body = common::body_area(frame.area(), state);
-        common::draw_columns(frame, body, state, &palette(), true);
+        common::draw_columns(
+            frame,
+            body,
+            state,
+            &common::accented(palette(), state),
+            true,
+        );
     }
 }

@@ -10,6 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
 
 use crate::app::AppState;
+use crate::config::{ThemeOptions, View};
 use crate::format;
 use crate::metrics::network;
 use crate::metrics::{self, SystemSnapshot};
@@ -45,6 +46,8 @@ pub struct Palette {
     pub gauge: Gauge,
     /// Which sides of a card get a frame line.
     pub borders: Borders,
+    /// History chart rows up to half, up to 80 % and above.
+    pub levels: [Color; 3],
 }
 
 /// How a percentage gauge is drawn.
@@ -82,6 +85,7 @@ pub fn minimalist_palette() -> Palette {
         muted: MUTED,
         gauge: BLOCK_GAUGE,
         borders: Borders::ALL,
+        levels: [Color::Rgb(150, 150, 150), Color::Rgb(215, 215, 215), WARN],
     }
 }
 
@@ -113,7 +117,61 @@ pub fn matrix_palette(c: (u8, u8, u8)) -> Palette {
         muted: MUTED,
         gauge: BLOCK_GAUGE,
         borders: Borders::ALL,
+        levels: [scale(c, 0.9), mix_white(c, 0.55), WARN],
     }
+}
+
+/// `red`, `#ff8800` and the other accent names as RGB; `None` for `default`
+/// and anything unknown.
+pub fn accent_rgb(name: &str) -> Option<(u8, u8, u8)> {
+    let named = match name {
+        "red" => (255, 85, 85),
+        "orange" => (255, 150, 50),
+        "amber" => (255, 176, 0),
+        "yellow" => (240, 220, 60),
+        "green" => (80, 220, 100),
+        "cyan" => (0, 215, 255),
+        "blue" => (90, 150, 255),
+        "purple" => (170, 110, 255),
+        "magenta" => (255, 70, 200),
+        "pink" => (255, 130, 180),
+        "white" => (230, 230, 230),
+        _ => {
+            let hex = |i: usize| {
+                name.get(i..i + 2)
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+            };
+            return match (
+                name.starts_with('#') && name.len() == 7,
+                hex(1),
+                hex(3),
+                hex(5),
+            ) {
+                (true, Some(r), Some(g), Some(b)) => Some((r, g, b)),
+                _ => None,
+            };
+        }
+    };
+    Some(named)
+}
+
+/// The options of the theme being drawn.
+pub fn options(state: &AppState) -> &ThemeOptions {
+    state.config.theme(state.theme_name())
+}
+
+/// The accent of the theme being drawn, when it is not `default`.
+pub fn accent(state: &AppState) -> Option<(u8, u8, u8)> {
+    accent_rgb(&options(state).accent)
+}
+
+/// A palette with the theme's accent as its title and gauge colour.
+pub fn accented(mut pal: Palette, state: &AppState) -> Palette {
+    if let Some((r, g, b)) = accent(state) {
+        pal.title = Color::Rgb(r, g, b);
+        pal.bar = Color::Rgb(r, g, b);
+    }
+    pal
 }
 
 /// Paints the whole screen in one background colour, under the cards.
@@ -142,6 +200,8 @@ pub fn body_area(area: Rect, state: &AppState) -> Rect {
 }
 
 pub struct Card {
+    /// What `hide` and `order` call it: `cpu`, `disks`, a plugin id.
+    pub id: String,
     pub title: String,
     pub title_color: Option<Color>,
     pub lines: Vec<Line<'static>>,
@@ -150,12 +210,20 @@ pub struct Card {
 impl Card {
     pub fn new(title: impl Into<String>, lines: Vec<Line<'static>>) -> Self {
         Self {
+            id: String::new(),
             title: title.into(),
             title_color: None,
             lines,
         }
     }
+
+    pub fn id(mut self, id: &str) -> Self {
+        self.id = id.to_string();
+        self
+    }
 }
+
+pub const MIN_CHART_ROWS: usize = 2;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Group {
@@ -206,10 +274,16 @@ pub fn text_width(col: Rect, pal: &Palette) -> usize {
     usize::from(col.width.saturating_sub(2 + sides))
 }
 
-/// The standard cards of one group.
-pub fn group_cards(group: Group, state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
+/// The standard cards of one group; `rows` is the height of history charts.
+pub fn group_cards(
+    group: Group,
+    state: &AppState,
+    pal: &Palette,
+    w: usize,
+    rows: usize,
+) -> Vec<Card> {
     match group {
-        Group::System => system_cards(state, pal, w),
+        Group::System => system_cards(state, pal, w, rows),
         Group::Gpu => gpu_cards(state, pal, w),
         Group::Disks => std::iter::once(disk_card(state, pal, w))
             .chain(network_card(state, pal, w))
@@ -219,24 +293,204 @@ pub fn group_cards(group: Group, state: &AppState, pal: &Palette, w: usize) -> V
 }
 
 pub fn draw_columns(frame: &mut Frame, body: Rect, state: &AppState, pal: &Palette, spaced: bool) {
-    draw_columns_with(frame, body, pal, spaced, |g, w| {
-        group_cards(g, state, pal, w)
-    });
+    draw_cards(
+        frame,
+        body,
+        state,
+        pal,
+        (spaced, u16::from(spaced)),
+        |g, w, rows| group_cards(g, state, pal, w, rows),
+        |_, _| {},
+    );
 }
 
-/// Like `draw_columns`, with the cards of each group made by `make`.
-pub fn draw_columns_with(
+/// The cards of every column, after the theme's `hide` and `order`.
+/// Without `order` each column holds its groups (system cards left,
+/// plugins right); with it the cards fill the columns one after another.
+pub fn place(
+    cols: &[(Rect, &'static [Group])],
+    opts: &ThemeOptions,
+    pal: &Palette,
+    gap: u16,
+    make: &mut dyn FnMut(Group, usize) -> Vec<Card>,
+) -> Vec<Vec<Card>> {
+    let mut visible = |g: Group, w: usize| -> Vec<Card> {
+        make(g, w)
+            .into_iter()
+            .filter(|c| !opts.hidden(&c.id))
+            .collect()
+    };
+    if opts.order.is_empty() {
+        return cols
+            .iter()
+            .map(|(rect, groups)| {
+                let w = text_width(*rect, pal);
+                groups.iter().flat_map(|g| visible(*g, w)).collect()
+            })
+            .collect();
+    }
+    // Cards may land in any column, so they get the narrowest width.
+    let w = cols
+        .iter()
+        .map(|(c, _)| text_width(*c, pal))
+        .min()
+        .unwrap_or(0);
+    let mut all: Vec<Card> = cols
+        .iter()
+        .flat_map(|(_, groups)| groups.iter().copied())
+        .flat_map(|g| visible(g, w))
+        .collect();
+    // Stable: unlisted cards keep their default order after the listed ones.
+    all.sort_by_key(|c| {
+        opts.order
+            .iter()
+            .position(|o| *o == c.id)
+            .unwrap_or(usize::MAX)
+    });
+    let mut out: Vec<Vec<Card>> = cols.iter().map(|_| Vec::new()).collect();
+    let (mut c, mut used) = (0, 0usize);
+    for card in all {
+        let h = card_height(&card, pal);
+        let need = if out[c].is_empty() {
+            h
+        } else {
+            h + usize::from(gap)
+        };
+        if c + 1 < cols.len() && !out[c].is_empty() && used + need > usize::from(cols[c].0.height) {
+            c += 1;
+            used = 0;
+            out[c].push(card);
+            used += h;
+            continue;
+        }
+        out[c].push(card);
+        used += need;
+    }
+    out
+}
+
+fn used_rows(cards: &[Card], pal: &Palette, gap: u16) -> usize {
+    let h: usize = cards.iter().map(|c| card_height(c, pal)).sum();
+    h + usize::from(gap) * cards.len().saturating_sub(1)
+}
+
+/// History chart rows: what the columns with charts have left, shared
+/// between their charts, at most the theme's `chart_height`.
+pub fn chart_rows(
+    cols: &[(Rect, &'static [Group])],
+    placed: &[Vec<Card>],
+    opts: &ThemeOptions,
+    pal: &Palette,
+    gap: u16,
+) -> usize {
+    let is_chart = |c: &Card| {
+        (c.id == "cpu" && opts.cpu_view.chart()) || (c.id == "ram" && opts.ram_view.chart())
+    };
+    let extra = cols
+        .iter()
+        .zip(placed)
+        .filter_map(|((rect, _), cards)| {
+            let charts = cards.iter().filter(|c| is_chart(c)).count();
+            (charts > 0).then(|| {
+                usize::from(rect.height).saturating_sub(used_rows(cards, pal, gap)) / charts
+            })
+        })
+        .min()
+        .unwrap_or(0);
+    (MIN_CHART_ROWS + extra).clamp(MIN_CHART_ROWS, opts.chart_cap().max(MIN_CHART_ROWS))
+}
+
+/// Places the cards `make` gives for each group, with the theme's options,
+/// and draws them. `spacing` is (margins around the columns, rows between
+/// cards). `decorate` may change the cards of one column (and gets its
+/// text width) before they are drawn.
+pub fn draw_cards(
     frame: &mut Frame,
     body: Rect,
+    state: &AppState,
     pal: &Palette,
-    spaced: bool,
-    mut make: impl FnMut(Group, usize) -> Vec<Card>,
+    (spaced, gap): (bool, u16),
+    mut make: impl FnMut(Group, usize, usize) -> Vec<Card>,
+    decorate: impl Fn(&mut Vec<Card>, usize),
 ) {
-    for (col, groups) in columns(body, spaced) {
-        let w = text_width(col, pal);
-        let cards = groups.iter().flat_map(|g| make(*g, w)).collect();
-        stack(frame, col, cards, pal, u16::from(spaced));
+    let opts = options(state);
+    let cols = columns(body, spaced);
+    let mut placed = place(&cols, opts, pal, gap, &mut |g, w| {
+        make(g, w, MIN_CHART_ROWS)
+    });
+    let rows = chart_rows(&cols, &placed, opts, pal, gap);
+    if rows != MIN_CHART_ROWS {
+        placed = place(&cols, opts, pal, gap, &mut |g, w| make(g, w, rows));
     }
+    for ((col, _), mut cards) in cols.into_iter().zip(placed) {
+        decorate(&mut cards, text_width(col, pal));
+        stack(frame, col, cards, pal, gap);
+    }
+}
+
+/// A multi-row bar chart, top row first: the last samples (0..100) that
+/// fit in `width`, right-aligned, each column as tall as its value in
+/// eighths of a row, with a 0..100 scale on the left.
+pub fn chart(
+    history: &VecDeque<f32>,
+    width: usize,
+    height: usize,
+    pal: &Palette,
+) -> Vec<Line<'static>> {
+    let bars = width.saturating_sub(AXIS_W);
+    let skip = history.len().saturating_sub(bars);
+    let values: Vec<f32> = history.iter().skip(skip).copied().collect();
+    let pad = bars - values.len();
+    (0..height)
+        .map(|row| {
+            let below = (height - 1 - row) as f32;
+            let mut glyphs = " ".repeat(pad);
+            for v in &values {
+                let fill = ((v / 100.0).clamp(0.0, 1.0) * height as f32 - below).clamp(0.0, 1.0);
+                let eighths = (fill * 8.0).round() as usize;
+                glyphs.push(if eighths == 0 {
+                    ' '
+                } else {
+                    CHART_BLOCKS[eighths - 1]
+                });
+            }
+            let axis = match row {
+                0 => "100┤",
+                r if r == height - 1 => "  0┤",
+                r if height >= 5 && r == height / 2 => " 50┤",
+                _ => "   │",
+            };
+            let top_pct = (height - row) as f32 / height as f32 * 100.0;
+            let level = if top_pct <= 50.0 {
+                pal.levels[0]
+            } else if top_pct <= 80.0 {
+                pal.levels[1]
+            } else {
+                pal.levels[2]
+            };
+            Line::from(vec![
+                Span::styled(axis, fg(pal.muted)),
+                Span::styled(glyphs, fg(level)),
+            ])
+        })
+        .collect()
+}
+
+/// Bottom-aligned blocks from one eighth to a full cell.
+const CHART_BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+/// `100┤`: the scale left of a chart.
+pub const AXIS_W: usize = 4;
+
+/// `avg 26%  peak 35%` over the samples a chart of this width shows.
+pub fn summary(history: &VecDeque<f32>, width: usize) -> String {
+    let bars = width.saturating_sub(AXIS_W).max(1);
+    let shown: Vec<f32> = history.iter().rev().take(bars).copied().collect();
+    if shown.is_empty() {
+        return String::new();
+    }
+    let avg = shown.iter().sum::<f32>() / shown.len() as f32;
+    let peak = shown.iter().copied().fold(0.0, f32::max);
+    format!("avg {avg:.0}%  peak {peak:.0}%")
 }
 
 /// The rows a card takes: its lines and its top and bottom frame lines.
@@ -366,45 +620,57 @@ pub fn used_of(used: u64, total: u64, state: &AppState) -> String {
     )
 }
 
-pub fn system_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
+/// CPU, RAM and swap. The theme's `cpu_view` and `ram_view` choose a bar,
+/// a history chart of `rows` rows, or both.
+pub fn system_cards(state: &AppState, pal: &Palette, w: usize, rows: usize) -> Vec<Card> {
     let Some(s) = &state.snapshot else {
         let wait = Line::styled("waiting for metrics", fg(pal.label));
-        return vec![Card::new("CPU", vec![wait])];
+        return vec![Card::new("CPU", vec![wait]).id("cpu")];
     };
     let cfg = &state.config;
+    let opts = options(state);
     let cpu_warn = s.cpu_usage > cfg.thresholds.cpu_warn_pct;
-    let mut cpu = vec![bar(s.cpu_usage, w, pal, cpu_warn)];
-    if let Some(t) = s.cpu_temp {
-        let color = if t > cfg.thresholds.temp_warn_c {
-            pal.warn
-        } else {
-            pal.value
-        };
+    let temp_color = match s.cpu_temp {
+        Some(t) if t > cfg.thresholds.temp_warn_c => pal.warn,
+        _ => pal.value,
+    };
+    let temp = s
+        .cpu_temp
+        .map(|t| format::temperature(t, cfg.units.temperature));
+    let sparks = cfg.theme_minimalist.show_sparklines;
+    let mut cpu = Vec::new();
+    if opts.cpu_view.chart() {
+        cpu.extend(chart(&state.cpu_history, w, rows, pal));
+        let avg = summary(&state.cpu_history, w);
         cpu.push(kv(
-            "temp",
-            format::temperature(t, cfg.units.temperature),
+            &avg,
+            temp.clone().unwrap_or_default(),
             w,
             pal,
-            color,
+            temp_color,
         ));
     }
-    let mut ram = vec![
-        kv(
-            "used",
-            used_of(s.ram_used_bytes, s.ram_total_bytes, state),
-            w,
-            pal,
-            pal.value,
-        ),
-        bar(s.ram_pct(), w, pal, false),
-    ];
-    if cfg.theme_minimalist.show_sparklines {
-        cpu.push(spark(
-            &state.cpu_history,
-            w,
-            if cpu_warn { pal.warn } else { pal.spark },
-        ));
-        ram.push(spark(&state.ram_history, w, pal.spark));
+    if opts.cpu_view.bar() {
+        cpu.push(bar(s.cpu_usage, w, pal, cpu_warn));
+        if let (Some(t), false) = (&temp, opts.cpu_view.chart()) {
+            cpu.push(kv("temp", t.clone(), w, pal, temp_color));
+        }
+        if sparks && opts.cpu_view == View::Bar {
+            let color = if cpu_warn { pal.warn } else { pal.spark };
+            cpu.push(spark(&state.cpu_history, w, color));
+        }
+    }
+    let used = used_of(s.ram_used_bytes, s.ram_total_bytes, state);
+    let mut ram = Vec::new();
+    if opts.ram_view.chart() {
+        ram.extend(chart(&state.ram_history, w, rows, pal));
+    }
+    ram.push(kv("used", used, w, pal, pal.value));
+    if opts.ram_view.bar() {
+        ram.push(bar(s.ram_pct(), w, pal, false));
+        if sparks && opts.ram_view == View::Bar {
+            ram.push(spark(&state.ram_history, w, pal.spark));
+        }
     }
     let swap = vec![
         kv(
@@ -421,10 +687,24 @@ pub fn system_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
             false,
         ),
     ];
+    // Only a chart has no gauge with the percentage, so the title carries it.
+    let mut cpu_card = if opts.cpu_view == View::Chart {
+        Card::new(format!("CPU {:.0}%", s.cpu_usage), cpu)
+    } else {
+        Card::new("CPU", cpu)
+    };
+    if opts.cpu_view == View::Chart && cpu_warn {
+        cpu_card.title_color = Some(pal.warn);
+    }
+    let ram_title = if opts.ram_view == View::Chart {
+        format!("RAM {:.0}%", s.ram_pct())
+    } else {
+        "RAM".to_string()
+    };
     vec![
-        Card::new("CPU", cpu),
-        Card::new("RAM", ram),
-        Card::new("Swap", swap),
+        cpu_card.id("cpu"),
+        Card::new(ram_title, ram).id("ram"),
+        Card::new("Swap", swap).id("swap"),
     ]
 }
 
@@ -468,7 +748,7 @@ pub fn gpu_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
             } else {
                 "GPU".to_string()
             };
-            Card::new(title, lines)
+            Card::new(title, lines).id("gpu")
         })
         .collect()
 }
@@ -499,7 +779,7 @@ pub fn disk_card(state: &AppState, pal: &Palette, w: usize) -> Card {
     if lines.is_empty() {
         lines.push(Line::styled("no disks found", fg(pal.label)));
     }
-    Card::new("Disks", lines)
+    Card::new("Disks", lines).id("disks")
 }
 
 /// The Network card, drawn like Disks; `None` when there is nothing to show.
@@ -510,7 +790,7 @@ pub fn network_card(state: &AppState, pal: &Palette, w: usize) -> Option<Card> {
     }
     let Some(drives) = &state.network else {
         let checking = Line::styled("checking…", fg(pal.label));
-        return Some(Card::new("Network", vec![checking]));
+        return Some(Card::new("Network", vec![checking]).id("network"));
     };
     let rows = network::rows(drives, cfg.group_network, &cfg.hide);
     if rows.is_empty() {
@@ -537,7 +817,7 @@ pub fn network_card(state: &AppState, pal: &Palette, w: usize) -> Option<Card> {
             lines.push(kv(&r.title, "offline".into(), w, pal, pal.warn));
         }
     }
-    Some(Card::new("Network", lines))
+    Some(Card::new("Network", lines).id("network"))
 }
 
 pub fn plugin_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
@@ -558,7 +838,7 @@ pub fn plugin_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
             lines.push(Line::styled("press l for the log", fg(pal.label)));
             lines
         };
-        cards.push(Card::new("Plugins", lines));
+        cards.push(Card::new("Plugins", lines).id("plugins"));
     }
     cards
 }
@@ -578,7 +858,8 @@ pub fn plugin_card(card: &PluginCard, pal: &Palette, w: usize) -> Card {
         PluginStatus::Ok => Card::new(
             d.title.clone(),
             d.metrics.iter().map(|m| metric_line(m, pal, w)).collect(),
-        ),
+        )
+        .id(&d.id),
         PluginStatus::Error(msg) => {
             let mut lines: Vec<Line<'static>> = wrap(&format!("Error: {msg}"), w)
                 .into_iter()
@@ -594,6 +875,7 @@ pub fn plugin_card(card: &PluginCard, pal: &Palette, w: usize) -> Card {
                 ));
             }
             Card {
+                id: d.id.clone(),
                 title: d.title.clone(),
                 title_color: Some(pal.warn),
                 lines,

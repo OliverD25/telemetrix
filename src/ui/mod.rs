@@ -599,7 +599,7 @@ mod tests {
         };
         s.plugin_schemas.insert("weather".into(), vec![city]);
         s.overlay = Overlay::Settings;
-        let rows = settings_overlay::rows(&s.plugin_ids, &s.plugin_schemas);
+        let rows = settings_overlay::rows_for(&s);
         s.settings_cursor = settings_overlay::selectable(&rows).len() - 1;
         let t = text(&render(&s, 80, 60));
         assert!(t.contains("Kyiv  (Enter to edit)"), "the selected text row");

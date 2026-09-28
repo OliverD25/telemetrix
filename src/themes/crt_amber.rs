@@ -8,7 +8,7 @@ use ratatui::symbols::border;
 use ratatui::widgets::Borders;
 
 use super::Theme;
-use super::common::{self, Palette, scale};
+use super::common::{self, Palette, mix_white, scale};
 use crate::app::AppState;
 use crate::config::Config;
 
@@ -35,6 +35,29 @@ pub fn palette() -> Palette {
         muted: scale(AMBER, 0.42),
         gauge: common::BLOCK_GAUGE,
         borders: Borders::ALL,
+        levels: [
+            scale(AMBER, 0.8),
+            Color::Rgb(255, 214, 110),
+            Color::Rgb(255, 84, 32),
+        ],
+    }
+}
+
+/// The monitor in the theme's accent colour instead of amber.
+pub fn palette_for(c: (u8, u8, u8)) -> Palette {
+    Palette {
+        bg: Some(scale(c, 0.094)),
+        border: scale(c, 0.75),
+        title: mix_white(c, 0.57),
+        label: scale(c, 0.62),
+        value: mix_white(c, 0.27),
+        bar: scale(c, 0.95),
+        bar_empty: scale(c, 0.22),
+        spark: scale(c, 0.8),
+        levels: [scale(c, 0.8), mix_white(c, 0.57), Color::Rgb(255, 84, 32)],
+        rise: mix_white(c, 0.63),
+        muted: scale(c, 0.42),
+        ..palette()
     }
 }
 
@@ -68,7 +91,8 @@ impl Theme for CrtAmber {
         common::fill_screen(frame, SCREEN);
         let area = frame.area();
         let body = common::body_area(area, state);
-        common::draw_columns(frame, body, state, &palette(), true);
+        let pal = common::accent(state).map_or_else(palette, palette_for);
+        common::draw_columns(frame, body, state, &pal, true);
         scanlines(frame.buffer_mut(), area);
     }
 }

@@ -45,6 +45,11 @@ pub fn palette() -> Palette {
         muted: Color::Rgb(125, 95, 165),
         gauge: common::BLOCK_GAUGE,
         borders: Borders::ALL,
+        levels: [
+            Color::Rgb(0, 225, 255),
+            Color::Rgb(ORANGE.0, ORANGE.1, ORANGE.2),
+            Color::Rgb(255, 40, 80),
+        ],
     }
 }
 
@@ -212,7 +217,13 @@ impl Theme for Synthwave {
         sky(buf, area, line);
         sun(buf, body, line);
         floor(buf, body, line, self.phase);
-        common::draw_columns(frame, body, state, &palette(), true);
+        common::draw_columns(
+            frame,
+            body,
+            state,
+            &common::accented(palette(), state),
+            true,
+        );
         gradient_frames(frame.buffer_mut(), body);
     }
 }
