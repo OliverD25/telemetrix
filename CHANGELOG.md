@@ -11,6 +11,8 @@ All notable changes to telemetrix. Versions follow
   code, the value, its unit and a NOMINAL, CAUTION or WARNING status, in
   white and amber on black, under a line with the time since start (MET)
   and the UTC time (GMT). Static.
+- **pip-boy theme:** a green wrist-computer screen in one hue: ASCII
+  frames, bracketed tabs and `[▮▮▮▯▯]` gauges. Static.
 
 ## 0.2.0 (not released yet)
 

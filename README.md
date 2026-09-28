@@ -122,7 +122,7 @@ only `Ctrl+C` quits.
 | Flag | Meaning |
 |---|---|
 | `--config <path>` | use this settings file |
-| `--theme <name>` | `minimalist`, `matrix`, `tokyo-night`, `crt-amber`, `cyberpunk` or `nasa` |
+| `--theme <name>` | `minimalist`, `matrix`, `tokyo-night`, `crt-amber`, `cyberpunk`, `nasa` or `pip-boy` |
 | `--fps <n>` | frames per second for animated themes, 1..60 |
 | `--plugins-dir <dir>` | folder with `.lua` plugins |
 | `--no-plugins` | run no plugins |
@@ -173,6 +173,10 @@ These need no terminal window, so scripts and agents can use them.
   value, its unit and a status: NOMINAL, CAUTION (above 85 % of the warning
   threshold) or WARNING. The top line shows the time since the computer
   started (MET) and the UTC day and time (GMT). Static.
+- **pip-boy**: a green wrist-computer screen in one hue at several
+  brightness levels. Plain ASCII frames (`+--+`), bracketed tabs
+  (`[STAT] [DATA] [RADIO]`) and `[▮▮▮▯▯]` gauges. A warning is the
+  brightest shade. No rain. Static.
 
 Every theme except matrix is static: it redraws only when data changes, so
 it uses almost no CPU. Press `t` to try them with a live preview.
@@ -259,9 +263,9 @@ On Linux, mounts of type nfs, nfs4, cifs, smb3, smbfs, fuse.sshfs and 9p go
 to the Network card. A hung network mount can still delay the disk
 readings there; protecting against that is planned after v0.1.
 
-**Roadmap:** the original brief lists eight more themes; four of them are
-here (tokyo-night, crt-amber, cyberpunk, nasa). The other four are planned
-for later versions.
+**Roadmap:** the original brief lists eight more themes; five of them are
+here (tokyo-night, crt-amber, cyberpunk, nasa, pip-boy). The other three
+are planned for later versions.
 
 ## Where plugins live
 
@@ -424,7 +428,7 @@ no longer matches the program.
 | Key | Default | Allowed values | In the `s` overlay | Meaning |
 |---|---|---|---|---|
 | `schema` | `1` | 1..1 | no, edit the file | format version of this file, do not change |
-| `general.theme` | `"matrix"` | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa | yes | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa |
+| `general.theme` | `"matrix"` | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa \| pip-boy | yes | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa \| pip-boy |
 | `general.fps` | `15` | 1..60 | yes | frames per second for animated themes, 1..60 |
 | `general.exit_on_any_key` | `false` | true \| false | yes | true = screensaver mode: any key quits |
 | `general.plugins_dir` | `""` | a file or folder path | no, edit the file | empty = the plugins folder next to this file; relative paths start there |

@@ -4,6 +4,7 @@ pub mod cyberpunk;
 pub mod matrix;
 pub mod minimalist;
 pub mod nasa;
+pub mod pip_boy;
 pub mod tokyo_night;
 
 use std::time::Duration;
@@ -46,6 +47,7 @@ pub fn all() -> Vec<Box<dyn Theme>> {
         Box::new(crt_amber::CrtAmber),
         Box::new(cyberpunk::Cyberpunk),
         Box::new(nasa::Nasa),
+        Box::new(pip_boy::PipBoy),
     ]
 }
 

@@ -4,7 +4,7 @@
 schema = 1                  # format version of this file, do not change
 
 [general]
-theme = "matrix"            # minimalist | matrix | tokyo-night | crt-amber | cyberpunk | nasa
+theme = "matrix"            # minimalist | matrix | tokyo-night | crt-amber | cyberpunk | nasa | pip-boy
 fps = 15                    # frames per second for animated themes, 1..60
 exit_on_any_key = false     # true = screensaver mode: any key quits
 plugins_dir = ""            # empty = the plugins folder next to this file; relative paths start there
