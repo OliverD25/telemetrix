@@ -40,7 +40,10 @@ fn net_fixture(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/net")
         .join(name);
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    // A Windows checkout may turn line ends into \r\n; keep the text the same everywhere.
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+        .replace("\r\n", "\n")
 }
 
 impl Harness {
@@ -267,32 +270,116 @@ mod currency {
             .collect()
     }
 
+    /// The styles of a row's value spans.
+    fn value_styles(m: &crate::plugins::MetricItem) -> Vec<Option<MetricStyle>> {
+        m.value_spans.iter().flatten().map(|s| s.style).collect()
+    }
+
+    /// Where `needle` starts in each line that has it, in characters.
+    fn columns_of(card: &str, needle: &str) -> Vec<usize> {
+        card.lines()
+            .filter_map(|l| l.find(needle).map(|i| l[..i].chars().count()))
+            .collect()
+    }
+
     #[test]
-    fn monobank_table_with_quiet_graph_lines() {
+    fn monobank_rates_beside_the_code_and_graphs_in_a_right_column() {
         let h = Harness::new("currency", "", &routes());
         let d = h.run(Trigger::Start);
         assert_eq!(d.error, None, "{:?}", h.log.borrow());
         assert_eq!(d.title, "Currency · monobank");
         let r = rows(&d);
-        assert_eq!(r[0], ("", "     buy      sell"));
-        assert_eq!(r[1], ("USD", "   44.80     45.20"));
+        assert_eq!(r[0], ("       buy    sell", ""));
         // The 7 NBU points of the fixture, scaled to 8 levels, and 30 points
         // resampled to 7 glyphs.
-        assert_eq!(r[2], ("  7d ▁▁▁▂▄▅█ +0.69%", "30d ▃▂▅▂▃▄█ +0.90%"));
-        assert_eq!(r[3], ("EUR", "   50.87     51.53"));
-        assert_eq!(r[5], ("GBP", "   59.94     cross"));
+        assert_eq!(r[1], ("USD  44.80   45.20", " 7d ▁▁▁▂▄▅█ +0.69%"));
+        assert_eq!(r[2], ("", "30d ▃▂▅▂▃▄█ +0.90%"));
+        assert_eq!(r[3].0, "EUR  50.87   51.53");
+        assert_eq!(r[5].0, "GBP  59.94   cross");
         assert!(r[7].0.starts_with("updated "));
         assert_eq!(d.metrics.len(), 8);
-        let style = |i: usize| d.metrics[i].style;
-        assert_eq!(style(0), Some(MetricStyle::Header));
-        assert_eq!(style(1), None);
-        assert_eq!(style(2), Some(MetricStyle::Dim));
-        assert_eq!(style(7), Some(MetricStyle::Dim));
+        let m = &d.metrics;
+        assert_eq!(m[0].style, Some(MetricStyle::Header));
+        assert_eq!(
+            m[1].style,
+            Some(MetricStyle::Dim),
+            "a narrow card drops the graph"
+        );
+        let label: Vec<_> = m[1].label_spans.iter().flatten().map(|s| s.style).collect();
+        assert_eq!(label, [None, Some(MetricStyle::Bright)], "bright rates");
+        assert_eq!(
+            value_styles(&m[1]),
+            [Some(MetricStyle::Dim), Some(MetricStyle::Good)]
+        );
+        assert_eq!(
+            value_styles(&m[4]),
+            [Some(MetricStyle::Dim), Some(MetricStyle::Bad)],
+            "EUR 7d falls"
+        );
+        assert_eq!(m[1].min_width, None);
+        assert_eq!(m[2].min_width, Some(37), "rates, a space and the graph");
+        assert_eq!(m[7].style, Some(MetricStyle::Dim));
         assert!(
             d.metrics.iter().all(|m| m.trend.is_none()),
             "no full-width graphs"
         );
-        println!("{}", render_card(&d, 45));
+
+        let card = render_card(&d, 45);
+        println!("{card}");
+        let lines: Vec<&str> = card.lines().collect();
+        assert_eq!(lines[1], "│        buy    sell                        │");
+        assert_eq!(lines[2], "│ USD  44.80   45.20      7d ▁▁▁▂▄▅█ +0.69% │");
+        assert_eq!(lines[3], "│                        30d ▃▂▅▂▃▄█ +0.90% │");
+        // Labels, graphs and changes line up in one right-hand column.
+        let d7 = columns_of(&card, " 7d ");
+        let d30 = columns_of(&card, "30d ");
+        assert_eq!((d7.len(), d30.len()), (3, 3));
+        assert!(
+            d7.iter().chain(&d30).all(|&c| c == d30[0]),
+            "{d7:?} {d30:?}"
+        );
+        let pct: Vec<usize> = card
+            .lines()
+            .filter_map(|l| l.rfind('%').map(|i| l[..i].chars().count()))
+            .collect();
+        assert_eq!(pct.len(), 6);
+        assert!(pct.iter().all(|&c| c == pct[0]), "{pct:?}");
+        // The rates sit under the header.
+        assert_eq!(
+            columns_of(&card, "buy")[0] + 3,
+            columns_of(&card, "44.80")[0] + 5
+        );
+        assert_eq!(
+            columns_of(&card, "sell")[0] + 4,
+            columns_of(&card, "45.20")[0] + 5
+        );
+    }
+
+    #[test]
+    fn a_narrow_card_drops_the_30_days_then_the_graphs() {
+        let h = Harness::new("currency", "", &routes());
+        let d = h.run(Trigger::Start);
+        let narrow = render_card(&d, 40);
+        println!("{narrow}");
+        let lines: Vec<&str> = narrow.lines().collect();
+        assert_eq!(
+            lines.len(),
+            7,
+            "the frame, a header, three currencies and the footer"
+        );
+        assert_eq!(lines[2], "│ USD  44.80   45.20                   │");
+        assert_eq!(lines[4], "│ GBP  59.94   cross                   │");
+        assert!(
+            !narrow.contains("7d") && !narrow.contains("30d"),
+            "{narrow}"
+        );
+        // Exactly as wide as the rows need: everything is back.
+        let wide = render_card(&d, 41);
+        assert_eq!(wide.lines().count(), 10, "{wide}");
+        assert!(
+            wide.contains("│ USD  44.80   45.20  7d ▁▁▁▂▄▅█ +0.69% │"),
+            "{wide}"
+        );
     }
 
     #[test]
@@ -301,14 +388,19 @@ mod currency {
         let d = h.run(Trigger::Start);
         assert_eq!(d.title, "Currency · privatbank");
         let r = rows(&d);
-        assert_eq!(r[1], ("USD", "   44.60     45.05"));
-        assert_eq!(r[5], ("GBP", "   59.46       NBU"));
+        assert_eq!(r[1].0, "USD  44.60   45.05");
+        assert_eq!(r[5].0, "GBP  59.46     NBU");
         assert!(
             h.log.borrow().is_empty(),
             "no backup note: {:?}",
             h.log.borrow()
         );
-        println!("{}", render_card(&d, 45));
+        let card = render_card(&d, 45);
+        println!("{card}");
+        assert!(
+            card.contains("│ GBP  59.46     NBU      7d ▅▅▄█▇▃▁ -0.41% │"),
+            "{card}"
+        );
     }
 
     #[test]
@@ -318,14 +410,19 @@ mod currency {
         let h = Harness::new("currency", "", &routes);
         let d = h.run(Trigger::Start);
         assert_eq!(d.title, "Currency · privatbank (backup)");
-        assert_eq!(rows(&d)[1], ("USD", "   44.60     45.05"));
+        assert_eq!(rows(&d)[1].0, "USD  44.60   45.05");
         assert_eq!(
             *h.log.borrow(),
             ["using privatbank as the backup: monobank HTTP 429"]
         );
         h.run(Trigger::Interval);
         assert_eq!(h.log.borrow().len(), 1, "the note is logged once");
-        println!("{}", render_card(&d, 45));
+        let card = render_card(&d, 45);
+        println!("{card}");
+        assert!(
+            card.starts_with("╭ Currency · privatbank (backup) "),
+            "{card}"
+        );
     }
 
     #[test]
@@ -339,14 +436,16 @@ mod currency {
             d.title, "Currency · monobank",
             "rates from the last hour stay"
         );
-        assert_eq!(rows(&d)[1], ("USD", "   44.80     45.20"));
+        assert_eq!(rows(&d)[1].0, "USD  44.80   45.20");
         let footer = d.metrics.last().unwrap();
         assert!(
             footer.label.starts_with("stale since ") && footer.label.ends_with(" (HTTP 429)"),
             "{footer:?}"
         );
         assert_eq!(footer.style, Some(MetricStyle::Bad));
-        println!("{}", render_card(&d, 45));
+        let card = render_card(&d, 45);
+        println!("{card}");
+        assert!(card.contains(" (HTTP 429)"), "{card}");
         // An hour later the backup takes over.
         h.age_store("s.mono.ok = s.mono.ok - 3600 s.mono.tried = s.mono.tried - 301");
         let d = h.run(Trigger::Interval);
@@ -392,18 +491,12 @@ mod currency {
     }
 
     #[test]
-    fn old_settings_are_ignored_and_a_narrow_card_drops_the_30_days() {
+    fn old_settings_are_ignored() {
         let h = Harness::new("currency", "compact = true\nshow_month = false", &routes());
         let d = h.run(Trigger::Start);
         assert_eq!(d.error, None);
         assert!(h.log.borrow().is_empty(), "{:?}", h.log.borrow());
         assert_eq!(d.metrics.len(), 8, "the old keys change nothing");
-        let narrow = render_card(&d, 40);
-        assert!(
-            narrow.contains("7d ▁▁▁▂▄▅█ +0.69%") && !narrow.contains("30d"),
-            "{narrow}"
-        );
-        println!("{narrow}");
     }
 }
 

@@ -460,6 +460,89 @@ mod tests {
         );
     }
 
+    #[test]
+    fn styled_spans_and_min_width_render_in_every_theme() {
+        use crate::plugins::{
+            MetricItem, MetricStyle, PluginCard, PluginData, PluginStatus, TextSpan,
+        };
+        let span = |text: &str, style| TextSpan {
+            text: text.into(),
+            style,
+        };
+        let row = |label: Vec<TextSpan>, value: Vec<TextSpan>, min_width| {
+            let join = |s: &[TextSpan]| s.iter().map(|s| s.text.as_str()).collect::<String>();
+            let mut m = MetricItem::text(join(&label), join(&value));
+            m.style = Some(MetricStyle::Dim);
+            m.label_spans = Some(label);
+            m.value_spans = Some(value);
+            m.min_width = min_width;
+            m
+        };
+        for theme in themes::all().iter().map(|t| t.name()) {
+            let mut s = state(theme);
+            let metrics = vec![
+                row(
+                    vec![
+                        span("CODE", None),
+                        span(" brightrate", Some(MetricStyle::Bright)),
+                    ],
+                    vec![
+                        span("quietgraph ", Some(MetricStyle::Dim)),
+                        span("+rise%", Some(MetricStyle::Good)),
+                    ],
+                    None,
+                ),
+                row(
+                    vec![],
+                    vec![span("monthrow", Some(MetricStyle::Dim))],
+                    Some(20),
+                ),
+                row(vec![span("hiddenrow", None)], vec![], Some(500)),
+            ];
+            let data = PluginData {
+                id: "fx".into(),
+                title: "FX".into(),
+                metrics,
+                error: None,
+                lua_bytes: None,
+            };
+            s.plugins.insert(
+                "fx".into(),
+                PluginCard {
+                    data,
+                    status: PluginStatus::Ok,
+                },
+            );
+            let buf = render(&s, 45, 120);
+            let color = |needle: &str| {
+                cell_color(&buf, needle).unwrap_or_else(|| {
+                    panic!(
+                        "{theme}: {needle} not drawn:
+{}",
+                        text(&buf)
+                    )
+                })
+            };
+            let (code, rate, graph, rise) = (
+                color("CODE"),
+                color("brightrate"),
+                color("quietgraph"),
+                color("+rise%"),
+            );
+            assert_ne!(
+                rate, graph,
+                "{theme}: the rates are brighter than the graph"
+            );
+            assert_ne!(rise, graph, "{theme}: the change has its own colour");
+            assert_ne!(
+                code, rate,
+                "{theme}: an unstyled span keeps the label colour"
+            );
+            color("monthrow");
+            assert!(!text(&buf).contains("hiddenrow"), "{theme}: min_width 500");
+        }
+    }
+
     fn cell_color(buf: &Buffer, needle: &str) -> Option<Color> {
         let cells = buf.content();
         let chars: Vec<&str> = cells.iter().map(|c| c.symbol()).collect();

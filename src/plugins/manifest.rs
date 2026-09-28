@@ -1,7 +1,7 @@
 use mlua::{Function, Table, Value};
 
 use super::schema::{self, SchemaEntry, SchemaKind};
-use super::{MetricItem, MetricStyle};
+use super::{MetricItem, MetricStyle, TextSpan};
 use crate::config::Value as Setting;
 
 /// Trend lines outside this length become an error line.
@@ -184,6 +184,47 @@ fn to_text(v: &Value) -> Option<String> {
     }
 }
 
+/// The plain text of a label or a value, and its spans when it had some.
+type Part = (String, Option<Vec<TextSpan>>);
+
+/// A label or a value: text, or a list of `{ text, style }` spans. `Ok(None)`
+/// when it is missing or not text.
+fn part(v: Option<Value>, what: &str) -> Result<Option<Part>, String> {
+    let Some(Value::Table(list)) = v else {
+        return Ok(v.as_ref().and_then(to_text).map(|t| (t, None)));
+    };
+    let mut spans = Vec::new();
+    for item in list.sequence_values::<Value>() {
+        let text = match item {
+            Ok(Value::Table(span)) => span
+                .get::<Value>("text")
+                .ok()
+                .as_ref()
+                .and_then(to_text)
+                .map(|t| {
+                    let style = match span.get::<Value>("style") {
+                        Ok(Value::String(s)) => MetricStyle::parse(&s.to_string_lossy()),
+                        _ => None,
+                    };
+                    TextSpan { text: t, style }
+                }),
+            _ => None,
+        };
+        spans.push(text.ok_or_else(|| format!("every span of {what} needs a text"))?);
+    }
+    let text = spans.iter().map(|s| s.text.as_str()).collect();
+    Ok(Some((text, Some(spans))))
+}
+
+/// A whole number of characters, or `None` for anything else.
+fn width(v: Option<Value>) -> Option<usize> {
+    match v? {
+        Value::Integer(n) => usize::try_from(n).ok(),
+        Value::Number(n) if n.is_finite() && n >= 0.0 => Some(n as usize),
+        _ => None,
+    }
+}
+
 /// A list of 2..=400 finite numbers, or `None`.
 fn trend_points(t: &Table) -> Option<Vec<f32>> {
     let points: Option<Vec<f32>> = t
@@ -216,12 +257,16 @@ impl CardUpdate {
             let Ok(Value::Table(item)) = item else {
                 return Err(format!("metrics[{}] must be a table", i + 1));
             };
-            let label = item.get::<Value>("label").ok().as_ref().and_then(to_text);
-            let value = item.get::<Value>("value").ok().as_ref().and_then(to_text);
-            let (Some(label), Some(value)) = (label, value) else {
+            let at = |e: String| format!("metrics[{}]: {e}", i + 1);
+            let label = part(item.get::<Value>("label").ok(), "label").map_err(at)?;
+            let value = part(item.get::<Value>("value").ok(), "value").map_err(at)?;
+            let (Some((label, label_spans)), Some((value, value_spans))) = (label, value) else {
                 return Err(format!("metrics[{}] needs a label and a value", i + 1));
             };
             let mut metric = MetricItem::text(label, value);
+            metric.label_spans = label_spans;
+            metric.value_spans = value_spans;
+            metric.min_width = width(item.get::<Value>("min_width").ok());
             if let Ok(Value::String(style)) = item.get::<Value>("style") {
                 metric.style = MetricStyle::parse(&style.to_string_lossy());
             }
@@ -361,6 +406,47 @@ mod tests {
             .unwrap();
         assert!(CardUpdate::from_value(v).is_err());
         assert!(CardUpdate::from_value(Value::Nil).is_err());
+    }
+
+    #[test]
+    fn labels_and_values_can_be_styled_spans() {
+        let lua = Lua::new();
+        let v: Value = lua
+            .load(
+                "return { metrics = { { style = 'dim', min_width = 37,                  label = { { text = 'USD' }, { text = ' 44.63', style = 'bright' } },                  value = { { text = ' 7d ▂▅ ', style = 'dim' }, { text = '+0.30%', style = 'good' },                  { text = 1, style = 'sparkly' } } },                  { label = 'x', value = 'y', min_width = -3 }, { label = 'x', value = 'y', min_width = 'wide' } } }",
+            )
+            .eval()
+            .unwrap();
+        let card = CardUpdate::from_value(v).unwrap();
+        let m = &card.metrics[0];
+        assert_eq!(
+            m.label, "USD 44.63",
+            "the spans' texts make the plain label"
+        );
+        assert_eq!(m.value, " 7d ▂▅ +0.30%1");
+        assert_eq!(m.style, Some(MetricStyle::Dim));
+        assert_eq!(m.min_width, Some(37));
+        let styles = |spans: &Option<Vec<TextSpan>>| -> Vec<Option<MetricStyle>> {
+            spans.as_ref().unwrap().iter().map(|s| s.style).collect()
+        };
+        assert_eq!(styles(&m.label_spans), [None, Some(MetricStyle::Bright)]);
+        assert_eq!(
+            styles(&m.value_spans),
+            [Some(MetricStyle::Dim), Some(MetricStyle::Good), None],
+            "an unknown span style is ignored"
+        );
+        assert_eq!(card.metrics[1].label_spans, None, "plain text has no spans");
+        assert_eq!(
+            card.metrics[1].min_width, None,
+            "a negative width is ignored"
+        );
+        assert_eq!(card.metrics[2].min_width, None, "so is a word");
+        let v: Value = lua
+            .load("return { metrics = { { label = { { style = 'dim' } }, value = '' } } }")
+            .eval()
+            .unwrap();
+        let err = CardUpdate::from_value(v).err().unwrap();
+        assert_eq!(err, "metrics[1]: every span of label needs a text");
     }
 
     #[test]

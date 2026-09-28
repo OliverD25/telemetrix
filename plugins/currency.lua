@@ -1,6 +1,6 @@
 -- Hryvnia exchange rates from one bank at a time: Monobank or PrivatBank
--- (card rate). Under each currency, one quiet line with the 7-day and
--- 30-day graphs of the official NBU rate.
+-- (card rate). Beside each currency, a quiet column with the 7-day graph
+-- and, one line lower, the 30-day graph of the official NBU rate.
 -- Settings in [plugin.currency]:
 --   currencies   = { "USD", "EUR", "GBP" }   (file only)
 --   primary_bank = "mono" or "privat"       (the bank the card shows)
@@ -144,41 +144,84 @@ local function spark(points, width)
   return table.concat(out)
 end
 
-local function period(label, points)
-  local a, b = points[1], points[#points]
-  return string.format("%s %s %+.2f%%", label, spark(points, SPARK_WIDTH), (b - a) / a * 100)
-end
-
--- Two right-aligned columns of the same width, so rows line up.
-local function columns(left, right)
-  return string.format("%8s  %8s", left, right)
+-- Two right-aligned rate columns after the currency code, so rows line up.
+local function rates_text(left, right)
+  return string.format(" %6s  %6s", left, right)
 end
 
 local function short_error(err)
   return #err <= 12 and err or err:sub(1, 11) .. "…"
 end
 
-local function currency_rows(cur, rates, points)
+local function change(points)
+  local a, b = points[1], points[#points]
+  return (b - a) / a * 100
+end
+
+-- ` 7d ▂▃▅▆▇▇▆ +0.30%` as spans: a quiet graph and a coloured change. Every
+-- change is padded to `change_w`, so the graphs of all rows line up.
+local function period(label, points, change_w)
+  local pct = change(points)
+  local style = pct > 0 and "good" or pct < 0 and "bad" or nil
+  return {
+    { text = string.format("%3s %s ", label, spark(points, SPARK_WIDTH)), style = "dim" },
+    { text = string.format("%" .. change_w .. "s", string.format("%+.2f%%", pct)), style = style },
+  }
+end
+
+local function width(spans)
+  local n = 0
+  for _, s in ipairs(spans) do
+    n = n + utf8.len(s.text)
+  end
+  return n
+end
+
+-- The rates of one currency: buy and sell, a cross rate, or the NBU rate.
+local function rates_of(cur, rates, points)
   local r = rates and rates[cur]
-  local value
   if r and r.buy then
-    value = columns(string.format("%.2f", r.buy), string.format("%.2f", r.sell))
+    return rates_text(string.format("%.2f", r.buy), string.format("%.2f", r.sell))
   elseif r and r.cross then
-    value = columns(string.format("%.2f", r.cross), "cross")
+    return rates_text(string.format("%.2f", r.cross), "cross")
   elseif points and #points > 0 then
-    value = columns(string.format("%.2f", points[#points]), "NBU")
-  else
-    value = "no rate"
+    return rates_text(string.format("%.2f", points[#points]), "NBU")
   end
-  local rows = { { label = cur, value = value } }
-  if points and #points >= 2 then
-    rows[2] = {
-      label = "  " .. period("7d", last_n(points, 7)),
-      value = period("30d", last_n(points, 30)),
-      style = "dim",
-    }
+  return string.format(" %-14s", "no rate")
+end
+
+-- Two rows per currency: the rates and the 7-day graph, then the 30-day graph
+-- under it. The row with the rates is `dim` only so that a narrow card drops
+-- its graph; its spans set every colour. The 30-day row leaves a card too
+-- narrow for the first row's graph.
+local function currency_rows(cur, code_w, rates, points, change_w)
+  local label = {
+    { text = string.format("%-" .. code_w .. "s", cur) },
+    { text = rates_of(cur, rates, points), style = "bright" },
+  }
+  if not (points and #points >= 2) then
+    return { { label = label, value = "" } }
   end
-  return rows
+  local week = period("7d", last_n(points, 7), change_w)
+  local full = width(label) + 1 + width(week)
+  return {
+    { label = label, value = week, style = "dim" },
+    { label = "", value = period("30d", last_n(points, 30), change_w), style = "dim", min_width = full },
+  }
+end
+
+-- The widest change of all graphs, at least 6 characters (`+0.30%`).
+local function change_width(currencies, nbu)
+  local w = 6
+  for _, cur in ipairs(currencies) do
+    local points = nbu and nbu[cur]
+    if points and #points >= 2 then
+      for _, n in ipairs({ 7, 30 }) do
+        w = math.max(w, #string.format("%+.2f%%", change(last_n(points, n))))
+      end
+    end
+  end
+  return w
 end
 
 local function currency_list(value)
@@ -255,9 +298,17 @@ return {
     end
 
     local b = store[bank]
-    local metrics = { { label = "", value = columns("buy", "sell"), style = "header" } }
+    local code_w = 3
     for _, cur in ipairs(currencies) do
-      for _, row in ipairs(currency_rows(cur, b.rates, store.nbu and store.nbu[cur])) do
+      code_w = math.max(code_w, utf8.len(cur) or #cur)
+    end
+    local change_w = change_width(currencies, store.nbu)
+    local metrics = {
+      { label = string.rep(" ", code_w) .. rates_text("buy", "sell"), value = "", style = "header" },
+    }
+    for _, cur in ipairs(currencies) do
+      local points = store.nbu and store.nbu[cur]
+      for _, row in ipairs(currency_rows(cur, code_w, b.rates, points, change_w)) do
         metrics[#metrics + 1] = row
       end
     end

@@ -874,10 +874,15 @@ pub fn wrap_chars(text: &str, width: usize) -> Vec<String> {
 
 pub fn plugin_card(card: &PluginCard, pal: &Palette, w: usize) -> Card {
     let d = &card.data;
+    let shown = || {
+        d.metrics
+            .iter()
+            .filter(|m| m.min_width.is_none_or(|n| w >= n))
+    };
     match &card.status {
         PluginStatus::Ok => Card::new(
             d.title.clone(),
-            d.metrics.iter().map(|m| metric_line(m, pal, w)).collect(),
+            shown().map(|m| metric_line(m, pal, w)).collect(),
         )
         .id(&d.id),
         PluginStatus::Error(msg) => {
@@ -885,7 +890,7 @@ pub fn plugin_card(card: &PluginCard, pal: &Palette, w: usize) -> Card {
                 .into_iter()
                 .map(|l| Line::styled(l, fg(pal.warn)))
                 .collect();
-            for m in &d.metrics {
+            for m in shown() {
                 lines.push(kv(
                     &m.label,
                     format!("{} (stale)", m.value),
@@ -912,8 +917,8 @@ pub fn metric_line(m: &crate::plugins::MetricItem, pal: &Palette, w: usize) -> L
     if let Some(points) = &m.trend {
         return trend_line(&m.label, points, &m.value, w, pal);
     }
-    match m.style {
-        None => kv(&m.label, m.value.clone(), w, pal, pal.value),
+    let (label_style, value_style) = match m.style {
+        None => (fg(pal.label), fg(pal.value)),
         // Without a value, the label carries the colour (a footer like "stale since 14:32").
         Some(MetricStyle::Good | MetricStyle::Bad) => {
             let color = if m.style == Some(MetricStyle::Good) {
@@ -926,38 +931,105 @@ pub fn metric_line(m: &crate::plugins::MetricItem, pal: &Palette, w: usize) -> L
             } else {
                 fg(pal.label)
             };
-            styled_kv(&m.label, &m.value, w, label, fg(color))
+            (label, fg(color))
         }
         Some(MetricStyle::Header) => {
             let style = fg(pal.label).add_modifier(Modifier::BOLD);
-            styled_kv(&m.label, &m.value, w, style, style)
+            (style, style)
         }
-        Some(MetricStyle::Dim) => {
-            // A secondary row: when both parts do not fit, the value goes.
-            let fits = m.label.chars().count() + 1 + m.value.chars().count() <= w;
-            let value = if fits { m.value.as_str() } else { "" };
-            styled_kv(&m.label, value, w, fg(pal.muted), fg(pal.muted))
-        }
-    }
+        Some(MetricStyle::Dim) => (fg(pal.muted), fg(pal.muted)),
+        Some(MetricStyle::Bright) => (fg(pal.value), fg(pal.value)),
+    };
+    // A secondary row: when both parts do not fit, the value goes.
+    let drop_value = m.style == Some(MetricStyle::Dim)
+        && m.label.chars().count() + 1 + m.value.chars().count() > w;
+    let label = pieces(
+        &m.label,
+        m.label_spans.as_deref(),
+        label_style,
+        pal.label,
+        pal,
+    );
+    let value = if drop_value {
+        Vec::new()
+    } else {
+        pieces(
+            &m.value,
+            m.value_spans.as_deref(),
+            value_style,
+            pal.value,
+            pal,
+        )
+    };
+    styled_kv(label, value, w)
 }
 
-/// Like `kv`, with a style for each part.
-fn styled_kv(
-    label: &str,
-    value: &str,
-    w: usize,
-    label_style: Style,
-    value_style: Style,
-) -> Line<'static> {
-    let label = fit(label, w.saturating_sub(value.chars().count() + 1));
-    let pad = w
-        .saturating_sub(label.chars().count() + value.chars().count())
-        .max(1);
-    Line::from(vec![
-        Span::styled(label, label_style),
-        Span::raw(" ".repeat(pad)),
-        Span::styled(value.to_string(), value_style),
-    ])
+/// A label or a value as styled pieces: the whole text in `whole`, or its
+/// spans, where a span without a style gets the `plain` colour of its part.
+fn pieces(
+    text: &str,
+    spans: Option<&[crate::plugins::TextSpan]>,
+    whole: Style,
+    plain: Color,
+    pal: &Palette,
+) -> Vec<(String, Style)> {
+    use crate::plugins::MetricStyle;
+    let Some(spans) = spans else {
+        return vec![(text.to_string(), whole)];
+    };
+    spans
+        .iter()
+        .map(|s| {
+            let style = match s.style {
+                None => fg(plain),
+                Some(MetricStyle::Dim) => fg(pal.muted),
+                Some(MetricStyle::Header) => fg(pal.label).add_modifier(Modifier::BOLD),
+                Some(MetricStyle::Good) => fg(pal.rise),
+                Some(MetricStyle::Bad) => fg(pal.warn),
+                Some(MetricStyle::Bright) => fg(pal.value),
+            };
+            (s.text.clone(), style)
+        })
+        .collect()
+}
+
+/// Like `kv`, with a style for each piece of the label and the value.
+fn styled_kv(label: Vec<(String, Style)>, value: Vec<(String, Style)>, w: usize) -> Line<'static> {
+    let width = |p: &[(String, Style)]| p.iter().map(|(t, _)| t.chars().count()).sum::<usize>();
+    let value_w = width(&value);
+    let label = fit_pieces(label, w.saturating_sub(value_w + 1));
+    let pad = w.saturating_sub(width(&label) + value_w).max(1);
+    let mut spans: Vec<Span<'static>> =
+        label.into_iter().map(|(t, s)| Span::styled(t, s)).collect();
+    spans.push(Span::raw(" ".repeat(pad)));
+    spans.extend(value.into_iter().map(|(t, s)| Span::styled(t, s)));
+    Line::from(spans)
+}
+
+/// `fit` over styled pieces: the piece where the text is cut ends with "…".
+fn fit_pieces(pieces: Vec<(String, Style)>, max: usize) -> Vec<(String, Style)> {
+    let total: usize = pieces.iter().map(|(t, _)| t.chars().count()).sum();
+    if total <= max {
+        return pieces;
+    }
+    let mut left = max;
+    let mut out = Vec::new();
+    for (text, style) in pieces {
+        if left == 0 {
+            break;
+        }
+        let n = text.chars().count();
+        if n < left {
+            left -= n;
+            out.push((text, style));
+        } else {
+            let mut cut: String = text.chars().take(left - 1).collect();
+            cut.push('…');
+            out.push((cut, style));
+            break;
+        }
+    }
+    out
 }
 
 /// `label ▁▂▄▆█ +0.8%`: the graph fills the width between label and value.
@@ -1059,6 +1131,98 @@ mod tests {
         assert_eq!(line.spans.last().unwrap().style.fg, Some(RISE));
         let falling = trend_line("7d", &[5.0, 4.0, 1.0], "-2.0%", 30, &pal);
         assert_eq!(falling.spans.last().unwrap().style.fg, Some(WARN));
+    }
+
+    #[test]
+    fn spans_colour_their_own_text_and_narrow_cards_drop_rows() {
+        use crate::plugins::{MetricItem, MetricStyle, PluginData, TextSpan};
+        let pal = minimalist_palette();
+        let span = |text: &str, style| TextSpan {
+            text: text.into(),
+            style,
+        };
+        let mut m = MetricItem::text("USD  44.63", " 7d ▂▅ -0.30%");
+        m.style = Some(MetricStyle::Dim);
+        m.label_spans = Some(vec![
+            span("USD", None),
+            span("  44.63", Some(MetricStyle::Bright)),
+        ]);
+        m.value_spans = Some(vec![
+            span(" 7d ▂▅ ", Some(MetricStyle::Dim)),
+            span("-0.30%", Some(MetricStyle::Bad)),
+        ]);
+        let parts = |line: Line<'static>| -> Vec<(String, Option<Color>)> {
+            line.spans
+                .into_iter()
+                .filter(|s| !s.content.trim().is_empty())
+                .map(|s| (s.content.to_string(), s.style.fg))
+                .collect()
+        };
+        assert_eq!(
+            parts(metric_line(&m, &pal, 30)),
+            [
+                ("USD".into(), Some(pal.label)),
+                ("  44.63".into(), Some(pal.value)),
+                (" 7d ▂▅ ".into(), Some(MUTED)),
+                ("-0.30%".into(), Some(WARN)),
+            ],
+            "a span without a style has the plain label colour, not the dim one"
+        );
+        assert_eq!(
+            parts(metric_line(&m, &pal, 20)),
+            [
+                ("USD".into(), Some(pal.label)),
+                ("  44.63".into(), Some(pal.value))
+            ],
+            "a dim row too narrow for both parts drops the value spans"
+        );
+        m.style = None;
+        let cut = parts(metric_line(&m, &pal, 21));
+        assert_eq!(cut[0], ("USD".into(), Some(pal.label)));
+        assert_eq!(
+            cut[1],
+            ("  4…".into(), Some(pal.value)),
+            "the cut span keeps its colour"
+        );
+        m.style = Some(MetricStyle::Bright);
+        m.label_spans = None;
+        m.value_spans = None;
+        let bright = parts(metric_line(&m, &pal, 30));
+        assert!(
+            bright.iter().all(|(_, c)| *c == Some(pal.value)),
+            "{bright:?}"
+        );
+
+        let mut month = MetricItem::text("", "30d");
+        month.min_width = Some(25);
+        let card = |w: usize| {
+            let data = PluginData {
+                id: "fx".into(),
+                title: "FX".into(),
+                metrics: vec![MetricItem::text("USD", "1"), month.clone()],
+                error: None,
+                lua_bytes: None,
+            };
+            let ok = plugin_card(
+                &PluginCard {
+                    data: data.clone(),
+                    status: PluginStatus::Ok,
+                },
+                &pal,
+                w,
+            );
+            let failed = plugin_card(
+                &PluginCard {
+                    data,
+                    status: PluginStatus::Error("x".into()),
+                },
+                &pal,
+                w,
+            );
+            (ok.lines.len(), failed.lines.len())
+        };
+        assert_eq!(card(25), (2, 3), "wide enough: both rows");
+        assert_eq!(card(24), (1, 2), "narrower than min_width: the row goes");
     }
 
     #[test]

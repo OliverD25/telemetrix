@@ -430,15 +430,17 @@ Cloudflare's servers can be farther away, so its numbers are often lower.
 Settings you can change in the `s` box:
 
 - **Currency:** the primary bank, `mono` or `privat`. The card shows that
-  bank's buy and sell rates in a table, with one grey line of 7-day and
-  30-day graphs (of the official NBU rate) under each currency. The other
+  bank's buy and sell rates next to each currency code. On the right, a
+  grey column shows the 7-day graph of the official NBU rate on the
+  currency's line and the 30-day graph on the line under it; each change
+  is green when the rate rose and red when it fell. The other
   bank is only a backup: the card switches to it when the primary bank
   fails and has no rates from the last hour, and the title then says
   `(backup)`. Rates from a failed bank that are less than an hour old stay
   on the card with a red `stale since 14:32 (HTTP 429)` line. Monobank has
   no buy/sell rate for GBP, so the card shows its cross rate; PrivatBank
   has no GBP at all, so the card shows the NBU rate. On a card narrower
-  than about 40 characters the 30-day graph is left out. The list of
+  than 37 characters the graphs are left out and only the rates stay. The list of
   currencies (`currencies = ["USD", "EUR", "GBP"]`) is set in the file.
   The v0.2 keys `compact` and `show_month` are no longer used.
 - **Crypto:** the quote currency (default `USDT`). The coins

@@ -3,6 +3,26 @@
 All notable changes to telemetrix. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 0.3.1 — 2026-09-28
+
+### Changed
+
+- **Currency card layout:** the buy and sell rates now stand right next
+  to the currency code, in bright text. On the right, a dim column shows
+  the 7-day graph on the currency's line and the 30-day graph on the line
+  under it, so the labels, graphs and changes line up. Each change is
+  green when the rate rose and red when it fell. On a card narrower than
+  37 characters the 30-day lines go and only the rates stay; nothing
+  wraps.
+
+### Added
+
+- **Several colours in one plugin row:** a metric's `label` and `value`
+  can be a list of `{ text, style }` spans, and each span has its own
+  style. A new style, `bright`, uses the value colour.
+- **`min_width` on a metric:** the row is left out of cards narrower than
+  this many characters.
+
 ## 0.3.0 — 2026-09-28
 
 ### Added

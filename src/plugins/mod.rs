@@ -21,9 +21,23 @@ pub struct MetricItem {
     pub bad: bool,
     /// How the row looks, from the metric's optional `style` field.
     pub style: Option<MetricStyle>,
+    /// Set when the plugin sent `label` as a list of spans; their texts make `label`.
+    pub label_spans: Option<Vec<TextSpan>>,
+    /// Set when the plugin sent `value` as a list of spans; their texts make `value`.
+    pub value_spans: Option<Vec<TextSpan>>,
+    /// The row is left out of cards narrower than this many characters.
+    pub min_width: Option<usize>,
 }
 
-/// `style = "dim" | "header" | "good" | "bad"` on a metric.
+/// One `{ text, style }` piece of a label or a value.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextSpan {
+    pub text: String,
+    /// `None`: the plain look of its part, whatever the row's `style`.
+    pub style: Option<MetricStyle>,
+}
+
+/// `style = "dim" | "header" | "good" | "bad" | "bright"` on a metric or a span.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MetricStyle {
     /// Quieter than normal rows; dropped value when the row is too narrow.
@@ -34,6 +48,8 @@ pub enum MetricStyle {
     Good,
     /// The value (or, without a value, the label) in the warning colour.
     Bad,
+    /// The label and the value in the value colour.
+    Bright,
 }
 
 impl MetricStyle {
@@ -44,6 +60,7 @@ impl MetricStyle {
             "header" => Some(Self::Header),
             "good" => Some(Self::Good),
             "bad" => Some(Self::Bad),
+            "bright" => Some(Self::Bright),
             _ => None,
         }
     }
@@ -54,6 +71,7 @@ impl MetricStyle {
             Self::Header => "header",
             Self::Good => "good",
             Self::Bad => "bad",
+            Self::Bright => "bright",
         }
     }
 }
@@ -66,6 +84,9 @@ impl MetricItem {
             trend: None,
             bad: false,
             style: None,
+            label_spans: None,
+            value_spans: None,
+            min_width: None,
         }
     }
 }

@@ -110,6 +110,7 @@ Add `style` to a metric to change how its row looks:
 | `"dim"` | grey, quieter than the other rows | extra details under a main row |
 | `"good"` | the value in green | a value that is fine |
 | `"bad"` | the value in red | a value that needs attention, like old data |
+| `"bright"` | the label and the value in the value colour | text that must stand out |
 
 With `good` or `bad` and an empty value, the label takes the colour, for
 a one-line note like `stale since 14:32 (HTTP 429)`.
@@ -117,7 +118,6 @@ a one-line note like `stale since 14:32 (HTTP 429)`.
 ```lua
 { label = "", value = "     buy      sell", style = "header" },
 { label = "USD", value = "   44.63     45.03" },
-{ label = "  7d ▁▂▃▅▇▆█ +0.69%", value = "30d ▂▃▄▃▅▆█ +0.96%", style = "dim" },
 { label = "stale since 14:32 (HTTP 429)", value = "", style = "bad" },
 ```
 
@@ -127,6 +127,42 @@ a one-line note like `stale since 14:32 (HTTP 429)`.
 - A row with a `trend` graph ignores `style`.
 - The value of a row is right-aligned. Give values the same width (pad them
   with spaces) and they line up as columns.
+
+### Several colours in one row
+
+`label` and `value` can also be a list of spans, `{ text = "...", style = "..." }`.
+The texts are joined in order. Each span's `style` (one of the names above)
+colours only its own text. A span without a `style`, or with an unknown one,
+has the plain colour of its part: the label colour in a label, the value
+colour in a value. The row's own `style` still decides what happens on a
+narrow card, and colours the parts that are plain text.
+
+```lua
+{
+  label = { { text = "USD" }, { text = "  44.63   45.03", style = "bright" } },
+  value = { { text = " 7d ▂▃▅▆▇▇▆ ", style = "dim" }, { text = "+0.30%", style = "good" } },
+  style = "dim",   -- on a narrow card the graph goes and the rates stay
+},
+{ label = "", value = { { text = "30d ▂▁▃▄▅▆█ ", style = "dim" }, { text = "+0.67%", style = "good" } },
+  style = "dim", min_width = 37 },
+```
+
+```
+USD  44.63   45.03   7d ▂▃▅▆▇▇▆ +0.30%
+                    30d ▂▁▃▄▅▆█ +0.67%
+```
+
+A span without `text` is an error for the whole update. Spans are ignored on
+a row with a `trend` graph; its text is still shown.
+
+### Rows for wide cards only
+
+Add `min_width`, a number of characters, and the row is left out of cards
+that are narrower inside their frame. Use it for a detail row that only makes
+sense next to another row's value, like the 30-day row above: the `USD` row
+is 37 characters wide, so on a narrower card it drops its graph, and the
+30-day row goes too. A `min_width` that is not a whole number of 0 or more
+is ignored.
 
 ## Settings for your plugin
 
@@ -585,12 +621,14 @@ These files live in `plugins/` in the repository and are built into the
 program, which installs them into the plugin home. The README describes
 each data source and its free limits.
 
-- **currency:** a good example of `style`. The `buy  sell` row is a
-  `header`, the graph lines under each currency are `dim`, and a stale
-  footer is `bad`. The small graphs are built in Lua from bar characters,
-  so two of them fit on one line; the engine's `trend` graph always fills
-  the whole row. On a narrow card the `dim` line drops its value, which is
-  the 30-day part.
+- **currency:** a good example of `style`, spans and `min_width`. The
+  `buy  sell` row is a `header`. Each currency has two rows: the code with
+  its bright rates, and on the right the dim 7-day graph with its change
+  in green or red; under it, the 30-day graph. A stale footer is `bad`. The
+  small graphs are built in Lua from bar characters, so they keep a fixed
+  width and line up; the engine's `trend` graph always fills the whole row.
+  On a card narrower than 37 characters the 30-day rows go (`min_width`)
+  and the first row drops its graph (`dim`), so only the rates stay.
 - **weather:** Weather data by Open-Meteo.com (CC BY 4.0). The license
   requires attribution, so the card ends with a dim `data: Open-Meteo.com`
   line; keep it when you change the plugin. Temperatures follow
