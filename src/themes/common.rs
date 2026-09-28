@@ -329,42 +329,62 @@ pub fn place(
             })
             .collect();
     }
-    // Cards may land in any column, so they get the narrowest width.
-    let w = cols
-        .iter()
-        .map(|(c, _)| text_width(*c, pal))
-        .min()
-        .unwrap_or(0);
-    let mut all: Vec<Card> = cols
-        .iter()
-        .flat_map(|(_, groups)| groups.iter().copied())
-        .flat_map(|g| visible(g, w))
-        .collect();
-    // Stable: unlisted cards keep their default order after the listed ones.
-    all.sort_by_key(|c| {
-        opts.order
+    let mut ordered = |w: usize| -> Vec<Card> {
+        let mut all: Vec<Card> = cols
             .iter()
-            .position(|o| *o == c.id)
-            .unwrap_or(usize::MAX)
-    });
-    let mut out: Vec<Vec<Card>> = cols.iter().map(|_| Vec::new()).collect();
+            .flat_map(|(_, groups)| groups.iter().copied())
+            .flat_map(|g| visible(g, w))
+            .collect();
+        // Stable: unlisted cards keep their default order after the listed ones.
+        all.sort_by_key(|c| {
+            opts.order
+                .iter()
+                .position(|o| *o == c.id)
+                .unwrap_or(usize::MAX)
+        });
+        all
+    };
+    let widths: Vec<usize> = cols.iter().map(|(c, _)| text_width(*c, pal)).collect();
+    let min_w = widths.iter().copied().min().unwrap_or(0);
+    let first = ordered(min_w);
+    // Which column each card goes to: a column is full when the next card
+    // does not fit, or when it already holds its share of all the rows.
+    let total: usize = first
+        .iter()
+        .map(|c| card_height(c, pal) + usize::from(gap))
+        .sum();
+    let share = total.div_ceil(cols.len().max(1));
+    let mut column_of = Vec::with_capacity(first.len());
     let (mut c, mut used) = (0, 0usize);
-    for card in all {
-        let h = card_height(&card, pal);
-        let need = if out[c].is_empty() {
-            h
-        } else {
-            h + usize::from(gap)
-        };
-        if c + 1 < cols.len() && !out[c].is_empty() && used + need > usize::from(cols[c].0.height) {
+    for card in &first {
+        let h = card_height(card, pal);
+        let need = if used == 0 { h } else { h + usize::from(gap) };
+        let full = used + need > usize::from(cols[c].0.height) || used >= share;
+        if used > 0 && full && c + 1 < cols.len() {
             c += 1;
-            used = 0;
-            out[c].push(card);
-            used += h;
-            continue;
+            used = h;
+        } else {
+            used += need;
         }
-        out[c].push(card);
-        used += need;
+        column_of.push(c);
+    }
+    // The same cards again at each column's own width, so text lines up
+    // with the frame as it does without an order.
+    let mut out: Vec<Vec<Card>> = cols.iter().map(|_| Vec::new()).collect();
+    let mut by_width: Vec<(usize, Vec<Option<Card>>)> =
+        vec![(min_w, first.into_iter().map(Some).collect())];
+    for (i, col) in column_of.into_iter().enumerate() {
+        let w = widths[col];
+        let slot = match by_width.iter().position(|(bw, _)| *bw == w) {
+            Some(p) => p,
+            None => {
+                by_width.push((w, ordered(w).into_iter().map(Some).collect()));
+                by_width.len() - 1
+            }
+        };
+        if let Some(card) = by_width[slot].1.get_mut(i).and_then(Option::take) {
+            out[col].push(card);
+        }
     }
     out
 }
