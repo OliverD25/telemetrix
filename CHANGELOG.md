@@ -11,8 +11,10 @@ All notable changes to telemetrix. Versions follow
   currency's 30-day graph shows the official NBU rate over the last year,
   with its change in green or red, lined up with the 7-day and 30-day
   parts. The daily NBU request now asks for 366 days instead of 31: still
-  one request per currency and day, about 75 KB each. The store keeps only
-  the 366 numbers (about 9 KB for three currencies). A store from 0.3.1
+  one request per currency and day, about 75 KB each. The plugin reads
+  the rates straight from the answer text instead of decoding the JSON,
+  so a year costs little memory. The store keeps only the 366 numbers
+  (about 9 KB for three currencies). A store from 0.3.1
   holds 31 days, so the first update after the upgrade fetches the year
   at once. The new `show_year` setting (on by default, also in the `s`
   box) turns the year rows off. On a card narrower than 37 characters all

@@ -592,6 +592,23 @@ mod currency {
         assert_eq!(h.asked_for("NBU_Exchange"), 9, "then once a day again");
     }
 
+    /// The whole field set of a real NBU answer: only `rate` is read, not
+    /// `rate_per_unit` or the other numbers.
+    #[test]
+    fn nbu_rates_are_read_from_the_answer_text() {
+        let mut routes = routes();
+        routes.insert(0, ("valcode=usd", Answer::File("nbu_usd_fields.json")));
+        let h = Harness::new("currency", "", &routes);
+        h.run(Trigger::Start);
+        let points: Vec<f64> = h
+            .plugin
+            .lua()
+            .load("return telemetrix.store_get().nbu.USD")
+            .eval()
+            .unwrap();
+        assert_eq!(points, [44.6648, 44.6743, 44.7071]);
+    }
+
     /// Decoding three year answers must fit easily in the plugin's memory.
     #[test]
     fn a_year_of_history_fits_in_little_lua_memory() {

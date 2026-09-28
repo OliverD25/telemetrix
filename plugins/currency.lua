@@ -25,13 +25,21 @@ local UAH = 980
 -- ISO 4217 numbers, as Monobank sends them.
 local ISO = { USD = 840, EUR = 978, GBP = 826, PLN = 985, CHF = 756, CZK = 203, JPY = 392 }
 
-local function get_json(url)
+local function get_text(url)
   local body, status = telemetrix.http_get(url)
   if not body then
     return nil, status
   end
   if status ~= 200 then
     return nil, "HTTP " .. status
+  end
+  return body
+end
+
+local function get_json(url)
+  local body, err = get_text(url)
+  if not body then
+    return nil, err
   end
   local data = telemetrix.json_decode(body)
   if type(data) ~= "table" then
@@ -70,12 +78,13 @@ local function parse_privat(list)
   return rates
 end
 
-local function parse_nbu(list)
+-- The `rate` numbers of an NBU answer, in order. A year is about 75 KB of
+-- JSON; decoding it into tables would cost far more memory than the 366
+-- numbers the card keeps, so the numbers are read from the text.
+local function parse_nbu(text)
   local points = {}
-  for _, r in ipairs(list) do
-    if type(r.rate) == "number" then
-      points[#points + 1] = r.rate
-    end
+  for rate in text:gmatch('"rate"%s*:%s*([%d%.eE+-]+)') do
+    points[#points + 1] = tonumber(rate)
   end
   return points
 end
@@ -106,8 +115,8 @@ local function refresh_history(store, currencies, now)
   local complete = true
   store.nbu = store.nbu or {}
   for _, cur in ipairs(currencies) do
-    local data = get_json(string.format(NBU_URL, first, last, cur:lower()))
-    local points = data and parse_nbu(data)
+    local text = get_text(string.format(NBU_URL, first, last, cur:lower()))
+    local points = text and parse_nbu(text)
     if points and #points >= 2 then
       store.nbu[cur] = points
     else
