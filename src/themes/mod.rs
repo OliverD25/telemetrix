@@ -3,6 +3,7 @@ pub mod crt_amber;
 pub mod cyberpunk;
 pub mod matrix;
 pub mod minimalist;
+pub mod nasa;
 pub mod tokyo_night;
 
 use std::time::Duration;
@@ -12,6 +13,21 @@ use ratatui::layout::Rect;
 
 use crate::app::AppState;
 use crate::config::Config;
+
+/// Above this many cells a frame costs enough that 10 FPS is the ceiling.
+pub const LARGE_AREA: u32 = 20_000;
+const LARGE_AREA_FPS: u32 = 10;
+/// Larger gaps (a stall, a pause) would make an animation jump at once.
+pub const MAX_STEP: Duration = Duration::from_millis(200);
+
+/// The frame interval of an animated theme on a screen of `cells` cells.
+pub fn animation_interval(cfg: &Config, cells: u32) -> Duration {
+    let mut fps = cfg.general.fps.max(1);
+    if cells > LARGE_AREA {
+        fps = fps.min(LARGE_AREA_FPS);
+    }
+    Duration::from_secs_f64(1.0 / f64::from(fps))
+}
 
 pub trait Theme {
     fn name(&self) -> &'static str;
@@ -29,6 +45,7 @@ pub fn all() -> Vec<Box<dyn Theme>> {
         Box::new(tokyo_night::TokyoNight),
         Box::new(crt_amber::CrtAmber),
         Box::new(cyberpunk::Cyberpunk),
+        Box::new(nasa::Nasa),
     ]
 }
 

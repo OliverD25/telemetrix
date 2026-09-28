@@ -426,15 +426,20 @@ mod tests {
                 let s = demo::state(theme);
                 let t = text(&demo::render(&s, w, h));
                 let at = format!("{theme} {w}x{h}");
-                assert!(t.contains(" GPU "), "{at}: card title");
+                // Themes name the cards in their own style: `Disks`, `DISKS`, `disks`.
+                let lower = t.to_lowercase();
+                assert!(lower.contains(" gpu "), "{at}: card title");
                 assert!(t.contains("NVIDIA GeForce"), "{at}: the name");
-                assert!(
-                    t.contains("vram") && t.contains("9.0 GiB / 24.0 GiB"),
-                    "{at}"
-                );
+                let (vram, load): (&[&str], &str) = match *theme {
+                    "nasa" => (&["GPU-VRU", "9.0 GiB", "24.0 GiB"], "37.0 %"),
+                    _ => (&["vram", "9.0 GiB / 24.0 GiB"], " 37%"),
+                };
+                for needle in vram {
+                    assert!(t.contains(needle), "{at}: {needle}");
+                }
                 assert!(t.contains("45.0 °C") && t.contains("112.4 W"), "{at}");
-                assert!(t.contains(" 37%"), "{at}: the load gauge");
-                assert!(t.contains(" Disks ") && t.contains(" CPU "), "{at}");
+                assert!(t.contains(load), "{at}: the load");
+                assert!(lower.contains(" disks ") && lower.contains(" cpu "), "{at}");
             }
         }
     }

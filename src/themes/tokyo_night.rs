@@ -3,6 +3,7 @@ use std::time::Duration;
 use ratatui::Frame;
 use ratatui::style::Color;
 use ratatui::symbols::border;
+use ratatui::widgets::Borders;
 
 use super::Theme;
 use super::common::{self, Palette};
@@ -27,6 +28,8 @@ pub fn palette() -> Palette {
         warn: Color::Rgb(0xf7, 0x76, 0x8e),
         rise: Color::Rgb(0x9e, 0xce, 0x6a),
         muted: Color::Rgb(0x56, 0x5f, 0x89),
+        gauge: common::BLOCK_GAUGE,
+        borders: Borders::ALL,
     }
 }
 

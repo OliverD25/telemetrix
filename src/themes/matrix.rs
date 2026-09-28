@@ -5,8 +5,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
-use super::Theme;
 use super::common::{self, mix_white, scale};
+use super::{MAX_STEP, Theme};
 use crate::app::AppState;
 use crate::config::Config;
 
@@ -17,11 +17,6 @@ const NAMED: [(&str, (u8, u8, u8)); 4] = [
     ("cyan", (0, 215, 255)),
     ("white", (220, 220, 220)),
 ];
-/// Above this many cells a frame costs enough that 10 FPS is the ceiling.
-const LARGE_AREA: u32 = 20_000;
-const LARGE_AREA_FPS: u32 = 10;
-/// Larger gaps (a stall, a pause) would make every drop jump at once.
-const MAX_STEP: Duration = Duration::from_millis(200);
 
 /// Tiny xorshift generator, so no `rand` crate is needed.
 pub struct Rng(u64);
@@ -213,11 +208,7 @@ impl Theme for Matrix {
     }
 
     fn frame_interval(&self, cfg: &Config) -> Option<Duration> {
-        let mut fps = cfg.general.fps.max(1);
-        if self.cells > LARGE_AREA {
-            fps = fps.min(LARGE_AREA_FPS);
-        }
-        Some(Duration::from_secs_f64(1.0 / f64::from(fps)))
+        Some(super::animation_interval(cfg, self.cells))
     }
 
     /// Advances by real elapsed time, so the rain speed does not depend on fps.

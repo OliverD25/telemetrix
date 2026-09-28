@@ -17,8 +17,8 @@ wrong value can never break.
 
 The Matrix theme in Windows Terminal: system cards on the left and in the
 middle, plugin cards on the right, digital rain behind them. Press `t` to
-switch to the quiet `minimalist` theme or to the `tokyo-night`, `crt-amber`
-and `cyberpunk` colour themes (see [Themes](#themes)).
+switch to the quiet `minimalist` theme or to one of the other themes (see
+[Themes](#themes)).
 
 ## Install
 
@@ -122,7 +122,7 @@ only `Ctrl+C` quits.
 | Flag | Meaning |
 |---|---|
 | `--config <path>` | use this settings file |
-| `--theme <name>` | `minimalist`, `matrix`, `tokyo-night`, `crt-amber` or `cyberpunk` |
+| `--theme <name>` | `minimalist`, `matrix`, `tokyo-night`, `crt-amber`, `cyberpunk` or `nasa` |
 | `--fps <n>` | frames per second for animated themes, 1..60 |
 | `--plugins-dir <dir>` | folder with `.lua` plugins |
 | `--no-plugins` | run no plugins |
@@ -168,14 +168,20 @@ These need no terminal window, so scripts and agents can use them.
   frames, and every second row a little darker, like scanlines.
 - **cyberpunk**: a neon HUD: magenta titles in `[ brackets ]`, cyan frames
   and yellow values on a near-black background.
+- **nasa**: a mission control console in white and amber on black. Every
+  value is a table row with a short code (`CPU-LD`, `MEM-US`, `DSK-C`), the
+  value, its unit and a status: NOMINAL, CAUTION (above 85 % of the warning
+  threshold) or WARNING. The top line shows the time since the computer
+  started (MET) and the UTC day and time (GMT). Static.
 
 Every theme except matrix is static: it redraws only when data changes, so
 it uses almost no CPU. Press `t` to try them with a live preview.
 
 All themes lay the cards out in three columns on wide terminals, two on
 medium ones and one on narrow ones. Below 40 by 10 cells the screen only says
-"terminal too small". They show the same cards and rows; only the colours,
-frames and background differ. The status bar and the boxes (`s`, `l`, `t`,
+"terminal too small". They show the same values. Most themes show the same
+cards and rows, and only the colours, frames and background differ. `nasa`
+shows the values as table rows. The status bar and the boxes (`s`, `l`, `t`,
 `?`) look the same in every theme.
 
 ### GPU card
@@ -253,9 +259,9 @@ On Linux, mounts of type nfs, nfs4, cifs, smb3, smbfs, fuse.sshfs and 9p go
 to the Network card. A hung network mount can still delay the disk
 readings there; protecting against that is planned after v0.1.
 
-**Roadmap:** the original brief lists eight more themes; three of them are
-here (tokyo-night, crt-amber, cyberpunk). The other five are planned for
-later versions.
+**Roadmap:** the original brief lists eight more themes; four of them are
+here (tokyo-night, crt-amber, cyberpunk, nasa). The other four are planned
+for later versions.
 
 ## Where plugins live
 
@@ -418,7 +424,7 @@ no longer matches the program.
 | Key | Default | Allowed values | In the `s` overlay | Meaning |
 |---|---|---|---|---|
 | `schema` | `1` | 1..1 | no, edit the file | format version of this file, do not change |
-| `general.theme` | `"matrix"` | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk | yes | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk |
+| `general.theme` | `"matrix"` | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa | yes | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa |
 | `general.fps` | `15` | 1..60 | yes | frames per second for animated themes, 1..60 |
 | `general.exit_on_any_key` | `false` | true \| false | yes | true = screensaver mode: any key quits |
 | `general.plugins_dir` | `""` | a file or folder path | no, edit the file | empty = the plugins folder next to this file; relative paths start there |

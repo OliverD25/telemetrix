@@ -61,6 +61,35 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
+/// The inverse of `civil_from_days`.
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let doy = (153 * i64::from((m + 9) % 12) + 2) / 5 + i64::from(d) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// `268:20:00:00`: the UTC day of the year and the time, as mission clocks show it.
+pub fn utc_day_clock(t: SystemTime) -> String {
+    let days = (unix_secs(t) / 86_400) as i64;
+    let (y, _, _) = civil_from_days(days);
+    let doy = days - days_from_civil(y, 1, 1) + 1;
+    format!("{doy:03}:{}", utc_hms(t))
+}
+
+/// `012:04:31:07`: days, hours, minutes and seconds.
+pub fn elapsed_clock(secs: u64) -> String {
+    format!(
+        "{:03}:{:02}:{:02}:{:02}",
+        secs / 86_400,
+        secs % 86_400 / 3_600,
+        secs % 3_600 / 60,
+        secs % 60
+    )
+}
+
 /// `20:00:00`, UTC.
 pub fn utc_hms(t: SystemTime) -> String {
     let s = unix_secs(t);
@@ -92,6 +121,12 @@ mod tests {
         let t = UNIX_EPOCH + Duration::from_secs(1_790_366_400);
         assert_eq!(utc_timestamp(t), "2026-09-25T20:00:00Z");
         assert_eq!(utc_hms(t), "20:00:00");
+        assert_eq!(utc_day_clock(t), "268:20:00:00");
+        assert_eq!(utc_day_clock(UNIX_EPOCH), "001:00:00:00");
+        let leap_end = UNIX_EPOCH + Duration::from_secs(1_095 * 86_400);
+        assert_eq!(utc_timestamp(leap_end), "1972-12-31T00:00:00Z");
+        assert_eq!(utc_day_clock(leap_end), "366:00:00:00");
+        assert_eq!(elapsed_clock(93_784), "001:02:03:04");
     }
 
     #[test]

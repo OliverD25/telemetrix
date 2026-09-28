@@ -7,7 +7,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Padding, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
 
 use crate::app::AppState;
 use crate::format;
@@ -42,7 +42,28 @@ pub struct Palette {
     pub rise: Color,
     /// `dim` rows and stale values.
     pub muted: Color,
+    pub gauge: Gauge,
+    /// Which sides of a card get a frame line.
+    pub borders: Borders,
 }
+
+/// How a percentage gauge is drawn.
+#[derive(Clone, Copy)]
+pub struct Gauge {
+    pub full: char,
+    pub empty: char,
+    /// Put around the gauge, like `[` and `]`.
+    pub ends: (&'static str, &'static str),
+    /// Fill the last cell in eighths (`▏▎▍▌▋▊▉`) for a finer reading.
+    pub eighths: bool,
+}
+
+pub const BLOCK_GAUGE: Gauge = Gauge {
+    full: '█',
+    empty: '░',
+    ends: ("", ""),
+    eighths: false,
+};
 
 pub fn minimalist_palette() -> Palette {
     Palette {
@@ -59,6 +80,8 @@ pub fn minimalist_palette() -> Palette {
         warn: WARN,
         rise: RISE,
         muted: MUTED,
+        gauge: BLOCK_GAUGE,
+        borders: Borders::ALL,
     }
 }
 
@@ -88,6 +111,8 @@ pub fn matrix_palette(c: (u8, u8, u8)) -> Palette {
         warn: WARN,
         rise: RISE,
         muted: MUTED,
+        gauge: BLOCK_GAUGE,
+        borders: Borders::ALL,
     }
 }
 
@@ -123,7 +148,7 @@ pub struct Card {
 }
 
 impl Card {
-    fn new(title: impl Into<String>, lines: Vec<Line<'static>>) -> Self {
+    pub fn new(title: impl Into<String>, lines: Vec<Line<'static>>) -> Self {
         Self {
             title: title.into(),
             title_color: None,
@@ -132,8 +157,8 @@ impl Card {
     }
 }
 
-#[derive(Clone, Copy)]
-enum Group {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Group {
     System,
     Gpu,
     Disks,
@@ -143,52 +168,95 @@ enum Group {
 /// Three columns from 96 cells wide, two from 64, else one. With fewer
 /// columns the GPU card comes after Disks, so the cards that were there
 /// before it keep their place when space runs out.
-pub fn draw_columns(frame: &mut Frame, body: Rect, state: &AppState, pal: &Palette, spaced: bool) {
-    let plan: &[&[Group]] = if body.width >= 96 {
+pub fn plan(width: u16) -> &'static [&'static [Group]] {
+    if width >= 96 {
         &[
             &[Group::System, Group::Gpu],
             &[Group::Disks],
             &[Group::Plugins],
         ]
-    } else if body.width >= 64 {
+    } else if width >= 64 {
         &[
             &[Group::System, Group::Disks, Group::Gpu],
             &[Group::Plugins],
         ]
     } else {
         &[&[Group::System, Group::Disks, Group::Gpu, Group::Plugins]]
-    };
-    let (margin, gap) = if spaced { (1, 1) } else { (0, 0) };
-    let columns = Layout::horizontal(vec![Constraint::Fill(1); plan.len()])
+    }
+}
+
+/// Each column's area and the card groups that go into it.
+pub fn columns(body: Rect, spaced: bool) -> Vec<(Rect, &'static [Group])> {
+    let plan = plan(body.width);
+    let margin = u16::from(spaced);
+    let rects = Layout::horizontal(vec![Constraint::Fill(1); plan.len()])
         .spacing(if spaced { 2 } else { 1 })
         .horizontal_margin(margin * 2)
         .vertical_margin(margin)
         .split(body);
-    for (col, groups) in columns.iter().zip(plan) {
-        let w = usize::from(col.width.saturating_sub(4));
-        let cards = groups
-            .iter()
-            .flat_map(|g| match g {
-                Group::System => system_cards(state, pal, w),
-                Group::Gpu => gpu_cards(state, pal, w),
-                Group::Disks => std::iter::once(disk_card(state, pal, w))
-                    .chain(network_card(state, pal, w))
-                    .collect(),
-                Group::Plugins => plugin_cards(state, pal, w),
-            })
-            .collect();
-        stack(frame, *col, cards, pal, gap);
+    rects.iter().copied().zip(plan.iter().copied()).collect()
+}
+
+/// The text width inside a card of a column this wide.
+pub fn text_width(col: Rect, pal: &Palette) -> usize {
+    let sides = [Borders::LEFT, Borders::RIGHT]
+        .iter()
+        .filter(|b| pal.borders.contains(**b))
+        .count() as u16;
+    usize::from(col.width.saturating_sub(2 + sides))
+}
+
+/// The standard cards of one group.
+pub fn group_cards(group: Group, state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
+    match group {
+        Group::System => system_cards(state, pal, w),
+        Group::Gpu => gpu_cards(state, pal, w),
+        Group::Disks => std::iter::once(disk_card(state, pal, w))
+            .chain(network_card(state, pal, w))
+            .collect(),
+        Group::Plugins => plugin_cards(state, pal, w),
     }
 }
 
-fn stack(frame: &mut Frame, col: Rect, cards: Vec<Card>, pal: &Palette, gap: u16) {
+pub fn draw_columns(frame: &mut Frame, body: Rect, state: &AppState, pal: &Palette, spaced: bool) {
+    draw_columns_with(frame, body, pal, spaced, |g, w| {
+        group_cards(g, state, pal, w)
+    });
+}
+
+/// Like `draw_columns`, with the cards of each group made by `make`.
+pub fn draw_columns_with(
+    frame: &mut Frame,
+    body: Rect,
+    pal: &Palette,
+    spaced: bool,
+    mut make: impl FnMut(Group, usize) -> Vec<Card>,
+) {
+    for (col, groups) in columns(body, spaced) {
+        let w = text_width(col, pal);
+        let cards = groups.iter().flat_map(|g| make(*g, w)).collect();
+        stack(frame, col, cards, pal, u16::from(spaced));
+    }
+}
+
+/// The rows a card takes: its lines and its top and bottom frame lines.
+pub fn card_height(card: &Card, pal: &Palette) -> usize {
+    let frame = [Borders::TOP, Borders::BOTTOM]
+        .iter()
+        .filter(|b| pal.borders.contains(**b))
+        .count();
+    card.lines.len() + frame
+}
+
+/// Draws the cards from the top of `col` down; the ones that do not fit are left out.
+pub fn stack(frame: &mut Frame, col: Rect, cards: Vec<Card>, pal: &Palette, gap: u16) {
     let mut y = col.y;
     for card in cards {
         let room = col.bottom().saturating_sub(y);
         if room < 3 {
             break;
         }
-        let want = u16::try_from(card.lines.len() + 2).unwrap_or(u16::MAX);
+        let want = u16::try_from(card_height(&card, pal)).unwrap_or(u16::MAX);
         let rect = Rect::new(col.x, y, col.width, want.min(room));
         render_card(frame, rect, card, pal);
         y += rect.height + gap;
@@ -202,7 +270,8 @@ fn render_card(frame: &mut Frame, rect: Rect, card: Card, pal: &Palette) {
         style = style.bg(bg);
     }
     let (open, close) = pal.brackets;
-    let block = Block::bordered()
+    let block = Block::new()
+        .borders(pal.borders)
         .border_set(pal.border_set)
         .border_style(fg(pal.border))
         .padding(Padding::horizontal(1))
@@ -246,14 +315,32 @@ pub fn fit(text: &str, max: usize) -> String {
     out
 }
 
-/// A block-glyph gauge with the percentage at the right end.
+/// A gauge in the palette's glyphs with the percentage at the right end.
 pub fn bar(pct: f32, width: usize, pal: &Palette, warn: bool) -> Line<'static> {
-    let bar_w = width.saturating_sub(6);
-    let filled = ((pct / 100.0).clamp(0.0, 1.0) * bar_w as f32).round() as usize;
+    let g = pal.gauge;
+    let (open, close) = g.ends;
+    let bar_w = width.saturating_sub(6 + open.chars().count() + close.chars().count());
+    let fill = (pct / 100.0).clamp(0.0, 1.0) * bar_w as f32;
+    let (filled, part) = if g.eighths {
+        let eighths = (fill * 8.0).round() as usize;
+        (eighths / 8, eighths % 8)
+    } else {
+        (fill.round() as usize, 0)
+    };
     let color = if warn { pal.warn } else { pal.bar };
+    let mut body: String = std::iter::repeat_n(g.full, filled).collect();
+    if part > 0 {
+        body.push(EIGHTHS[part - 1]);
+    }
+    let rest = bar_w.saturating_sub(filled + usize::from(part > 0));
     Line::from(vec![
-        Span::styled("█".repeat(filled), fg(color)),
-        Span::styled("░".repeat(bar_w - filled), fg(pal.bar_empty)),
+        Span::styled(open, fg(pal.border)),
+        Span::styled(body, fg(color)),
+        Span::styled(
+            std::iter::repeat_n(g.empty, rest).collect::<String>(),
+            fg(pal.bar_empty),
+        ),
+        Span::styled(close, fg(pal.border)),
         Span::styled(
             format!(" {pct:>4.0}%"),
             fg(if warn { pal.warn } else { pal.value }),
@@ -261,13 +348,16 @@ pub fn bar(pct: f32, width: usize, pal: &Palette, warn: bool) -> Line<'static> {
     ])
 }
 
+/// Left blocks from one eighth to seven eighths of a cell.
+const EIGHTHS: [char; 7] = ['▏', '▎', '▍', '▌', '▋', '▊', '▉'];
+
 fn spark(history: &VecDeque<f32>, width: usize, color: Color) -> Line<'static> {
     let skip = history.len().saturating_sub(width);
     let values: Vec<f32> = history.iter().skip(skip).copied().collect();
     Line::styled(format::sparkline(&values, width), fg(color))
 }
 
-fn used_of(used: u64, total: u64, state: &AppState) -> String {
+pub fn used_of(used: u64, total: u64, state: &AppState) -> String {
     let unit = state.config.units.bytes;
     format!(
         "{} / {}",
@@ -276,7 +366,7 @@ fn used_of(used: u64, total: u64, state: &AppState) -> String {
     )
 }
 
-fn system_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
+pub fn system_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
     let Some(s) = &state.snapshot else {
         let wait = Line::styled("waiting for metrics", fg(pal.label));
         return vec![Card::new("CPU", vec![wait])];
@@ -339,7 +429,7 @@ fn system_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
 }
 
 /// One card per GPU; none without readings or with `gpu.enabled = false`.
-fn gpu_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
+pub fn gpu_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
     let cfg = &state.config;
     let gpus = match &state.snapshot {
         Some(s) if cfg.gpu.enabled => &s.gpus,
@@ -383,7 +473,7 @@ fn gpu_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
         .collect()
 }
 
-fn disk_card(state: &AppState, pal: &Palette, w: usize) -> Card {
+pub fn disk_card(state: &AppState, pal: &Palette, w: usize) -> Card {
     let disks = state
         .snapshot
         .as_ref()
@@ -413,7 +503,7 @@ fn disk_card(state: &AppState, pal: &Palette, w: usize) -> Card {
 }
 
 /// The Network card, drawn like Disks; `None` when there is nothing to show.
-fn network_card(state: &AppState, pal: &Palette, w: usize) -> Option<Card> {
+pub fn network_card(state: &AppState, pal: &Palette, w: usize) -> Option<Card> {
     let cfg = &state.config.disks;
     if !cfg.show_network {
         return None;
@@ -450,7 +540,7 @@ fn network_card(state: &AppState, pal: &Palette, w: usize) -> Option<Card> {
     Some(Card::new("Network", lines))
 }
 
-fn plugin_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
+pub fn plugin_cards(state: &AppState, pal: &Palette, w: usize) -> Vec<Card> {
     let mut cards: Vec<Card> = state
         .plugins
         .values()
@@ -482,7 +572,7 @@ pub fn wrap_chars(text: &str, width: usize) -> Vec<String> {
         .collect()
 }
 
-fn plugin_card(card: &PluginCard, pal: &Palette, w: usize) -> Card {
+pub fn plugin_card(card: &PluginCard, pal: &Palette, w: usize) -> Card {
     let d = &card.data;
     match &card.status {
         PluginStatus::Ok => Card::new(

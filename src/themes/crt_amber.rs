@@ -5,6 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::symbols::border;
+use ratatui::widgets::Borders;
 
 use super::Theme;
 use super::common::{self, Palette, scale};
@@ -32,6 +33,8 @@ pub fn palette() -> Palette {
         warn: Color::Rgb(255, 84, 32),
         rise: Color::Rgb(255, 232, 160),
         muted: scale(AMBER, 0.42),
+        gauge: common::BLOCK_GAUGE,
+        borders: Borders::ALL,
     }
 }
 

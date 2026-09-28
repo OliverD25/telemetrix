@@ -3,6 +3,15 @@
 All notable changes to telemetrix. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- **nasa theme:** a mission control console. Every value is a row with a
+  code, the value, its unit and a NOMINAL, CAUTION or WARNING status, in
+  white and amber on black, under a line with the time since start (MET)
+  and the UTC time (GMT). Static.
+
 ## 0.2.0 (not released yet)
 
 ### Added
