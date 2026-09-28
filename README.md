@@ -96,7 +96,8 @@ telemetrix --exit-on-any-key      # screensaver mode: any key quits
 | Key | What it does |
 |---|---|
 | `q`, `Esc`, `Ctrl+C` | quit (`Esc` closes an open box first) |
-| `t` | open the theme box: `Up`/`Down` (or `t`/`T`) preview each theme live, `Enter` saves it, `Esc` goes back; `q` does not quit while the box is open |
+| `t` | open the theme box: `Up`/`Down` (or `t`/`T`) preview each theme live, `Enter` saves it, `Esc` goes back; `q` does not quit while the box is open. `Right` or `o` opens the options of the highlighted theme (see [Options per theme](#options-per-theme)) |
+| `v` | the next CPU view of the current theme: bar, chart, both (saved at once) |
 | `s` | settings: every change is saved at once |
 | `+` / `-` | more / fewer frames per second (saved) |
 | `space` | pause the animation |
@@ -211,6 +212,61 @@ table rows, `kernel-log` as log records next to a status block, and
 themes lay the cards out in three columns on wide terminals, two on medium
 ones and one on narrow ones. The status bar and the boxes (`s`, `l`, `t`,
 `?`) look the same in every theme.
+
+### Options per theme
+
+Every theme has its own options in its own table, `[theme.<name>]`. A
+change in one theme never changes another.
+
+```toml
+[theme.synthwave]
+cpu_view = "chart"          # bar | chart | both
+ram_view = "bar"            # bar | chart | both
+chart_height = "tall"       # small | medium | tall
+hide = ["swap", "clock"]    # cards not shown
+order = ["crypto", "cpu"]   # these cards first, in this order
+accent = "cyan"             # default, a colour name or #rrggbb
+```
+
+- **`cpu_view`, `ram_view`:** `bar` is the one-line gauge. `chart` is the
+  tall history chart of ascii-dashboard: a scale from 0 to 100, the
+  columns coloured by height, and a line with the average and the peak.
+  `both` shows the chart and the gauge. ascii-dashboard uses `chart` by
+  default, every other theme `bar`. The chart shows the last
+  `metrics.history_len` samples that fit the card.
+- **`chart_height`:** the most rows one chart takes: 4, 10 or 20. A chart
+  never takes more than the space its column has left, and never fewer
+  than 2 rows.
+- **`hide`:** card ids that are not shown. The ids are `cpu`, `ram`,
+  `swap`, `gpu`, `disks`, `network` and the plugin ids (the file names,
+  like `clock`, `crypto`, `currency`, `hosts`, `weather`, `speedtest`,
+  `network_ping`, `uptime`). An id that names no card gets one warning in
+  the log and in `telemetrix config check`, and is ignored.
+- **`order`:** the listed cards come first, in that order; the others
+  follow in their usual order. The cards then fill the columns one after
+  another. With an empty `order` the system cards stay on the left and the
+  plugins on the right.
+- **`accent`:** the main colour of the theme: the card titles and gauges,
+  the phosphor colour of crt-amber and pip-boy, the codes of nasa and the
+  titles of kernel-log. matrix keeps its `color` key for this.
+
+nasa draws its tables either way; a `chart` view adds the chart under its
+rows. kernel-log shows no bars or charts, so the views and the chart
+height do nothing there, and the options boxes say "(not used by this
+theme)". `hide`, `order` and `accent` work in every theme.
+
+Three ways to change them:
+
+- **The `t` box:** highlight a theme and press `Right` or `o`. The
+  options box shows CPU view, RAM view, chart height, accent and every
+  card with `[x]` (shown) or `[ ]` (hidden). `Up`/`Down` move,
+  `Left`/`Right` or `Enter` change a value, `Space` switches a card on or
+  off, `[` and `]` (or `Shift` with `Up`/`Down`) move a card in the order.
+  Every change shows at once behind the box. `s` or the Save row writes
+  all changes of that theme to the file in one step; `Esc` puts them back.
+- **The `s` box:** its first group, "theme: <current theme>", has the same
+  rows (without the order) and saves every change at once.
+- **`v`** cycles the CPU view of the current theme and saves it.
 
 ### GPU card
 
@@ -491,6 +547,12 @@ no longer matches the program.
 | `theme.matrix.speed` | `1.0` | 0.1..5.0 | yes | 0.1..5.0 |
 | `theme.matrix.color` | `"green"` | green \| amber \| cyan \| white \| #rrggbb | yes | green \| amber \| cyan \| white \| #rrggbb |
 | `theme.minimalist.show_sparklines` | `true` | true \| false | yes | history graphs under CPU and RAM |
+| `theme.<name>.cpu_view` | `"bar"`; ascii-dashboard `"chart"` | bar \| chart \| both | yes; also in the `t` options panel | bar \| chart \| both |
+| `theme.<name>.ram_view` | `"bar"`; ascii-dashboard `"chart"` | bar \| chart \| both | yes; also in the `t` options panel | bar \| chart \| both |
+| `theme.<name>.chart_height` | `"medium"` | small \| medium \| tall | yes; also in the `t` options panel | small \| medium \| tall: the most rows a chart takes |
+| `theme.<name>.hide` | `[]` | list of card ids | cards on/off; also in the `t` options panel | cards not shown: cpu, ram, swap, gpu, disks, network or a plugin id |
+| `theme.<name>.order` | `[]` | list of card ids | no; in the `t` options panel | cards shown first, in this order; empty = system cards left, plugins right |
+| `theme.<name>.accent` | `"default"` | default \| red \| orange \| amber \| yellow \| green \| cyan \| blue \| purple \| magenta \| pink \| white \| #rrggbb | yes; also in the `t` options panel | the theme's main colour: default, a colour name or #rrggbb |
 
 ## Memory and CPU
 

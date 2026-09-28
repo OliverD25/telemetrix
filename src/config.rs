@@ -1568,9 +1568,19 @@ pub fn reference_markdown() -> String {
         "| Key | Default | Allowed values | In the `s` overlay | Meaning |\n|---|---|---|---|---|\n",
     );
     for s in SETTINGS.iter() {
-        if s.theme_option {
+        // The keys of minimalist stand for the same keys of every theme.
+        let theme_key = s.path.strip_prefix("theme.minimalist.");
+        if s.theme_option && theme_key.is_none() {
             continue;
         }
+        let path = match theme_key {
+            Some(key) if s.theme_option => format!("theme.<name>.{key}"),
+            _ => s.path.to_string(),
+        };
+        let default = match theme_key {
+            Some("cpu_view" | "ram_view") => r#""bar"`; ascii-dashboard `"chart""#.into(),
+            _ => s.default.to_string(),
+        };
         let allowed = match &s.kind {
             Kind::Enum(options) => options.join(r" \| "),
             Kind::Int { min, max } => format!("{min}..{max}"),
@@ -1583,15 +1593,15 @@ pub fn reference_markdown() -> String {
             Kind::Accent => format!(r"{} \| #rrggbb", ACCENT_NAMES.join(r" \| ")),
             Kind::CardList => "list of card ids".into(),
         };
-        let overlay = if s.tui_editable {
-            "yes"
-        } else {
-            "no, edit the file"
+        let overlay = match (theme_key, s.theme_option, s.tui_editable) {
+            (Some("hide"), true, _) => "cards on/off; also in the `t` options panel",
+            (Some("order"), true, _) => "no; in the `t` options panel",
+            (_, true, _) => "yes; also in the `t` options panel",
+            (_, false, true) => "yes",
+            _ => "no, edit the file",
         };
         out.push_str(&format!(
-            "| `{}` | `{}` | {allowed} | {overlay} | {} |\n",
-            s.path,
-            s.default,
+            "| `{path}` | `{default}` | {allowed} | {overlay} | {} |\n",
             s.help.replace('|', r"\|")
         ));
     }

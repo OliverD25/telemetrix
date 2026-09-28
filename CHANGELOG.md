@@ -25,6 +25,14 @@ All notable changes to telemetrix. Versions follow
   - `ascii-dashboard`: large block-character charts of the CPU and RAM
     history, and horizontal block bars for disks, GPUs and swap that fill
     in eighths of a cell. Static.
+- **Options per theme:** every theme has its own `[theme.<name>]` table:
+  `cpu_view` and `ram_view` (a gauge, the tall history chart of
+  ascii-dashboard, or both), `chart_height`, `hide` and `order` of the
+  cards, and an `accent` colour. They are changed in the `t` box (`Right`
+  or `o` opens the options of the highlighted theme, with a live preview
+  and one save for that theme), in the first group of the `s` box, and
+  with `v`, which cycles the CPU view. The defaults keep every theme's
+  look.
 - **Updates from GitHub Releases:** `telemetrix update [--check]
   [--dry-run] [--force]` downloads the program for this platform from the
   latest release of `OliverD25/telemetrix`, checks its SHA-256 against the
@@ -66,7 +74,9 @@ All notable changes to telemetrix. Versions follow
   `country` setting (default `UA`) come first.
 - The Disks and Network cards list drives by letter, as Windows Explorer
   does; on Linux `/` comes first, then the other mount points in order.
-- `u` is a reserved key now; a plugin cannot use it as its run key.
+- `u` and `v` are reserved keys now; a plugin cannot use them as its run
+  key.
+- The status bar lists `v view` among its hints.
 
 ### Fixed
 
