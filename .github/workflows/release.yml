@@ -1,5 +1,7 @@
 # On a tag like v0.2.0: build release binaries for Windows and Linux and
-# attach them to a GitHub Release with that name.
+# attach them to a GitHub Release with that name. Each platform gets an
+# archive with the docs and the bare program, which `telemetrix update`
+# downloads. SHA256SUMS lists the checksum of every file.
 name: Release
 
 on:
@@ -23,11 +25,9 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             name: windows-x86_64
-            archive: zip
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             name: linux-x86_64
-            archive: tar.gz
     env:
       PACKAGE: telemetrix-${{ github.ref_name }}-${{ matrix.name }}
     steps:
@@ -48,22 +48,26 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path $env:PACKAGE | Out-Null
-          Copy-Item -Path "target/${{ matrix.target }}/release/telemetrix.exe", README.md, LICENSE-MIT, LICENSE-APACHE, telemetrix.example.toml -Destination $env:PACKAGE
-          Compress-Archive -Path $env:PACKAGE -DestinationPath "$env:PACKAGE.zip"
+          $exe = "target/${{ matrix.target }}/release/telemetrix.exe"
+          New-Item -ItemType Directory -Path "pkg/$env:PACKAGE", dist | Out-Null
+          Copy-Item -Path $exe, README.md, LICENSE-MIT, LICENSE-APACHE, telemetrix.example.toml -Destination "pkg/$env:PACKAGE"
+          Compress-Archive -Path "pkg/$env:PACKAGE" -DestinationPath "dist/$env:PACKAGE.zip"
+          Copy-Item -Path $exe -Destination "dist/$env:PACKAGE.exe"
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          mkdir "$PACKAGE"
-          cp "target/${{ matrix.target }}/release/telemetrix" README.md LICENSE-MIT LICENSE-APACHE telemetrix.example.toml "$PACKAGE/"
-          tar -czf "$PACKAGE.tar.gz" "$PACKAGE"
+          exe="target/${{ matrix.target }}/release/telemetrix"
+          mkdir -p "pkg/$PACKAGE" dist
+          cp "$exe" README.md LICENSE-MIT LICENSE-APACHE telemetrix.example.toml "pkg/$PACKAGE/"
+          tar -czf "dist/$PACKAGE.tar.gz" -C pkg "$PACKAGE"
+          cp "$exe" "dist/$PACKAGE"
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: ${{ env.PACKAGE }}.${{ matrix.archive }}
+          path: dist/*
           if-no-files-found: error
 
   # One job creates the release, so the two builds never race to create it.
@@ -75,6 +79,13 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      # `telemetrix update` refuses a download whose checksum is not here.
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
 
       - uses: softprops/action-gh-release@v2
         with:
