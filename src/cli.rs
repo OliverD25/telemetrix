@@ -396,12 +396,16 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
                     | ScreensaverCmd::Uninstall { .. }
                     | ScreensaverCmd::Update { .. }
                     | ScreensaverCmd::Watch { .. }
-            )
+            ) | Command::Update { .. }
         )
     {
         return Err(
-            "--dry-run only applies to screensaver install, uninstall, update and watch".into(),
+            "--dry-run only applies to update and to screensaver install, uninstall, update and watch"
+                .into(),
         );
+    }
+    if sw.check && !matches!(cmd, Command::Update { .. }) {
+        return Err("--check only applies to update".into());
     }
     if sw.dashboard_exe.is_some()
         && !matches!(cmd, Command::Screensaver(ScreensaverCmd::Watch { .. }))
@@ -423,10 +427,12 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
     if sw.force
         && !matches!(
             cmd,
-            Command::Config(ConfigCmd::Init { .. }) | Command::Plugin(PluginCmd::Install { .. })
+            Command::Config(ConfigCmd::Init { .. })
+                | Command::Plugin(PluginCmd::Install { .. })
+                | Command::Update { .. }
         )
     {
-        return Err("--force only applies to config init and plugin install".into());
+        return Err("--force only applies to config init, plugin install and update".into());
     }
     Ok(cmd)
 }
@@ -530,6 +536,25 @@ mod tests {
         );
         assert!(run(&["screensaver", "install", "--idle-minutes", "0"]).is_err());
         assert!(run(&["screensaver", "status", "--dry-run"]).is_err());
+        assert_eq!(
+            run(&["update", "--check", "--dry-run", "--force"])
+                .unwrap()
+                .command,
+            Command::Update {
+                check: true,
+                dry_run: true,
+                force: true,
+            }
+        );
+        assert_eq!(
+            run(&["update"]).unwrap().command,
+            Command::Update {
+                check: false,
+                dry_run: false,
+                force: false,
+            }
+        );
+        assert!(run(&["themes", "--check"]).is_err());
         assert!(run(&["snapshot", "--idle-minutes", "5"]).is_err());
     }
 
