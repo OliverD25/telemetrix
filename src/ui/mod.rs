@@ -22,6 +22,38 @@ pub const TOO_SMALL: &str = "terminal too small (need 40x10)";
 const OVERLAY_BG: Color = Color::Rgb(22, 22, 22);
 const OVERLAY_FG: Color = Color::Rgb(210, 210, 210);
 const STATUS_NAME: &str = " telemetrix ";
+/// The key hints after the program name, in the order they are dropped from.
+const HINTS: [(&str, &str); 5] = [
+    ("t", "themes"),
+    ("s", "settings"),
+    ("l", "log"),
+    ("?", "help"),
+    ("q", "quit"),
+];
+
+/// The longest key hint text that fits in `room` cells: all hints with their
+/// words, then fewer from the end, then the keys alone, then fewer keys.
+pub fn hint_text(room: usize) -> String {
+    let join = |n: usize, words: bool| -> String {
+        HINTS[..n]
+            .iter()
+            .map(|(key, word)| {
+                if words {
+                    format!(" · {key} {word}")
+                } else {
+                    format!(" · {key}")
+                }
+            })
+            .collect()
+    };
+    // With fewer than two worded hints, the bare keys say more in less room.
+    let worded = (2..=HINTS.len()).rev().map(|n| join(n, true));
+    let bare = (1..=HINTS.len()).rev().map(|n| join(n, false));
+    worded
+        .chain(bare)
+        .find(|t| t.chars().count() <= room)
+        .unwrap_or_default()
+}
 
 pub fn draw(frame: &mut Frame, state: &AppState, theme: &mut dyn Theme) {
     let area = frame.area();
@@ -92,6 +124,7 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &AppState) {
     let right_w = u16::try_from(memory.chars().count() + rest.chars().count()).unwrap_or(u16::MAX);
     let [left_area, right_area] =
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(right_w)]).areas(area);
+    let room = usize::from(left_area.width).saturating_sub(STATUS_NAME.len());
     let base = Style::new()
         .bg(Color::Rgb(38, 38, 38))
         .fg(Color::Rgb(190, 190, 190));
@@ -103,7 +136,7 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &AppState) {
                 .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" · t themes · s settings · l log · ? help · q quit"),
+        Span::raw(hint_text(room)),
     ]);
     frame.render_widget(Paragraph::new(left).style(base), left_area);
     let strong = base.fg(Color::White).add_modifier(Modifier::BOLD);
@@ -473,6 +506,43 @@ mod tests {
         s.config.units.temperature = crate::config::TempUnit::Fahrenheit;
         let t = text(&demo::render(&s, 120, 40));
         assert!(t.contains("194.0 °F") && t.contains("113.0 °F"), "{t}");
+    }
+
+    #[test]
+    fn long_theme_names_shorten_the_hints_not_the_numbers() {
+        assert_eq!(
+            hint_text(60),
+            " · t themes · s settings · l log · ? help · q quit"
+        );
+        assert_eq!(hint_text(45), " · t themes · s settings · l log · ? help");
+        assert_eq!(hint_text(25), " · t themes · s settings");
+        assert_eq!(hint_text(21), " · t · s · l · ? · q");
+        assert_eq!(hint_text(9), " · t · s");
+        assert_eq!(hint_text(2), "");
+        let mut s = state("ascii-dashboard");
+        s.record_memory_with(
+            crate::selfmem::SelfMemory {
+                working_set: 11 * crate::selfmem::MB,
+                peak_working_set: None,
+                private: None,
+            },
+            false,
+            None,
+        );
+        for w in [100, 80, 64] {
+            let buf = render(&s, w, 30);
+            let status: String = (0..w).map(|x| buf[(x, 29)].symbol()).collect();
+            let at = format!("{w}: {status}");
+            assert!(status.starts_with(" telemetrix  · t"), "{at}");
+            assert!(
+                status.ends_with(" self 11.0 MB · ascii-dashboard · 15 fps "),
+                "{at}"
+            );
+            assert!(!status.contains("q q"), "no word cut in half: {at}");
+        }
+        let buf = render(&s, 100, 30);
+        let status: String = (0..100).map(|x| buf[(x, 29)].symbol()).collect();
+        assert!(status.contains("s settings · l log"), "{status}");
     }
 
     #[test]
