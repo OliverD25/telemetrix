@@ -21,7 +21,7 @@ use crate::selfmem;
 use crate::term::TerminalGuard;
 use crate::themes::{self, Theme};
 use crate::ui;
-use crate::ui::settings_overlay::{self, Change, RowAction};
+use crate::ui::settings_overlay::{self, Change, Finder, Focus, RowAction, SettingsNav};
 use crate::ui::theme_options::{self, ThemePanel};
 use crate::ui::update_group::{Job, Msg};
 use crate::update::{self, CheckError, Pending, Updater, Version};
@@ -191,7 +191,7 @@ fn event_loop(
         if event::poll(deadline.saturating_duration_since(Instant::now()))? {
             match event::read() {
                 Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                    let action = if lp.state.text_input.is_some() || lp.state.search_box.is_some() {
+                    let action = if lp.state.typing() {
                         app::input_key_action(&key)
                     } else {
                         app::key_action(
@@ -353,52 +353,39 @@ impl Loop {
                         .map(|(p, _)| runner::stem(p))
                         .collect();
                     s.settings_footer = None;
+                    s.settings = Default::default();
                 }
                 s.toggle_overlay(Overlay::Settings);
             }
-            Action::SettingsUp => {
-                s.settings_cursor = s.settings_cursor.saturating_sub(1);
-                s.dirty = true;
-            }
-            Action::SettingsDown => {
-                let rows = settings_overlay::rows_for(s);
-                let last = settings_overlay::selectable(&rows).len().saturating_sub(1);
-                s.settings_cursor = (s.settings_cursor + 1).min(last);
-                s.dirty = true;
-            }
-            Action::SettingsStep { dir, big } => {
-                let rows = settings_overlay::rows_for(s);
-                let sel = settings_overlay::selectable(&rows);
-                let row = &rows[sel[s.settings_cursor.min(sel.len() - 1)]];
-                if let Some((id, entry)) = settings_overlay::search_row(row) {
-                    if dir > 0 {
-                        s.search_box = Some(SearchBox::new(id, &entry.key, &entry.label));
-                        s.dirty = true;
-                    }
-                } else if let Some((id, key)) = settings_overlay::text_row(row) {
-                    if dir > 0 {
-                        let text = settings_overlay::text_value(row, &s.config);
-                        s.text_input = Some(TextInput::new(id, key, &text));
-                        s.dirty = true;
-                    }
-                } else if let Some(change) = settings_overlay::step(row, &s.config, dir, big) {
-                    self.change(change);
-                }
-            }
+            Action::SettingsUp => self.settings_move(-1),
+            Action::SettingsDown => self.settings_move(1),
+            Action::SettingsStep { dir, big } => self.settings_step(dir, big),
             Action::SettingsEnter { big } => {
-                let rows = settings_overlay::rows_for(s);
-                let sel = settings_overlay::selectable(&rows);
-                let row = &rows[sel[s.settings_cursor.min(sel.len() - 1)]];
-                match settings_overlay::action_row(row) {
-                    Some(action) => self.run_row_action(action),
-                    None => self.act(Action::SettingsStep { dir: 1, big }),
+                if s.settings.focus == Focus::Categories {
+                    self.settings_step(1, big);
+                    return;
                 }
+                let rows = settings_overlay::current_page(s);
+                let action = settings_overlay::current_index(&rows, s.settings.cursor)
+                    .and_then(|i| settings_overlay::action_row(&rows[i]));
+                match action {
+                    Some(action) => self.run_row_action(action),
+                    None => self.settings_step(1, big),
+                }
+            }
+            Action::SettingsBack { close } => self.settings_back(close),
+            Action::SettingsFind => {
+                s.settings.find = Some(Finder::new());
+                s.dirty = true;
             }
             Action::Input(InputKey::Cancel) => {
                 s.text_input = None;
                 s.search_box = None;
+                s.settings.find = None;
                 s.dirty = true;
             }
+            Action::Input(InputKey::Save) if s.settings.find.is_some() => self.find_jump(),
+            Action::Input(key) if s.settings.find.is_some() => self.find_key(key),
             Action::Input(InputKey::Save) if s.search_box.is_some() => {
                 let chosen = s.search_box.as_ref().and_then(|b| {
                     let id = b.input.id.clone();
@@ -501,6 +488,144 @@ impl Loop {
             }
             Action::Nothing => {}
         }
+    }
+
+    /// Up (-1) or Down (1): the next category, or the next row of the pane.
+    fn settings_move(&mut self, dir: isize) {
+        let s = &mut self.state;
+        match s.settings.focus {
+            Focus::Categories => {
+                let last = settings_overlay::CATEGORIES.len() - 1;
+                let next = s.settings.category.saturating_add_signed(dir).min(last);
+                if next != s.settings.category {
+                    s.settings.category = next;
+                    s.settings.plugin = None;
+                    s.settings.cursor = 0;
+                }
+            }
+            Focus::Pane => {
+                let rows = settings_overlay::current_page(s);
+                let last = settings_overlay::selectable(&rows).len().saturating_sub(1);
+                let cursor = s.settings.cursor.min(last);
+                s.settings.cursor = cursor.saturating_add_signed(dir).min(last);
+            }
+        }
+        s.dirty = true;
+    }
+
+    /// Right (`dir` 1) or Left (-1). On the category list Right opens the
+    /// pane. In the pane Right opens a plugin's page or a text input, or
+    /// steps the value; Left steps back, and goes back one level on a row
+    /// that has no value to step.
+    fn settings_step(&mut self, dir: i32, big: bool) {
+        let s = &mut self.state;
+        if s.settings.focus == Focus::Categories {
+            if dir > 0 {
+                s.settings.focus = Focus::Pane;
+                s.settings.cursor = 0;
+                s.dirty = true;
+            }
+            return;
+        }
+        let rows = settings_overlay::current_page(s);
+        let Some(i) = settings_overlay::current_index(&rows, s.settings.cursor) else {
+            return;
+        };
+        let row = &rows[i];
+        if dir > 0 {
+            if let settings_overlay::Row::PluginLink { id, .. } = row {
+                s.settings.plugin = Some(id.clone());
+                s.settings.cursor = 0;
+                s.dirty = true;
+                return;
+            }
+            if let Some((id, entry)) = settings_overlay::search_row(row) {
+                s.search_box = Some(SearchBox::new(id, &entry.key, &entry.label));
+                s.dirty = true;
+                return;
+            }
+            if let Some((id, key)) = settings_overlay::text_row(row) {
+                let text = settings_overlay::text_value(row, &s.config);
+                s.text_input = Some(TextInput::new(id, key, &text));
+                s.dirty = true;
+                return;
+            }
+        }
+        match settings_overlay::step(row, &s.config, dir, big) {
+            Some(change) => self.change(change),
+            None if dir < 0 => self.settings_back(false),
+            None => {}
+        }
+    }
+
+    /// From a plugin's page to the plugin list, from the pane to the
+    /// category list, and from there, when `close`, out of the box.
+    fn settings_back(&mut self, close: bool) {
+        let s = &mut self.state;
+        if let Some(id) = s.settings.plugin.take() {
+            let rows = settings_overlay::current_page(s);
+            let sel = settings_overlay::selectable(&rows);
+            s.settings.cursor = sel
+                .iter()
+                .position(|&i| {
+                    matches!(&rows[i], settings_overlay::Row::PluginLink { id: link, .. } if *link == id)
+                })
+                .unwrap_or(0);
+        } else if s.settings.focus == Focus::Pane {
+            s.settings.focus = Focus::Categories;
+            s.settings.cursor = 0;
+        } else if close {
+            s.overlay = Overlay::None;
+        }
+        s.dirty = true;
+    }
+
+    /// A key in the `/` search line: Up and Down choose a result, the
+    /// others edit the text.
+    fn find_key(&mut self, key: InputKey) {
+        let s = &mut self.state;
+        let Some(finder) = &s.settings.find else {
+            return;
+        };
+        let found = settings_overlay::hits(s, &finder.input.text).len();
+        let Some(finder) = s.settings.find.as_mut() else {
+            return;
+        };
+        match key {
+            InputKey::Up => finder.selected = finder.selected.saturating_sub(1),
+            InputKey::Down => {
+                finder.selected = (finder.selected + 1).min(found.saturating_sub(1));
+            }
+            _ => {
+                let before = finder.input.text.clone();
+                finder.input.edit(key);
+                if finder.input.text != before {
+                    finder.selected = 0;
+                }
+            }
+        }
+        s.dirty = true;
+    }
+
+    /// Enter in the `/` search: opens the chosen result's page with its row
+    /// chosen. Without a result it does nothing.
+    fn find_jump(&mut self) {
+        let s = &mut self.state;
+        let Some(finder) = &s.settings.find else {
+            return;
+        };
+        let found = settings_overlay::hits(s, &finder.input.text);
+        let Some(hit) = found.get(finder.selected.min(found.len().saturating_sub(1))) else {
+            return;
+        };
+        s.settings = SettingsNav {
+            category: hit.category,
+            focus: Focus::Pane,
+            plugin: hit.plugin.clone(),
+            cursor: hit.cursor,
+            find: None,
+        };
+        s.dirty = true;
     }
 
     /// Applies one change from a key press at once, then saves it to the file.
@@ -939,6 +1064,7 @@ fn looks_different(old: &Config, new: &Config) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::settings_overlay::Category;
 
     impl Loop {
         /// A loop without a terminal, worker threads or plugins.
@@ -1026,10 +1152,13 @@ mod tests {
         (lp, rx)
     }
 
+    /// The Updates page with `label` chosen.
     fn cursor_to(lp: &mut Loop, label: &str) {
-        let rows = settings_overlay::rows_for(&lp.state);
+        lp.state.settings.category = 3;
+        lp.state.settings.focus = Focus::Pane;
+        let rows = settings_overlay::current_page(&lp.state);
         let sel = settings_overlay::selectable(&rows);
-        lp.state.settings_cursor = sel
+        lp.state.settings.cursor = sel
             .iter()
             .position(|&i| matches!(&rows[i], settings_overlay::Row::Action { label: l, .. } if *l == label))
             .unwrap_or_else(|| panic!("no {label} row"));
@@ -1088,17 +1217,37 @@ mod tests {
     fn enter_runs_an_action_row_and_left_right_do_nothing() {
         use ratatui::crossterm::event::KeyCode;
         let (mut lp, rx) = update_loop(FakeUpdater::new("v0.0.1", Ok(())), "update-row");
-        cursor_to(&mut lp, "check now");
+        // The Updates page with the keys: three categories down, then in.
+        for _ in 0..3 {
+            press(&mut lp, KeyCode::Down);
+        }
+        press(&mut lp, KeyCode::Enter);
+        assert_eq!(lp.state.settings.category(), Category::Updates);
+        for _ in 0..2 {
+            press(&mut lp, KeyCode::Down);
+        }
+        let rows = settings_overlay::current_page(&lp.state);
+        let i = settings_overlay::current_index(&rows, lp.state.settings.cursor).unwrap();
+        assert!(matches!(
+            rows[i],
+            settings_overlay::Row::Action {
+                label: "check now",
+                ..
+            }
+        ));
         let before = lp.state.config.clone();
-        press(&mut lp, KeyCode::Left);
         press(&mut lp, KeyCode::Right);
+        assert_eq!(lp.state.update_group.job, Job::Idle, "Right starts nothing");
+        press(&mut lp, KeyCode::Left);
         assert_eq!(
-            lp.state.update_group.job,
-            Job::Idle,
-            "Left/Right start nothing"
+            lp.state.settings.focus,
+            Focus::Categories,
+            "Left on an action row goes back to the categories"
         );
+        assert_eq!(lp.state.update_group.job, Job::Idle, "and starts nothing");
         assert!(rx.try_recv().is_err());
         assert_eq!(lp.state.config, before);
+        cursor_to(&mut lp, "check now");
         press(&mut lp, KeyCode::Enter);
         assert_eq!(lp.state.update_group.job, Job::Checking);
         press(&mut lp, KeyCode::Enter);
@@ -1108,7 +1257,7 @@ mod tests {
         });
         assert_eq!(lp.state.update_group.job, Job::Idle);
         assert_eq!(toast(&lp), "this build is newer than v0.0.1");
-        let rows = settings_overlay::rows_for(&lp.state);
+        let rows = settings_overlay::current_page(&lp.state);
         assert!(
             !rows.iter().any(|r| matches!(
                 r,
@@ -1395,7 +1544,7 @@ density = 0.3
             code,
             ratatui::crossterm::event::KeyModifiers::NONE,
         );
-        let action = if lp.state.text_input.is_some() || lp.state.search_box.is_some() {
+        let action = if lp.state.typing() {
             app::input_key_action(&key)
         } else {
             app::key_action(&key, lp.state.overlay, false)
@@ -1431,16 +1580,22 @@ density = 0.3
         ]
     }
 
-    /// Opens the overlay with the cursor on the weather plugin's `key` row.
+    /// Opens the overlay on the weather plugin's page with its `key` row chosen.
     fn open_on(lp: &mut Loop, key: &str) {
         lp.state
             .plugin_schemas
             .insert("weather".into(), weather_schema());
         lp.state.overlay = Overlay::Settings;
         lp.state.plugin_ids = vec!["weather".into()];
-        let rows = settings_overlay::rows_for(&lp.state);
+        lp.state.settings = SettingsNav {
+            category: 2,
+            focus: Focus::Pane,
+            plugin: Some("weather".into()),
+            ..SettingsNav::default()
+        };
+        let rows = settings_overlay::current_page(&lp.state);
         let sel = settings_overlay::selectable(&rows);
-        lp.state.settings_cursor = sel
+        lp.state.settings.cursor = sel
             .iter()
             .position(|i| {
                 matches!(&rows[*i], settings_overlay::Row::PluginSetting { entry, .. } if entry.key == key)
@@ -1583,6 +1738,269 @@ density = 0.3
         );
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("days = 1"), "{text}");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    /// The row under the cursor of the page the box shows now.
+    fn current_key(lp: &Loop) -> String {
+        let rows = settings_overlay::current_page(&lp.state);
+        let i = settings_overlay::current_index(&rows, lp.state.settings.cursor).unwrap();
+        settings_overlay::row_key(&rows[i])
+    }
+
+    #[test]
+    fn the_s_box_opens_at_appearance_and_goes_in_and_out() {
+        use ratatui::crossterm::event::KeyCode;
+        let path = temp_file("nav");
+        let mut lp = Loop::for_test(Config::default(), Flags::default(), path.clone());
+        press(&mut lp, KeyCode::Char('s'));
+        assert_eq!(lp.state.overlay, Overlay::Settings);
+        assert_eq!(lp.state.settings, SettingsNav::default());
+        assert_eq!(lp.state.settings.category(), Category::Appearance);
+        press(&mut lp, KeyCode::Up);
+        assert_eq!(lp.state.settings.category(), Category::Appearance, "stops");
+        for _ in 0..9 {
+            press(&mut lp, KeyCode::Down);
+        }
+        assert_eq!(lp.state.settings.category(), Category::System, "stops");
+        press(&mut lp, KeyCode::Left);
+        assert_eq!(
+            lp.state.settings.focus,
+            Focus::Categories,
+            "Left does nothing"
+        );
+        for _ in 0..3 {
+            press(&mut lp, KeyCode::Up);
+        }
+        assert_eq!(lp.state.settings.category(), Category::Cards);
+        press(&mut lp, KeyCode::Right);
+        assert_eq!(lp.state.settings.focus, Focus::Pane);
+        assert_eq!(current_key(&lp), "thresholds.cpu_warn_pct");
+        press(&mut lp, KeyCode::Down);
+        assert_eq!(current_key(&lp), "thresholds.temp_warn_c");
+        press(&mut lp, KeyCode::Esc);
+        assert_eq!(
+            (lp.state.overlay, lp.state.settings.focus),
+            (Overlay::Settings, Focus::Categories),
+            "Esc in the pane goes back to the list"
+        );
+        press(&mut lp, KeyCode::Enter);
+        assert_eq!(lp.state.settings.focus, Focus::Pane, "Enter opens the pane");
+        assert_eq!(current_key(&lp), "thresholds.cpu_warn_pct", "at the top");
+        press(&mut lp, KeyCode::Backspace);
+        assert_eq!(lp.state.settings.focus, Focus::Categories);
+        press(&mut lp, KeyCode::Backspace);
+        assert_eq!(
+            lp.state.overlay,
+            Overlay::Settings,
+            "Backspace never closes"
+        );
+        // A reload of the file keeps the page and the row.
+        press(&mut lp, KeyCode::Right);
+        press(&mut lp, KeyCode::Down);
+        config::set(&path, "general.fps", &Value::Int(30)).unwrap();
+        lp.reload();
+        assert_eq!(lp.state.config.general.fps, 30);
+        assert_eq!(lp.state.settings.category(), Category::Cards);
+        assert_eq!(current_key(&lp), "thresholds.temp_warn_c");
+        press(&mut lp, KeyCode::Esc);
+        press(&mut lp, KeyCode::Esc);
+        assert_eq!(lp.state.overlay, Overlay::None, "Esc on the list closes");
+        press(&mut lp, KeyCode::Char('s'));
+        assert_eq!(
+            lp.state.settings,
+            SettingsNav::default(),
+            "the box does not remember the last page"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn left_steps_a_value_and_goes_back_on_a_row_without_one() {
+        use ratatui::crossterm::event::KeyCode;
+        let path = temp_file("nav-left");
+        let mut lp = Loop::for_test(Config::default(), Flags::default(), path.clone());
+        press(&mut lp, KeyCode::Char('s'));
+        press(&mut lp, KeyCode::Down);
+        press(&mut lp, KeyCode::Right);
+        press(&mut lp, KeyCode::Right);
+        assert_eq!(lp.state.config.thresholds.cpu_warn_pct, 85.0);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("cpu_warn_pct = 85"), "saved at once: {text}");
+        assert!(matches!(lp.state.settings_footer, Some(Ok(_))));
+        press(&mut lp, KeyCode::Left);
+        press(&mut lp, KeyCode::Left);
+        assert_eq!(lp.state.config.thresholds.cpu_warn_pct, 75.0);
+        assert_eq!(
+            lp.state.settings.focus,
+            Focus::Pane,
+            "Left stepped, it stayed"
+        );
+        while current_key(&lp) != "disks.hide" {
+            press(&mut lp, KeyCode::Down);
+        }
+        let before = std::fs::read_to_string(&path).unwrap();
+        press(&mut lp, KeyCode::Right);
+        assert_eq!(
+            lp.state.settings.focus,
+            Focus::Pane,
+            "read-only: Right does nothing"
+        );
+        press(&mut lp, KeyCode::Left);
+        assert_eq!(
+            lp.state.settings.focus,
+            Focus::Categories,
+            "read-only: Left goes back"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_plugin_page_opens_from_the_list_and_its_search_still_works() {
+        use ratatui::crossterm::event::KeyCode;
+        let path = temp_file("plugin-page");
+        let mut lp = Loop::for_test(Config::default(), Flags::default(), path.clone());
+        press(&mut lp, KeyCode::Char('s'));
+        lp.state.plugin_ids = vec!["clock".into(), "weather".into()];
+        lp.state
+            .plugin_schemas
+            .insert("weather".into(), weather_schema());
+        press(&mut lp, KeyCode::Down);
+        press(&mut lp, KeyCode::Down);
+        press(&mut lp, KeyCode::Right);
+        assert_eq!(current_key(&lp), "plugins.enabled");
+        press(&mut lp, KeyCode::Down);
+        press(&mut lp, KeyCode::Down);
+        assert_eq!(current_key(&lp), "plugin.weather");
+        press(&mut lp, KeyCode::Right);
+        assert_eq!(lp.state.settings.plugin.as_deref(), Some("weather"));
+        assert_eq!(current_key(&lp), "plugin.weather.enabled");
+        press(&mut lp, KeyCode::Left);
+        assert!(
+            !lp.state.config.plugin_cfg["weather"].enabled,
+            "Left on a switch steps it"
+        );
+        press(&mut lp, KeyCode::Right);
+        assert!(lp.state.config.plugin_cfg["weather"].enabled);
+        for _ in 0..3 {
+            press(&mut lp, KeyCode::Down);
+        }
+        assert_eq!(current_key(&lp), "plugin.weather.spot");
+        press(&mut lp, KeyCode::Enter);
+        assert!(
+            lp.state.search_box.is_some(),
+            "Enter opens the place search"
+        );
+        for c in "Lq/".chars() {
+            press(&mut lp, KeyCode::Char(c));
+        }
+        assert!(!lp.quit, "q does not quit while searching");
+        assert!(lp.state.settings.find.is_none(), "/ is typed, not a search");
+        assert_eq!(lp.state.search_box.as_ref().unwrap().input.text, "Lq/");
+        let query = lp
+            .state
+            .search_box
+            .as_mut()
+            .unwrap()
+            .due(Instant::now() + app::SEARCH_PAUSE)
+            .unwrap();
+        lp.state.apply(AppEvent::SearchResults {
+            id: "weather".into(),
+            query,
+            result: Ok(vec![crate::plugins::manifest::SearchOption {
+                label: "Place A".into(),
+                values: vec![("spot".into(), Value::Str("Place A".into()))],
+            }]),
+        });
+        press(&mut lp, KeyCode::Enter);
+        assert!(lp.state.search_box.is_none());
+        assert_eq!(
+            lp.state.config.plugin_cfg["weather"].settings["spot"].as_str(),
+            Some("Place A")
+        );
+        assert_eq!(
+            lp.state.settings.plugin.as_deref(),
+            Some("weather"),
+            "still here"
+        );
+        press(&mut lp, KeyCode::Left);
+        assert_eq!(
+            (lp.state.settings.plugin.as_deref(), current_key(&lp)),
+            (None, "plugin.weather".to_string()),
+            "Left on the search row goes back to the plugin list, on weather"
+        );
+        press(&mut lp, KeyCode::Enter);
+        press(&mut lp, KeyCode::Esc);
+        assert_eq!(current_key(&lp), "plugin.weather", "Esc goes back too");
+        press(&mut lp, KeyCode::Left);
+        assert_eq!(lp.state.settings.focus, Focus::Categories);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn slash_searches_every_page_jumps_and_esc_cancels() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let path = temp_file("find");
+        let mut lp = Loop::for_test(Config::default(), Flags::default(), path.clone());
+        press(&mut lp, KeyCode::Char('s'));
+        lp.state.plugin_ids = vec!["weather".into()];
+        lp.state
+            .plugin_schemas
+            .insert("weather".into(), weather_schema());
+        press(&mut lp, KeyCode::Char('/'));
+        assert!(lp.state.settings.find.is_some() && lp.state.typing());
+        for c in "CITY".chars() {
+            press(&mut lp, KeyCode::Char(c));
+        }
+        let found = settings_overlay::hits(&lp.state, "CITY");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, "Plugins › weather › city");
+        press(&mut lp, KeyCode::Enter);
+        assert!(lp.state.settings.find.is_none());
+        assert_eq!(lp.state.settings.category(), Category::Plugins);
+        assert_eq!(lp.state.settings.focus, Focus::Pane);
+        assert_eq!(current_key(&lp), "plugin.weather.city");
+        press(&mut lp, KeyCode::Enter);
+        assert!(
+            lp.state.text_input.is_some(),
+            "the jump lands on a working row"
+        );
+        press(&mut lp, KeyCode::Esc);
+
+        press(&mut lp, KeyCode::Char('/'));
+        for c in "interval_msq".chars() {
+            press(&mut lp, KeyCode::Char(c));
+        }
+        assert!(!lp.quit, "q is typed");
+        press(&mut lp, KeyCode::Enter);
+        assert!(
+            lp.state.settings.find.is_some(),
+            "nothing found: Enter does nothing"
+        );
+        press(&mut lp, KeyCode::Backspace);
+        press(&mut lp, KeyCode::Up);
+        for _ in 0..2 {
+            press(&mut lp, KeyCode::Down);
+        }
+        press(&mut lp, KeyCode::Enter);
+        assert_eq!(lp.state.settings.category(), Category::System);
+        assert_eq!(current_key(&lp), "metrics.memory_interval_ms");
+
+        let before = lp.state.settings.clone();
+        press(&mut lp, KeyCode::Char('/'));
+        for c in "gpu".chars() {
+            press(&mut lp, KeyCode::Char(c));
+        }
+        press(&mut lp, KeyCode::Down);
+        press(&mut lp, KeyCode::Esc);
+        assert_eq!(lp.state.settings, before, "Esc cancels, the page stays");
+        assert_eq!(lp.state.overlay, Overlay::Settings);
+
+        press(&mut lp, KeyCode::Char('/'));
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        lp.act(app::input_key_action(&ctrl_c));
+        assert!(lp.quit, "Ctrl+C still quits");
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

@@ -567,9 +567,11 @@ mod tests {
                 s.apply(crate::event::AppEvent::Update(Msg::Checked(Ok(release(
                     tag,
                 )))));
-                let rows = settings_overlay::rows_for(&s);
+                s.settings.category = 3;
+                s.settings.focus = settings_overlay::Focus::Pane;
+                let rows = settings_overlay::current_page(&s);
                 let sel = settings_overlay::selectable(&rows);
-                s.settings_cursor = sel
+                s.settings.cursor = sel
                     .iter()
                     .position(|&i| {
                         matches!(&rows[i], settings_overlay::Row::Setting(s) if s.path == "update.check_interval_h")
@@ -579,10 +581,10 @@ mod tests {
                 let lines: Vec<String> = (0..40)
                     .map(|y| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>())
                     .collect();
-                let start = lines.iter().position(|l| l.contains("[update]")).unwrap();
+                let start = lines.iter().position(|l| l.contains("version")).unwrap();
                 let group: Vec<&str> = lines[start..]
                     .iter()
-                    .take_while(|l| !l.contains("Up/Down move"))
+                    .take_while(|l| !l.contains("↑↓"))
                     .map(|l| l.trim_end())
                     .collect();
                 let text = group.join(
@@ -602,7 +604,8 @@ mod tests {
                     text.contains(&format!("latest                {tag} · checked ")),
                     "{text}"
                 );
-                assert!(text.contains("│  check now      "), "{text}");
+                assert!(text.contains("│   check now      "), "{text}");
+                assert!(text.contains(" > Updates    │   "), "{text}");
                 assert!(
                     text.contains("auto") && text.contains("check_interval_h"),
                     "{text}"
@@ -779,6 +782,131 @@ mod tests {
         }
     }
 
+    /// The `s` box open on Appearance, with two plugins and weather's settings.
+    fn settings_state(theme: &str) -> AppState {
+        use crate::plugins::schema::{SchemaEntry, SchemaKind};
+        let mut s = demo::state(theme);
+        s.overlay = Overlay::Settings;
+        s.plugin_ids = vec!["clock".into(), "weather".into()];
+        let entry = |key: &str, kind| SchemaEntry {
+            key: key.into(),
+            label: key.into(),
+            kind,
+            default: crate::config::Value::Str("".into()),
+        };
+        s.plugin_schemas.insert(
+            "weather".into(),
+            vec![
+                entry("city", SchemaKind::Search),
+                entry("country", SchemaKind::Text),
+            ],
+        );
+        s
+    }
+
+    fn nav(category: usize, plugin: Option<&str>, cursor: usize) -> settings_overlay::SettingsNav {
+        settings_overlay::SettingsNav {
+            category,
+            focus: settings_overlay::Focus::Pane,
+            plugin: plugin.map(str::to_string),
+            cursor,
+            find: None,
+        }
+    }
+
+    #[test]
+    fn the_settings_box_renders_in_every_theme_at_100x30_and_40x10() {
+        for theme in crate::config::THEME_NAMES {
+            let mut s = settings_state(theme);
+            let at = |w, h| format!("{theme} {w}x{h}");
+            let check = |s: &AppState, w: u16, h: u16, needles: &[&str]| {
+                let buf = render(s, w, h);
+                let status: String = (0..w).map(|x| buf[(x, h - 1)].symbol()).collect();
+                assert!(status.starts_with(" telemetrix "), "{}", at(w, h));
+                let t = text(&buf);
+                for needle in needles {
+                    assert!(
+                        t.contains(needle),
+                        "{}: {needle}\n{}",
+                        at(w, h),
+                        demo::lines(&buf)
+                    );
+                }
+            };
+            let options = format!("[options of {theme}]");
+            check(
+                &s,
+                100,
+                30,
+                &[
+                    " Settings ",
+                    " > Appearance │   theme",
+                    "   Cards      │",
+                    "   System     │",
+                    &options,
+                    "↑↓ choose · → open · / search · Esc close",
+                    "changes apply live",
+                ],
+            );
+            check(
+                &s,
+                40,
+                10,
+                &[" A  C  P  U  S  Appearance", "theme", "Esc close"],
+            );
+            s.settings = nav(2, None, 2);
+            check(
+                &s,
+                100,
+                30,
+                &[" > Plugins", "all plugins", "[plugin files]", "(→ open)"],
+            );
+            check(&s, 40, 10, &["Plugins", "weather", "→ open"]);
+            s.settings = nav(2, Some("weather"), 2);
+            check(
+                &s,
+                100,
+                30,
+                &[
+                    "[plugin.weather]",
+                    "(not set)  (Enter to search)",
+                    "Esc back",
+                ],
+            );
+            check(&s, 40, 10, &["Plugins › weather", "city"]);
+            let mut finder = settings_overlay::Finder::new();
+            finder.input = crate::app::TextInput::new("", "", "city");
+            s.settings.find = Some(finder);
+            for (w, h) in [(100, 30), (40, 10)] {
+                check(
+                    &s,
+                    w,
+                    h,
+                    &[" / city", "> Plugins › weather › city", "Esc cancel"],
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "prints the settings box"]
+    fn settings_box_samples() {
+        let mut s = settings_state("matrix");
+        println!("--- Appearance\n{}", demo::lines(&render(&s, 100, 30)));
+        s.settings = nav(2, None, 2);
+        println!("--- Plugins\n{}", demo::lines(&render(&s, 100, 30)));
+        s.settings = nav(2, Some("weather"), 2);
+        println!("--- weather\n{}", demo::lines(&render(&s, 100, 30)));
+        let mut finder = settings_overlay::Finder::new();
+        finder.input = crate::app::TextInput::new("", "", "city");
+        s.settings.find = Some(finder);
+        println!("--- / city\n{}", demo::lines(&render(&s, 100, 30)));
+        s.settings = Default::default();
+        println!("--- 40x10\n{}", demo::lines(&render(&s, 40, 10)));
+        s.settings = nav(0, None, 3);
+        println!("--- 40x10 pane\n{}", demo::lines(&render(&s, 40, 10)));
+    }
+
     #[test]
     fn tiny_terminal_shows_the_notice() {
         assert!(text(&render(&state("minimalist"), 30, 5)).contains("terminal too small"));
@@ -798,8 +926,13 @@ mod tests {
         };
         s.plugin_schemas.insert("weather".into(), vec![city]);
         s.overlay = Overlay::Settings;
-        let rows = settings_overlay::rows_for(&s);
-        s.settings_cursor = settings_overlay::selectable(&rows).len() - 1;
+        s.settings = settings_overlay::SettingsNav {
+            category: 2,
+            focus: settings_overlay::Focus::Pane,
+            plugin: Some("weather".into()),
+            cursor: 2,
+            find: None,
+        };
         let t = text(&render(&s, 80, 60));
         assert!(t.contains("Kyiv  (Enter to edit)"), "the selected text row");
         s.text_input = Some(crate::app::TextInput::new("weather", "city", "Lviv"));

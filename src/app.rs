@@ -260,15 +260,24 @@ pub enum Action {
     ToggleSettings,
     SettingsUp,
     SettingsDown,
-    /// Next (`dir` 1) or previous (`dir` -1) value; `big` = Shift, ten steps.
+    /// Right (`dir` 1) or Left (`dir` -1): opens the pane or a plugin's
+    /// page, or steps the value; `big` = Shift, ten steps. Left on a row
+    /// with no value to step goes back.
     SettingsStep {
         dir: i32,
         big: bool,
     },
-    /// Enter: runs an action row, or is the next value like Right.
+    /// Enter: opens the pane, runs an action row, or is the next value.
     SettingsEnter {
         big: bool,
     },
+    /// Esc (`close`) or Backspace: back one level; Esc on the category
+    /// list closes the box.
+    SettingsBack {
+        close: bool,
+    },
+    /// `/`: search every setting.
+    SettingsFind,
     FpsStep(i32),
     OpenThemes,
     /// A key the app does not use; it may be a plugin's run key.
@@ -383,6 +392,9 @@ pub fn key_action(key: &KeyEvent, overlay: Overlay, exit_on_any_key: bool) -> Ac
             KeyCode::Enter => return Action::SettingsEnter { big },
             KeyCode::Right => return Action::SettingsStep { dir: 1, big },
             KeyCode::Left => return Action::SettingsStep { dir: -1, big },
+            KeyCode::Esc => return Action::SettingsBack { close: true },
+            KeyCode::Backspace => return Action::SettingsBack { close: false },
+            KeyCode::Char('/') => return Action::SettingsFind,
             _ => {}
         }
     }
@@ -424,7 +436,8 @@ pub struct AppState {
     pub dirty: bool,
     /// A short message at the bottom and the moment it disappears.
     pub toast: Option<(String, Instant)>,
-    pub settings_cursor: usize,
+    /// The page and row of the `s` box, and its `/` search.
+    pub settings: crate::ui::settings_overlay::SettingsNav,
     /// The result of the last save from the settings overlay: the path or the error.
     pub settings_footer: Option<Result<String, String>>,
     /// Plugin files found when the settings overlay was opened.
@@ -485,7 +498,7 @@ impl AppState {
             paused: false,
             dirty: true,
             toast: None,
-            settings_cursor: 0,
+            settings: Default::default(),
             settings_footer: None,
             plugin_ids: Vec::new(),
             plugins_dir: std::path::PathBuf::new(),
@@ -547,6 +560,12 @@ impl AppState {
     pub fn show_toast(&mut self, text: &str) {
         self.toast = Some((text.to_string(), Instant::now() + TOAST_FOR));
         self.dirty = true;
+    }
+
+    /// A text line is open (plugin text, place search or `/` search): every
+    /// key goes to it and only Ctrl+C quits.
+    pub fn typing(&self) -> bool {
+        self.text_input.is_some() || self.search_box.is_some() || self.settings.find.is_some()
     }
 
     pub fn theme_name(&self) -> &'static str {
@@ -883,7 +902,15 @@ mod tests {
         );
         assert_eq!(
             key_action(&key(KeyCode::Esc), s, false),
-            Action::CloseOverlay
+            Action::SettingsBack { close: true }
+        );
+        assert_eq!(
+            key_action(&key(KeyCode::Backspace), s, false),
+            Action::SettingsBack { close: false }
+        );
+        assert_eq!(
+            key_action(&key(KeyCode::Char('/')), s, false),
+            Action::SettingsFind
         );
         let none = Overlay::None;
         assert_eq!(key_action(&key(KeyCode::Up), none, false), Action::Nothing);
