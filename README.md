@@ -109,7 +109,9 @@ telemetrix --exit-on-any-key      # screensaver mode: any key quits
 
 Inside the settings box: `Up`/`Down` move, `Enter` or `Right` pick the next
 value, `Left` the previous one, `Shift` with `Left`/`Right` moves ten steps.
-Paths are shown but can only be changed in the file.
+Paths are shown but can only be changed in the file. On the `check now` and
+`install now` rows of the `update` group, `Enter` runs them (see
+[From the settings box](#from-the-settings-box)).
 
 Each plugin's section in the settings box also lists the plugin's own
 settings, like the weather city or the main bank. On the weather city, `Enter`
@@ -948,6 +950,21 @@ and starts the new version in the same window with the same arguments.
   process starts the new one in the same console, gives back its memory
   and waits for it. It then ends with the new one's exit code. While it
   waits it uses almost no memory and no CPU.
+
+### From the settings box
+
+The `s` box has an `update` group:
+
+| Row | What it shows or does |
+|---|---|
+| `version` | this program's version |
+| `latest` | the latest release and when it was checked (UTC), `not checked yet`, or a short error like `check failed: no network` (the log has the whole message) |
+| `check now` | `Enter` asks GitHub, in the background, as `telemetrix update --check` does. The row shows `checking…`; the answer comes as a short message: `up to date`, `v0.3.2 available`, or `this build is newer than v0.3.0` |
+| `install now` | only when a newer release is known. `Enter` downloads it in the background (`downloading 42%`), checks its SHA-256 (`verifying`) and installs it the same way `telemetrix update` does, including `screensaver update` when the screensaver is installed. Then the status bar shows `update ready · u restart`. A failure or a checksum mismatch changes nothing and shows the reason |
+| `auto`, `check_interval_h` | the settings of the automatic updates above |
+
+Only one check or install runs at a time; `Enter` while one runs says
+`already running`. `Left` and `Right` do nothing on these rows.
 
 ## Questions and bugs
 

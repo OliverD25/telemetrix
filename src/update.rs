@@ -389,6 +389,17 @@ fn ready_info_path(exe: &Path) -> PathBuf {
     beside(exe, "ready.json")
 }
 
+/// How far a download and install got, for a progress line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// Bytes so far, of the total when the server said it.
+    Downloading { done: u64, total: Option<u64> },
+    /// The whole file is here; its SHA-256 is compared with `SHA256SUMS`.
+    Verifying,
+    /// The checksum matched; the program file is being replaced.
+    Installing,
+}
+
 /// Downloads `name` of `release` to `<exe>.download`, hashing it on the way.
 /// A checksum that does not match `SHA256SUMS` deletes the file and fails,
 /// so nothing else changes.
@@ -397,6 +408,17 @@ pub fn download(
     release: &Release,
     name: &str,
     exe: &Path,
+) -> Result<Downloaded, String> {
+    download_with(source, release, name, exe, &mut |_| {})
+}
+
+/// `download`, telling `on` how far it got.
+pub fn download_with(
+    source: &Source,
+    release: &Release,
+    name: &str,
+    exe: &Path,
+    on: &mut dyn FnMut(Step),
 ) -> Result<Downloaded, String> {
     let mut sums_response = get(source, &source.url(&release.tag, SUMS_NAME), API_TIMEOUT)?;
     let sums_text = sums_response
@@ -409,7 +431,7 @@ pub fn download(
         .get(name)
         .ok_or_else(|| format!("{SUMS_NAME} of {} has no line for {name}", release.tag))?;
     let path = beside(exe, "download");
-    let result = save_hashed(source, &source.url(&release.tag, name), &path);
+    let result = save_hashed(source, &source.url(&release.tag, name), &path, on);
     let (sha256, bytes) = match result {
         Ok(got) => got,
         Err(e) => {
@@ -417,11 +439,11 @@ pub fn download(
             return Err(e);
         }
     };
+    on(Step::Verifying);
     if sha256 != expected {
         let _ = std::fs::remove_file(&path);
         return Err(format!(
-            "checksum mismatch for {name}: {SUMS_NAME} says {}, the download is {}; \
-             it was deleted and nothing was changed",
+            "checksum mismatch for {name}: {SUMS_NAME} says {}, the download is {};              it was deleted and nothing was changed",
             to_hex(&expected),
             to_hex(&sha256)
         ));
@@ -434,8 +456,42 @@ pub fn download(
     })
 }
 
-fn save_hashed(source: &Source, url: &str, path: &Path) -> Result<([u8; 32], u64), String> {
+/// What `telemetrix update` does after the check: download and verify
+/// `name` of `release`, then put it in the place of `exe`. On any failure
+/// the program stays as it was. A waiting `<exe>.ready` is dropped, since
+/// the installed program is now at least as new.
+pub fn install(
+    source: &Source,
+    release: &Release,
+    name: &str,
+    exe: &Path,
+    on: &mut dyn FnMut(Step),
+) -> Result<Downloaded, String> {
+    let d = download_with(source, release, name, exe, on)?;
+    on(Step::Installing);
+    if let Err(e) = replace_exe(exe, &d.path) {
+        let _ = std::fs::remove_file(&d.path);
+        return Err(format!(
+            "cannot replace {}: {e}; nothing was changed",
+            exe.display()
+        ));
+    }
+    discard_ready(exe);
+    Ok(d)
+}
+
+fn save_hashed(
+    source: &Source,
+    url: &str,
+    path: &Path,
+    on: &mut dyn FnMut(Step),
+) -> Result<([u8; 32], u64), String> {
     let mut response = get(source, url, DOWNLOAD_TIMEOUT)?;
+    let total = response
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
     let mut reader = response
         .body_mut()
         .with_config()
@@ -446,6 +502,7 @@ fn save_hashed(source: &Source, url: &str, path: &Path) -> Result<([u8; 32], u64
     let mut ctx = digest::Context::new(&digest::SHA256);
     let mut buf = vec![0u8; 64 * 1024];
     let mut bytes = 0u64;
+    on(Step::Downloading { done: 0, total });
     loop {
         let n = reader
             .read(&mut buf)
@@ -457,6 +514,7 @@ fn save_hashed(source: &Source, url: &str, path: &Path) -> Result<([u8; 32], u64
         file.write_all(&buf[..n])
             .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
         bytes += n as u64;
+        on(Step::Downloading { done: bytes, total });
     }
     file.sync_all()
         .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
@@ -568,6 +626,16 @@ pub fn install_ready(exe: &Path, current: &Version) -> Result<Version, String> {
     replace_exe(exe, &path).map_err(|e| format!("cannot replace {}: {e}", exe.display()))?;
     let _ = std::fs::remove_file(ready_info_path(exe));
     Ok(version)
+}
+
+/// What the `update` group of the dashboard's `s` box asks for. Runs in a
+/// background thread; tests put a fake in the place of the real one.
+pub trait Updater: Send + Sync {
+    fn latest(&self) -> Result<Release, CheckError>;
+    /// Downloads, verifies and installs `release` over this program.
+    fn install(&self, release: &Release, on: &mut dyn FnMut(Step)) -> Result<Version, String>;
+    /// After an install: let the screensaver watcher's copy follow.
+    fn after_install(&self) -> Result<(), String>;
 }
 
 /// What the dashboard shows in its status bar.

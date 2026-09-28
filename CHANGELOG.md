@@ -22,6 +22,16 @@ All notable changes to telemetrix. Versions follow
   style. A new style, `bright`, uses the value colour.
 - **`min_width` on a metric:** the row is left out of cards narrower than
   this many characters.
+- **Updates from the settings box:** the `s` box has an `update` group
+  with this program's version, the latest release and when it was checked,
+  and two rows that `Enter` runs in the background. `check now` asks
+  GitHub and answers `up to date`, `v0.3.2 available` or `this build is
+  newer`. `install now` appears when a newer release is known: it
+  downloads with a percentage, checks the SHA-256 and installs the way
+  `telemetrix update` does (including `screensaver update`), then the
+  status bar offers `u` to restart. A failure changes nothing and shows
+  its reason. The `auto` and `check_interval_h` rows are in the same group.
+  The help (`?`) and the README describe it.
 
 ## 0.3.0 — 2026-09-28
 

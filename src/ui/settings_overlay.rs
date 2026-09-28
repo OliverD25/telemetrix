@@ -35,6 +35,24 @@ pub enum Row {
         theme: String,
         id: String,
     },
+    /// A value to read, not to change.
+    Info {
+        label: &'static str,
+        value: String,
+    },
+    /// Enter runs `action`; Left and Right do nothing. `value` says how it goes.
+    Action {
+        label: &'static str,
+        value: String,
+        action: RowAction,
+    },
+}
+
+/// What an action row does; the main loop runs it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowAction {
+    CheckUpdate,
+    InstallUpdate,
 }
 
 /// Every card id a theme can show: the system cards, then `plugins`.
@@ -75,7 +93,50 @@ pub fn rows_for(state: &AppState) -> Vec<Row> {
     let cards = card_ids(state.plugin_ids.iter().cloned());
     let mut all = theme_rows(state.theme_name(), &cards);
     all.extend(rows(&state.plugin_ids, &state.plugin_schemas));
+    if let Some(i) = all
+        .iter()
+        .position(|r| matches!(r, Row::Section(s) if s == "update"))
+    {
+        all.splice(i + 1..i + 1, update_rows(state));
+    }
     all
+}
+
+/// The update group above its `auto` and `check_interval_h` rows.
+pub fn update_rows(state: &AppState) -> Vec<Row> {
+    let own = crate::update::Version::current();
+    let g = &state.update_group;
+    let mut rows = vec![
+        Row::Info {
+            label: "version",
+            value: own.to_string(),
+        },
+        Row::Info {
+            label: "latest",
+            value: g.latest_text(),
+        },
+        Row::Action {
+            label: "check now",
+            value: g.check_text(),
+            action: RowAction::CheckUpdate,
+        },
+    ];
+    if let Some(value) = g.install_text(&own) {
+        rows.push(Row::Action {
+            label: "install now",
+            value,
+            action: RowAction::InstallUpdate,
+        });
+    }
+    rows
+}
+
+/// The action of an action row.
+pub fn action_row(row: &Row) -> Option<RowAction> {
+    match row {
+        Row::Action { action, .. } => Some(*action),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -169,6 +230,7 @@ fn key_label(row: &Row) -> &str {
         Row::PluginInterval(_) => "interval",
         Row::PluginSetting { entry, .. } => &entry.label,
         Row::ThemeCard { id, .. } => id,
+        Row::Info { label, .. } | Row::Action { label, .. } => label,
     }
 }
 
@@ -198,6 +260,7 @@ pub fn value_text(row: &Row, cfg: &Config) -> String {
             v => v.to_string(),
         },
         Row::ThemeCard { theme, id } => on_off(!cfg.theme(theme).hidden(id)),
+        Row::Info { value, .. } | Row::Action { value, .. } => value.clone(),
     }
 }
 
@@ -230,7 +293,7 @@ fn on_off(b: bool) -> String {
 
 pub fn editable(row: &Row) -> bool {
     match row {
-        Row::Section(_) => false,
+        Row::Section(_) | Row::Info { .. } | Row::Action { .. } => false,
         Row::Setting(s) => {
             s.tui_editable
                 && !matches!(
@@ -306,7 +369,7 @@ pub fn step(row: &Row, cfg: &Config, dir: i32, big: bool) -> Option<Change> {
         return None;
     }
     match row {
-        Row::Section(_) => None,
+        Row::Section(_) | Row::Info { .. } | Row::Action { .. } => None,
         Row::Setting(s) => {
             let current = cfg.get(s.path)?;
             let value = match &s.kind {
@@ -601,6 +664,34 @@ fn row_line(
         let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
         spans.push(Span::styled(" ".repeat(width.saturating_sub(used)), style));
         return Line::from(spans);
+    }
+    if let Row::Info { value, .. } = row {
+        let text = format!("  {key:<KEY_WIDTH$}  {value}");
+        return if selected {
+            Line::styled(format!("{text:<width$}"), highlight)
+        } else {
+            Line::raw(text)
+        };
+    }
+    if let Row::Action { value, .. } = row {
+        let text = if selected {
+            let value = if value.is_empty() {
+                String::new()
+            } else {
+                format!("{value}  ")
+            };
+            format!("  {key:<KEY_WIDTH$}  {value}(Enter to run)")
+        } else {
+            format!("  {key:<KEY_WIDTH$}  {value}")
+        };
+        return if selected {
+            Line::styled(
+                format!("{text:<width$}"),
+                highlight.add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Line::raw(text)
+        };
     }
     if selected && (text_row(row).is_some() || search_row(row).is_some()) {
         let value = value_text(row, cfg);

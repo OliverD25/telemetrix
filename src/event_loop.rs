@@ -1,6 +1,6 @@
 use std::io;
 use std::path::Path;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
@@ -21,9 +21,10 @@ use crate::selfmem;
 use crate::term::TerminalGuard;
 use crate::themes::{self, Theme};
 use crate::ui;
-use crate::ui::settings_overlay::{self, Change};
+use crate::ui::settings_overlay::{self, Change, RowAction};
 use crate::ui::theme_options::{self, ThemePanel};
-use crate::update::{self, Pending, Version};
+use crate::ui::update_group::{Job, Msg};
+use crate::update::{self, CheckError, Pending, Updater, Version};
 
 /// How often an open dashboard looks for a newer program (decision 53).
 const UPDATE_LOOK: Duration = Duration::from_secs(3600);
@@ -89,6 +90,9 @@ struct Loop {
     last_rescan: Instant,
     network: mpsc::Sender<NetworkCmd>,
     updates: UpdateWatch,
+    /// Where the background check and install of the `s` box report to.
+    events: mpsc::Sender<AppEvent>,
+    updater: Arc<dyn Updater>,
 }
 
 /// `exe` is this program's file as it was at start; an update replaces it.
@@ -100,6 +104,7 @@ pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags, exe: &Path) -> io::
     let synced = bundled::sync(&home, &[], false);
     let plugins = Manager::new(&cfg, &path, tx.clone());
     let network = network::spawn(NetworkSettings::from_config(&cfg), tx.clone());
+    let events = tx.clone();
     let (metrics, _metrics_thread) = worker::spawn(MetricsIntervals::from_config(&cfg), tx);
     let mut state = AppState::new(cfg, status);
     state.log(&format!(
@@ -137,6 +142,8 @@ pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags, exe: &Path) -> io::
         last_rescan: Instant::now(),
         network,
         updates: UpdateWatch::new(exe),
+        events,
+        updater: Arc::new(crate::commands::update_cmd::GitHub),
     };
     lp.rescan_plugins(false);
     let result = event_loop(&mut lp, &mut guard, &rx);
@@ -247,6 +254,29 @@ fn event_loop(
     }
 }
 
+/// The install of the `s` box: progress when the shown step changes, then
+/// the result. The watcher's copy follows a good install.
+fn install_in_background(up: &dyn Updater, release: &update::Release, tx: &mpsc::Sender<AppEvent>) {
+    let mut shown = None;
+    let result = up.install(release, &mut |step| {
+        let job = Job::of(step);
+        if shown != Some(job) {
+            shown = Some(job);
+            let _ = tx.send(AppEvent::Update(Msg::Progress(step)));
+        }
+    });
+    let msg = match result {
+        Ok(v) => {
+            if let Err(e) = up.after_install() {
+                let _ = tx.send(AppEvent::Log(format!("warning: update: {e}")));
+            }
+            Msg::Installed(v)
+        }
+        Err(e) => Msg::InstallFailed(e),
+    };
+    let _ = tx.send(AppEvent::Update(msg));
+}
+
 /// Once a minute with `--features alloc-stats`: live heap bytes next to the
 /// private bytes and each plugin's Lua bytes, for memory soaks.
 #[cfg(feature = "alloc-stats")]
@@ -353,6 +383,15 @@ impl Loop {
                     }
                 } else if let Some(change) = settings_overlay::step(row, &s.config, dir, big) {
                     self.change(change);
+                }
+            }
+            Action::SettingsEnter { big } => {
+                let rows = settings_overlay::rows_for(s);
+                let sel = settings_overlay::selectable(&rows);
+                let row = &rows[sel[s.settings_cursor.min(sel.len() - 1)]];
+                match settings_overlay::action_row(row) {
+                    Some(action) => self.run_row_action(action),
+                    None => self.act(Action::SettingsStep { dir: 1, big }),
                 }
             }
             Action::Input(InputKey::Cancel) => {
@@ -711,6 +750,51 @@ impl Loop {
         }
     }
 
+    /// Enter on an action row of the `s` box. A check or an install runs in
+    /// its own thread and reports with `AppEvent::Update`.
+    fn run_row_action(&mut self, action: RowAction) {
+        let (tx, up) = (self.events.clone(), Arc::clone(&self.updater));
+        let group = &mut self.state.update_group;
+        let spawned = match action {
+            RowAction::CheckUpdate => {
+                if !group.start_check() {
+                    self.state.show_toast("already running");
+                    return;
+                }
+                std::thread::Builder::new()
+                    .name("update-check".into())
+                    .spawn(move || {
+                        let _ = tx.send(AppEvent::Update(Msg::Checked(up.latest())));
+                    })
+            }
+            RowAction::InstallUpdate => {
+                let release = match group.start_install(&Version::current()) {
+                    Ok(r) => r,
+                    Err(why) => {
+                        self.state.show_toast(why);
+                        return;
+                    }
+                };
+                self.state.log(&format!(
+                    "update: installing {} from the s box",
+                    release.tag
+                ));
+                std::thread::Builder::new()
+                    .name("update-install".into())
+                    .spawn(move || install_in_background(&*up, &release, &tx))
+            }
+        };
+        if let Err(e) = spawned {
+            let why = format!("cannot start a thread: {e}");
+            let msg = match action {
+                RowAction::CheckUpdate => Msg::Checked(Err(CheckError::Failed(why))),
+                RowAction::InstallUpdate => Msg::InstallFailed(why),
+            };
+            self.state.apply(AppEvent::Update(msg));
+        }
+        self.state.dirty = true;
+    }
+
     /// `u`: installs a ready download if needed, then ends the loop so the
     /// new program starts in this console.
     fn update_restart(&mut self) {
@@ -878,8 +962,225 @@ mod tests {
                     refresh_watcher: false,
                     ..UpdateWatch::new(Path::new("telemetrix-test-no-such-exe"))
                 },
+                events: mpsc::channel().0,
+                updater: Arc::new(FakeUpdater::new("v0.0.1", Ok(()))),
             }
         }
+    }
+
+    /// An updater without the network: a fixed latest release, and an
+    /// install that reports every step and then succeeds or fails.
+    struct FakeUpdater {
+        latest: update::Release,
+        install: Result<(), String>,
+    }
+
+    impl FakeUpdater {
+        fn new(tag: &str, install: Result<(), String>) -> Self {
+            Self {
+                latest: update::Release {
+                    tag: tag.into(),
+                    version: Version::parse(tag).unwrap(),
+                    assets: Vec::new(),
+                },
+                install,
+            }
+        }
+    }
+
+    impl Updater for FakeUpdater {
+        fn latest(&self) -> Result<update::Release, CheckError> {
+            Ok(self.latest.clone())
+        }
+
+        fn install(
+            &self,
+            release: &update::Release,
+            on: &mut dyn FnMut(update::Step),
+        ) -> Result<Version, String> {
+            for done in [0, 10, 42, 42, 100] {
+                on(update::Step::Downloading {
+                    done,
+                    total: Some(100),
+                });
+            }
+            on(update::Step::Verifying);
+            self.install.clone()?;
+            on(update::Step::Installing);
+            Ok(release.version.clone())
+        }
+
+        fn after_install(&self) -> Result<(), String> {
+            Err("no watcher here".into())
+        }
+    }
+
+    /// The loop with `updater`, the `s` box open on `label`, and the channel
+    /// its background threads report to.
+    fn update_loop(updater: FakeUpdater, name: &str) -> (Loop, mpsc::Receiver<AppEvent>) {
+        let mut lp = Loop::for_test(Config::default(), Flags::default(), temp_file(name));
+        let (tx, rx) = mpsc::channel();
+        lp.events = tx;
+        lp.updater = Arc::new(updater);
+        lp.act(Action::ToggleSettings);
+        (lp, rx)
+    }
+
+    fn cursor_to(lp: &mut Loop, label: &str) {
+        let rows = settings_overlay::rows_for(&lp.state);
+        let sel = settings_overlay::selectable(&rows);
+        lp.state.settings_cursor = sel
+            .iter()
+            .position(|&i| matches!(&rows[i], settings_overlay::Row::Action { label: l, .. } if *l == label))
+            .unwrap_or_else(|| panic!("no {label} row"));
+    }
+
+    /// Applies what the background thread sent, until `last` came.
+    fn drain(lp: &mut Loop, rx: &mpsc::Receiver<AppEvent>, last: fn(&AppEvent) -> bool) -> usize {
+        let mut n = 0;
+        loop {
+            let ev = rx.recv_timeout(Duration::from_secs(10)).expect("an answer");
+            let done = last(&ev);
+            lp.state.apply(ev);
+            n += 1;
+            if done {
+                return n;
+            }
+        }
+    }
+
+    fn toast(lp: &Loop) -> &str {
+        lp.state.toast.as_ref().map_or("", |(t, _)| t)
+    }
+
+    /// The real "check now" against GitHub, read-only; nothing is installed.
+    /// `cargo test real_check_now -- --ignored --nocapture`
+    #[test]
+    #[ignore = "asks api.github.com"]
+    fn real_check_now_asks_github() {
+        use ratatui::crossterm::event::KeyCode;
+        let (mut lp, rx) = update_loop(FakeUpdater::new("v0.0.1", Ok(())), "update-real");
+        lp.updater = Arc::new(crate::commands::update_cmd::GitHub);
+        cursor_to(&mut lp, "check now");
+        press(&mut lp, KeyCode::Enter);
+        drain(&mut lp, &rx, |e| {
+            matches!(e, AppEvent::Update(Msg::Checked(_)))
+        });
+        for row in settings_overlay::update_rows(&lp.state) {
+            println!(
+                "{:<12} {}",
+                match &row {
+                    settings_overlay::Row::Info { label, .. }
+                    | settings_overlay::Row::Action { label, .. } => *label,
+                    _ => "",
+                },
+                settings_overlay::value_text(&row, &lp.state.config)
+            );
+        }
+        println!("toast: {}", toast(&lp));
+        for line in &lp.state.log {
+            println!("log: {}", line.text);
+        }
+        assert_eq!(lp.state.update, None, "a check installs nothing");
+    }
+
+    #[test]
+    fn enter_runs_an_action_row_and_left_right_do_nothing() {
+        use ratatui::crossterm::event::KeyCode;
+        let (mut lp, rx) = update_loop(FakeUpdater::new("v0.0.1", Ok(())), "update-row");
+        cursor_to(&mut lp, "check now");
+        let before = lp.state.config.clone();
+        press(&mut lp, KeyCode::Left);
+        press(&mut lp, KeyCode::Right);
+        assert_eq!(
+            lp.state.update_group.job,
+            Job::Idle,
+            "Left/Right start nothing"
+        );
+        assert!(rx.try_recv().is_err());
+        assert_eq!(lp.state.config, before);
+        press(&mut lp, KeyCode::Enter);
+        assert_eq!(lp.state.update_group.job, Job::Checking);
+        press(&mut lp, KeyCode::Enter);
+        assert_eq!(toast(&lp), "already running");
+        drain(&mut lp, &rx, |e| {
+            matches!(e, AppEvent::Update(Msg::Checked(_)))
+        });
+        assert_eq!(lp.state.update_group.job, Job::Idle);
+        assert_eq!(toast(&lp), "this build is newer than v0.0.1");
+        let rows = settings_overlay::rows_for(&lp.state);
+        assert!(
+            !rows.iter().any(|r| matches!(
+                r,
+                settings_overlay::Row::Action {
+                    label: "install now",
+                    ..
+                }
+            )),
+            "nothing newer to install"
+        );
+    }
+
+    #[test]
+    fn check_then_install_from_the_s_box_ends_with_u_restart() {
+        use ratatui::crossterm::event::KeyCode;
+        let (mut lp, rx) = update_loop(FakeUpdater::new("v99.0.0", Ok(())), "update-install");
+        cursor_to(&mut lp, "check now");
+        press(&mut lp, KeyCode::Enter);
+        drain(&mut lp, &rx, |e| {
+            matches!(e, AppEvent::Update(Msg::Checked(_)))
+        });
+        assert_eq!(toast(&lp), "v99.0.0 available");
+        cursor_to(&mut lp, "install now");
+        press(&mut lp, KeyCode::Enter);
+        cursor_to(&mut lp, "check now");
+        press(&mut lp, KeyCode::Enter);
+        assert_eq!(toast(&lp), "already running", "no check during an install");
+        let n = drain(&mut lp, &rx, |e| {
+            matches!(
+                e,
+                AppEvent::Update(Msg::Installed(_) | Msg::InstallFailed(_))
+            )
+        });
+        // Downloading 0, 10, 42 and 100 %, verifying, installing, the watcher
+        // warning and the result: a repeated 42 % is not sent again.
+        assert_eq!(n, 8);
+        let v = Version::parse("99.0.0").unwrap();
+        assert_eq!(lp.state.update, Some(Pending::Installed(v)));
+        assert_eq!(toast(&lp), "update ready · u restart");
+        assert!(
+            lp.state
+                .log
+                .iter()
+                .any(|l| l.text == "update: no watcher here"),
+            "the watcher refresh failure is logged"
+        );
+        press(&mut lp, KeyCode::Esc);
+        press(&mut lp, KeyCode::Char('u'));
+        assert!(lp.quit && lp.updates.restart, "u restarts into it");
+    }
+
+    #[test]
+    fn a_failed_install_changes_nothing_and_says_why() {
+        use ratatui::crossterm::event::KeyCode;
+        let bad = Err("checksum mismatch for x; it was deleted and nothing was changed".into());
+        let (mut lp, rx) = update_loop(FakeUpdater::new("v99.0.0", bad), "update-fail");
+        cursor_to(&mut lp, "check now");
+        press(&mut lp, KeyCode::Enter);
+        drain(&mut lp, &rx, |e| {
+            matches!(e, AppEvent::Update(Msg::Checked(_)))
+        });
+        cursor_to(&mut lp, "install now");
+        press(&mut lp, KeyCode::Enter);
+        drain(&mut lp, &rx, |e| {
+            matches!(
+                e,
+                AppEvent::Update(Msg::Installed(_) | Msg::InstallFailed(_))
+            )
+        });
+        assert_eq!(toast(&lp), "install failed: checksum mismatch");
+        assert_eq!(lp.state.update, None, "no restart offered");
+        assert_eq!(lp.state.update_group.job, Job::Idle);
     }
 
     fn temp_file(name: &str) -> std::path::PathBuf {

@@ -4,25 +4,64 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use crate::commands::screensaver;
-use crate::update::{self, CheckError, Source, Version};
+use crate::update::{self, CheckError, Release, Source, Step, Updater, Version};
 
-pub fn run(check: bool, dry_run: bool, force: bool) -> ExitCode {
-    let own = Version::current();
-    let exe = match std::env::current_exe() {
-        Ok(p) => PathBuf::from(screensaver::strip_verbatim(&p.display().to_string())),
-        Err(e) => {
-            eprintln!("update: cannot find this program's file: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    println!("this program: telemetrix {own} ({})", exe.display());
+/// This program's file, as an update replaces it. The screensaver
+/// watcher's copy is refused: `screensaver update` refreshes it from the
+/// installed program.
+pub fn installed_exe() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe()
+        .map(|p| PathBuf::from(screensaver::strip_verbatim(&p.display().to_string())))
+        .map_err(|e| format!("cannot find this program's file: {e}"))?;
     if exe
         .file_name()
         .is_some_and(|n| n.eq_ignore_ascii_case(screensaver::WATCH_EXE))
     {
-        eprintln!("update: this is the screensaver watcher's copy; run the installed telemetrix");
-        return ExitCode::FAILURE;
+        return Err("this is the screensaver watcher's copy; run the installed telemetrix".into());
     }
+    Ok(exe)
+}
+
+/// The dashboard's updater: GitHub Releases, installed the way `run` does.
+pub struct GitHub;
+
+impl Updater for GitHub {
+    fn latest(&self) -> Result<Release, CheckError> {
+        update::latest(&Source::github())
+    }
+
+    fn install(&self, release: &Release, on: &mut dyn FnMut(Step)) -> Result<Version, String> {
+        let exe = installed_exe()?;
+        let platform = update::platform().ok_or_else(|| {
+            format!(
+                "releases have no build for {} {}",
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            )
+        })?;
+        let name = update::pick_asset(release, platform)?;
+        update::install(&Source::github(), release, &name, &exe, on).map(|d| d.version)
+    }
+
+    /// Without waiting and without a window: the dashboard owns the console.
+    fn after_install(&self) -> Result<(), String> {
+        if !screensaver::task_installed(None) {
+            return Ok(());
+        }
+        screensaver::refresh_watcher(&installed_exe()?, false)
+    }
+}
+
+pub fn run(check: bool, dry_run: bool, force: bool) -> ExitCode {
+    let own = Version::current();
+    let exe = match installed_exe() {
+        Ok(exe) => exe,
+        Err(e) => {
+            eprintln!("update: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("this program: telemetrix {own} ({})", exe.display());
     let Some(platform) = update::platform() else {
         eprintln!(
             "update: releases have no build for {} {}; build from source instead",
@@ -103,7 +142,7 @@ pub fn run(check: bool, dry_run: bool, force: bool) -> ExitCode {
         return ExitCode::SUCCESS;
     }
     println!("downloading {name}");
-    let d = match update::download(&source, &release, &name, &exe) {
+    let d = match update::install(&source, &release, &name, &exe, &mut |_| {}) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("update: {e}");
@@ -116,15 +155,6 @@ pub fn run(check: bool, dry_run: bool, force: bool) -> ExitCode {
         update::to_hex(&d.sha256),
         update::SUMS_NAME
     );
-    if let Err(e) = update::replace_exe(&exe, &d.path) {
-        let _ = std::fs::remove_file(&d.path);
-        eprintln!(
-            "update: cannot replace {}: {e}; nothing was changed",
-            exe.display()
-        );
-        return ExitCode::FAILURE;
-    }
-    update::discard_ready(&exe);
     println!("installed telemetrix {} as {}", d.version, exe.display());
     if cfg!(windows) {
         println!(

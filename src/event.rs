@@ -27,6 +27,8 @@ pub enum AppEvent {
         query: String,
         result: Result<Vec<SearchOption>, String>,
     },
+    /// A check or an install started from the `s` box.
+    Update(crate::ui::update_group::Msg),
 }
 
 /// Messages from the main loop to one worker; `R` is that worker's settings.

@@ -7,6 +7,7 @@ mod log_overlay;
 pub mod settings_overlay;
 pub mod theme_options;
 mod theme_picker;
+pub mod update_group;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -540,6 +541,86 @@ mod tests {
             );
             color("monthrow");
             assert!(!text(&buf).contains("hiddenrow"), "{theme}: min_width 500");
+        }
+    }
+
+    #[test]
+    fn the_update_group_renders_in_the_s_box() {
+        use crate::ui::update_group::Msg;
+        use crate::update::{Release, Version};
+        let release = |tag: &str| Release {
+            tag: tag.into(),
+            version: Version::parse(tag).unwrap(),
+            assets: Vec::new(),
+        };
+        let own = format!("v{}", env!("CARGO_PKG_VERSION"));
+        let own_version = Version::current();
+        let newer = Version {
+            patch: own_version.patch + 1,
+            ..own_version.clone()
+        };
+        let newer_tag = format!("v{newer}");
+        for theme in ["minimalist", "matrix"] {
+            for tag in [own.as_str(), newer_tag.as_str()] {
+                let mut s = state(theme);
+                s.overlay = Overlay::Settings;
+                s.apply(crate::event::AppEvent::Update(Msg::Checked(Ok(release(
+                    tag,
+                )))));
+                let rows = settings_overlay::rows_for(&s);
+                let sel = settings_overlay::selectable(&rows);
+                s.settings_cursor = sel
+                    .iter()
+                    .position(|&i| {
+                        matches!(&rows[i], settings_overlay::Row::Setting(s) if s.path == "update.check_interval_h")
+                    })
+                    .unwrap();
+                let buf = render(&s, 100, 40);
+                let lines: Vec<String> = (0..40)
+                    .map(|y| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>())
+                    .collect();
+                let start = lines.iter().position(|l| l.contains("[update]")).unwrap();
+                let group: Vec<&str> = lines[start..]
+                    .iter()
+                    .take_while(|l| !l.contains("Up/Down move"))
+                    .map(|l| l.trim_end())
+                    .collect();
+                let text = group.join(
+                    "
+",
+                );
+                println!(
+                    "{theme}, latest {tag}:
+{text}
+"
+                );
+                assert!(
+                    text.contains(&format!("version               {}", own_version)),
+                    "{text}"
+                );
+                assert!(
+                    text.contains(&format!("latest                {tag} · checked ")),
+                    "{text}"
+                );
+                assert!(text.contains("│  check now      "), "{text}");
+                assert!(
+                    text.contains("auto") && text.contains("check_interval_h"),
+                    "{text}"
+                );
+                if tag == own {
+                    assert!(!text.contains("install now"), "{text}");
+                    assert_eq!(s.toast.as_ref().unwrap().0, "up to date");
+                } else {
+                    assert!(
+                        text.contains(&format!("install now           {newer_tag}")),
+                        "{text}"
+                    );
+                    assert_eq!(
+                        s.toast.as_ref().unwrap().0,
+                        format!("{newer_tag} available")
+                    );
+                }
+            }
         }
     }
 

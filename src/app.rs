@@ -265,6 +265,10 @@ pub enum Action {
         dir: i32,
         big: bool,
     },
+    /// Enter: runs an action row, or is the next value like Right.
+    SettingsEnter {
+        big: bool,
+    },
     FpsStep(i32),
     OpenThemes,
     /// A key the app does not use; it may be a plugin's run key.
@@ -376,7 +380,8 @@ pub fn key_action(key: &KeyEvent, overlay: Overlay, exit_on_any_key: bool) -> Ac
         match key.code {
             KeyCode::Up => return Action::SettingsUp,
             KeyCode::Down => return Action::SettingsDown,
-            KeyCode::Enter | KeyCode::Right => return Action::SettingsStep { dir: 1, big },
+            KeyCode::Enter => return Action::SettingsEnter { big },
+            KeyCode::Right => return Action::SettingsStep { dir: 1, big },
             KeyCode::Left => return Action::SettingsStep { dir: -1, big },
             _ => {}
         }
@@ -435,6 +440,8 @@ pub struct AppState {
     pub memory_paused: bool,
     /// A newer version waits: the status bar offers `u` to restart into it.
     pub update: Option<crate::update::Pending>,
+    /// The `update` group of the `s` box: the last check and a running job.
+    pub update_group: crate::ui::update_group::UpdateGroup,
     /// The picker's options panel while it is open.
     pub theme_panel: Option<crate::ui::theme_options::ThemePanel>,
     /// `hide`/`order` entries already reported as naming no card.
@@ -487,6 +494,7 @@ impl AppState {
             over_budget: false,
             memory_paused: false,
             update: None,
+            update_group: Default::default(),
             theme_panel: None,
             warned_cards: BTreeSet::new(),
             plugins_over_budget: BTreeSet::new(),
@@ -595,6 +603,19 @@ impl AppState {
             AppEvent::SearchResults { id, query, result } => {
                 if let Some(b) = self.search_box.as_mut().filter(|b| b.input.id == id) {
                     b.answer(&query, result);
+                }
+            }
+            AppEvent::Update(msg) => {
+                let own = crate::update::Version::current();
+                let out = self.update_group.apply(msg, &own, SystemTime::now());
+                for line in &out.log {
+                    self.log(line);
+                }
+                if let Some(v) = out.installed {
+                    self.update = Some(crate::update::Pending::Installed(v));
+                }
+                if let Some(toast) = out.toast {
+                    self.show_toast(&toast);
                 }
             }
         }
@@ -849,6 +870,10 @@ mod tests {
         assert_eq!(key_action(&key(KeyCode::Up), s, false), Action::SettingsUp);
         assert_eq!(
             key_action(&key(KeyCode::Enter), s, false),
+            Action::SettingsEnter { big: false }
+        );
+        assert_eq!(
+            key_action(&key(KeyCode::Right), s, false),
             Action::SettingsStep { dir: 1, big: false }
         );
         let shift_left = KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT);
