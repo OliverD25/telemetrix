@@ -13,82 +13,12 @@ wrong value can never break.
 
 ## What it looks like
 
-These are real renders of the program, drawn into a 100 by 30 text buffer
-with made-up data (a test prints them). The first theme is quiet; the second
-has digital rain behind the cards. Three more colour themes are listed under
-[Themes](#themes).
+![telemetrix with the Matrix theme: CPU, RAM, swap, two GPUs, disks, crypto and currency graphs, internet latency, speed test and weather over digital rain](docs/screenshot-matrix.webp)
 
-<!-- screenshot:start -->
-`minimalist`:
-
-```text
-╭ CPU ──────────────────────────╮ ╭ Disks ───────────────────────╮ ╭ Clock ────────────────────────╮
-│ █████░░░░░░░░░░░░░░░░░░   23% │ │ Syste… 412.0 GiB / 931.0 GiB │ │ time                 14:32:07 │
-│ temp                  52.0 °C │ │ ██████████░░░░░░░░░░░░   44% │ │ date          Sat 26 Sep 2026 │
-│ ▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▂▃▃▃▃▃▃▃▃▃▃▃▃▃ │ │ Games (D:) 1.6 TiB / 1.8 TiB │ ╰───────────────────────────────╯
-╰───────────────────────────────╯ │ ███████████████████░░░   87% │ ╭ Crypto ───────────────────────╮
-╭ RAM ──────────────────────────╮ ╰──────────────────────────────╯ │ BTC               84,853 USDT │
-│ used      18.3 GiB / 64.0 GiB │                                  │ 7d ▂▂▃▃▃▁▁▁▆▆▆▆▇▇▇▆▆▆██ +2.1% │
-│ ███████░░░░░░░░░░░░░░░░   29% │                                  │ ETH                2,725 USDT │
-│ ▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃ │                                  │ 7d ██▇▇▇▅▅▅▆▆▆▆▁▁▁▄▄▄▂▂ -1.4% │
-╰───────────────────────────────╯                                  ╰───────────────────────────────╯
-╭ Swap ─────────────────────────╮                                  ╭ Weather ──────────────────────╮
-│ used      512.0 MiB / 8.0 GiB │                                  │ now          17°C, wind 3 m/s │
-│ █░░░░░░░░░░░░░░░░░░░░░░    6% │                                  │ Sun        9..18°C cloudy 20% │
-╰───────────────────────────────╯                                  │ Mon          8..15°C rain 70% │
-╭ GPU ──────────────────────────╮                                  │ data: Open-Meteo.com          │
-│ NVIDIA GeForce RTX 4090       │                                  ╰───────────────────────────────╯
-│ █████████░░░░░░░░░░░░░░   37% │
-│ vram       9.0 GiB / 24.0 GiB │
-│ █████████░░░░░░░░░░░░░░   38% │
-│ temp                  45.0 °C │
-│ power                 112.4 W │
-╰───────────────────────────────╯
-
-
-
-
-
-
-
- telemetrix  · t themes · s settings · l log · ? help · q quit   self 11.5 MB · minimalist · 15 fps
-```
-
-`matrix`:
-
-```text
-     1    ｫ   ｯ         1  L  ﾗ    ｳ ｰ    7P          Cﾆﾇ        DX  1Y   3    ﾗ                ｷ
-  ┌ CPU ────────────────────────┐  ┌ Disks ─────────────────────┐5 ┌ Clock ──────────────────────┐
-  │ █████░░░░░░░░░░░░░░░░   23% │  │ Sys… 412.0 GiB / 931.0 GiB │O │ time               14:32:07 │
-  │ temp                52.0 °C │  │ █████████░░░░░░░░░░░   44% │4 │ date        Sat 26 Sep 2026 │
-  │ ▃▃▃▃▃▃▃▃▃▃▃▃▃▂▃▃▃▃▃▃▃▃▃▃▃▃▃ │  │ Games (… 1.6 TiB / 1.8 TiB │ﾘ └─────────────────────────────┘
-  └─────────────────────────────┘  │ █████████████████░░░   87% │ﾏ                       6  8
-     ｨ                     ｩ       └────────────────────────────┘  ┌ Crypto ─────────────────────┐
-  ┌ RAM ────────────────────────┐       ﾖ        I ﾐ  ﾑEﾍ          │ BTC             84,853 USDT │
-  │ used    18.3 GiB / 64.0 GiB │       ﾒ        ﾒ 4  Lｸ4          │ 7d ▂▂▃▃▃▁▁▁▆▆▇▇▇▆▆▆██ +2.1% │
-5 │ ██████░░░░░░░░░░░░░░░   29% │       Q        6 ﾝ   ｫY          │ ETH              2,725 USDT │
-5 │ ▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃ │ H     U5       ｽ ﾚ   ｭE          │ 7d ██▇▇▇▅▅▅▆▆▁▁▁▄▄▄▂▂ -1.4% │
-ﾈ └─────────────────────────────┘ 5     ﾋQ       0 4   74          └─────────────────────────────┘
-ﾜ  ﾅ ﾅ           9    ﾚ        3  F     H2       ｴ     ｴR           ﾉ  Z              V  D  ﾉ
-ﾑ ┌ Swap ───────────────────────┐ S    ｩﾀ1             2           ┌ Weather ────────────────────┐
-1 │ used    512.0 MiB / 8.0 GiB │      4Jﾒ             7           │ now        17°C, wind 3 m/s │
-D │ █░░░░░░░░░░░░░░░░░░░░    6% │      ｵ28             ﾈ           │ Sun      9..18°C cloudy 20% │
-ﾈ └─────────────────────────────┘      ｺﾔ9             G           │ Mon        8..15°C rain 70% │
-Q  ﾑ    ｵ8       R             6       ﾕﾈﾌ                 ｳ       │ data: Open-Meteo.com        │
-ｽ ┌ GPU ────────────────────────┐        L     5           Hﾔ      └─────────────────────────────┘
-ｶ │ NVIDIA GeForce RTX 4090     │        3     ｮ           31       ﾅ  ﾈｨ  8          ｷ  ｦ
-ﾈ │ ████████░░░░░░░░░░░░░   37% │        5     ﾜ           8ﾀ       ｪ  ﾂｾ  ｮ          ｳ  ｶ
-9 │ vram     9.0 GiB / 24.0 GiB │        ﾁ     4           ｰ2      ｱｸ  6ﾐ  ｵ          ﾏ       1
-7 │ ████████░░░░░░░░░░░░░   38% │              ｸ           5I      ﾀ   ｨ8  ｨ       B  ｪ       I
-ﾃ │ temp                45.0 °C │              ｽ           8H      S   ﾙﾆ  ﾖ       8  ﾏ       ﾀ
-ﾀ │ power               112.4 W │              ﾄ           6ﾚ      3   9ﾁ  ﾔ       1  ﾂ       V
-ｳ └─────────────────────────────┘              ﾇ           ｵM      K    X  F       H  ﾀ       ｻ
-                             7 ｽ               ﾉ           ﾒ9      ｱ    ｴ  ｵ       9  H
-                             F                 J            L      E    ｸ  5          ﾃ
-                                                                   Z       ﾎ
- telemetrix  · t themes · s settings · l log · ? help · q quit       self 11.5 MB · matrix · 15 fps
-```
-<!-- screenshot:end -->
+The Matrix theme in Windows Terminal: system cards on the left and in the
+middle, plugin cards on the right, digital rain behind them. Press `t` to
+switch to the quiet `minimalist` theme or to the `tokyo-night`, `crt-amber`
+and `cyberpunk` colour themes (see [Themes](#themes)).
 
 ## Install
 
