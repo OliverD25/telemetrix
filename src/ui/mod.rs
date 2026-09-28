@@ -5,6 +5,7 @@ pub(crate) mod demo;
 mod help_overlay;
 mod log_overlay;
 pub mod settings_overlay;
+pub mod theme_options;
 mod theme_picker;
 
 use ratatui::Frame;
@@ -26,9 +27,10 @@ const STATUS_NAME: &str = " telemetrix ";
 pub const UPDATE_NOTICE: &str = " · update ready · u restart";
 const UPDATE_NOTICE_SHORT: &str = " · u update";
 /// The key hints after the program name, in the order they are dropped from.
-const HINTS: [(&str, &str); 5] = [
+const HINTS: [(&str, &str); 6] = [
     ("t", "themes"),
     ("s", "settings"),
+    ("v", "view"),
     ("l", "log"),
     ("?", "help"),
     ("q", "quit"),
@@ -95,6 +97,10 @@ pub fn draw(frame: &mut Frame, state: &AppState, theme: &mut dyn Theme) {
         Overlay::None => {}
         Overlay::Settings => settings_overlay::draw(frame, area, state),
         Overlay::Themes => theme_picker::draw(frame, area, state),
+        Overlay::ThemeOptions => {
+            theme_picker::draw(frame, area, state);
+            theme_options::draw(frame, area, state);
+        }
         Overlay::Log => log_overlay::draw(frame, area, state),
         Overlay::Help => help_overlay::draw(frame, area, state),
     }
@@ -522,11 +528,11 @@ mod tests {
     fn long_theme_names_shorten_the_hints_not_the_numbers() {
         assert_eq!(
             hint_text(60),
-            " · t themes · s settings · l log · ? help · q quit"
+            " · t themes · s settings · v view · l log · ? help · q quit"
         );
-        assert_eq!(hint_text(45), " · t themes · s settings · l log · ? help");
+        assert_eq!(hint_text(45), " · t themes · s settings · v view · l log");
         assert_eq!(hint_text(25), " · t themes · s settings");
-        assert_eq!(hint_text(21), " · t · s · l · ? · q");
+        assert_eq!(hint_text(21), " · t · s · v · l · ?");
         assert_eq!(hint_text(9), " · t · s");
         assert_eq!(hint_text(2), "");
         let mut s = state("ascii-dashboard");
@@ -552,7 +558,7 @@ mod tests {
         }
         let buf = render(&s, 100, 30);
         let status: String = (0..100).map(|x| buf[(x, 29)].symbol()).collect();
-        assert!(status.contains("s settings · l log"), "{status}");
+        assert!(status.contains("s settings · v view · l log"), "{status}");
     }
 
     #[test]
@@ -578,6 +584,35 @@ mod tests {
         let status: String = (0..64).map(|x| buf[(x, 29)].symbol()).collect();
         assert!(status.starts_with(" telemetrix  · u update"), "{status}");
         assert!(status.ends_with(" ascii-dashboard · 15 fps "), "{status}");
+    }
+
+    #[test]
+    fn the_options_panel_draws_in_every_theme_and_size() {
+        for theme in crate::config::THEME_NAMES {
+            let mut s = state(theme);
+            s.overlay = Overlay::ThemeOptions;
+            s.theme_panel = Some(theme_options::ThemePanel {
+                theme: theme.to_string(),
+                cursor: 0,
+                before: s.config.clone(),
+                changed: Vec::new(),
+            });
+            for (w, h) in [(120, 40), (80, 24), (40, 10)] {
+                let buf = render(&s, w, h);
+                let t = text(&buf);
+                let at = format!("{theme} {w}x{h}");
+                assert!(t.contains(&format!("{theme} options")) || w < 60, "{at}");
+                assert!(t.contains("CPU view"), "{at}");
+                let status: String = (0..w).map(|x| buf[(x, h - 1)].symbol()).collect();
+                assert!(status.starts_with(" telemetrix "), "{at}");
+            }
+            let t = text(&render(&s, 120, 40));
+            assert!(
+                t.contains("Save options for") && t.contains("[x] cpu"),
+                "{theme}"
+            );
+            assert!(t.contains("Esc back"), "{theme}: the hint");
+        }
     }
 
     #[test]

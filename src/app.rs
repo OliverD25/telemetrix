@@ -23,6 +23,8 @@ pub enum Overlay {
     Settings,
     /// The `t` theme picker.
     Themes,
+    /// The options panel of the theme highlighted in the picker.
+    ThemeOptions,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -277,6 +279,23 @@ pub enum Action {
     Reload,
     /// `u`: restart into the new version when one is ready.
     UpdateRestart,
+    /// `v`: the next CPU view of the current theme, saved at once.
+    CycleCpuView,
+    /// Right or `o` in the picker: the options of the highlighted theme.
+    OpenThemeOptions,
+    /// In the options panel: cursor up (-1) or down (1).
+    PanelMove(i32),
+    /// Move the card under the cursor up (-1) or down (1) in the order.
+    PanelShift(i32),
+    /// The previous (-1) or next (1) value of the row.
+    PanelStep(i32),
+    /// Enter: the next value, a card on/off, or Save on the Save row.
+    PanelEnter,
+    /// Space: a card on or off.
+    PanelToggle,
+    PanelSave,
+    /// Esc: put back what the panel changed and return to the list.
+    PanelCancel,
     CloseOverlay,
     /// A key while the text input is open.
     Input(InputKey),
@@ -323,11 +342,30 @@ pub fn key_action(key: &KeyEvent, overlay: Overlay, exit_on_any_key: bool) -> Ac
             Action::Nothing
         };
     }
+    if overlay == Overlay::ThemeOptions {
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        return match key.code {
+            KeyCode::Up if shift => Action::PanelShift(-1),
+            KeyCode::Down if shift => Action::PanelShift(1),
+            KeyCode::Char('[') => Action::PanelShift(-1),
+            KeyCode::Char(']') => Action::PanelShift(1),
+            KeyCode::Up => Action::PanelMove(-1),
+            KeyCode::Down => Action::PanelMove(1),
+            KeyCode::Left => Action::PanelStep(-1),
+            KeyCode::Right => Action::PanelStep(1),
+            KeyCode::Enter => Action::PanelEnter,
+            KeyCode::Char(' ') => Action::PanelToggle,
+            KeyCode::Char('s') => Action::PanelSave,
+            KeyCode::Esc => Action::PanelCancel,
+            _ => Action::Nothing,
+        };
+    }
     if overlay == Overlay::Themes {
         // Only Esc leaves the picker; q must not quit in the middle of a choice.
         return match key.code {
             KeyCode::Up | KeyCode::Char('T') => Action::PickerMove(-1),
             KeyCode::Down | KeyCode::Char('t') => Action::PickerMove(1),
+            KeyCode::Right | KeyCode::Char('o') => Action::OpenThemeOptions,
             KeyCode::Enter => Action::PickerSave,
             KeyCode::Esc => Action::PickerCancel,
             _ => Action::Nothing,
@@ -355,6 +393,7 @@ pub fn key_action(key: &KeyEvent, overlay: Overlay, exit_on_any_key: bool) -> Ac
         KeyCode::Char(' ') => Action::TogglePause,
         KeyCode::Char('r') => Action::Reload,
         KeyCode::Char('u') => Action::UpdateRestart,
+        KeyCode::Char('v') if overlay == Overlay::None => Action::CycleCpuView,
         KeyCode::Char(c) => Action::Key(c),
         _ => Action::Nothing,
     }
@@ -362,8 +401,8 @@ pub fn key_action(key: &KeyEvent, overlay: Overlay, exit_on_any_key: bool) -> Ac
 
 const TOAST_FOR: Duration = Duration::from_secs(2);
 /// Keys the dashboard itself uses; a plugin cannot take them as run keys.
-pub const RESERVED_KEYS: [char; 13] = [
-    'q', 't', 'T', 's', 'l', 'r', 'u', '?', ' ', '+', '=', '-', 'Q',
+pub const RESERVED_KEYS: [char; 14] = [
+    'q', 't', 'T', 's', 'l', 'r', 'u', 'v', '?', ' ', '+', '=', '-', 'Q',
 ];
 
 pub struct AppState {
@@ -396,6 +435,8 @@ pub struct AppState {
     pub memory_paused: bool,
     /// A newer version waits: the status bar offers `u` to restart into it.
     pub update: Option<crate::update::Pending>,
+    /// The picker's options panel while it is open.
+    pub theme_panel: Option<crate::ui::theme_options::ThemePanel>,
     /// `hide`/`order` entries already reported as naming no card.
     pub warned_cards: BTreeSet<(String, String)>,
     plugins_over_budget: BTreeSet<String>,
@@ -446,6 +487,7 @@ impl AppState {
             over_budget: false,
             memory_paused: false,
             update: None,
+            theme_panel: None,
             warned_cards: BTreeSet::new(),
             plugins_over_budget: BTreeSet::new(),
             picker_original: theme_idx,

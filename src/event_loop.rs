@@ -8,6 +8,7 @@ use ratatui::layout::Size;
 
 use crate::app::{self, Action, AppState, InputKey, Overlay, SearchBox, TextInput};
 use crate::cli::Flags;
+use crate::config::View;
 use crate::config::{self, Config, ConfigStatus, LoadOutcome, THEME_NAMES, Value};
 use crate::event::{AppEvent, WorkerCmd};
 use crate::metrics::network::{self, NetworkCmd, NetworkSettings};
@@ -21,6 +22,7 @@ use crate::term::TerminalGuard;
 use crate::themes::{self, Theme};
 use crate::ui;
 use crate::ui::settings_overlay::{self, Change};
+use crate::ui::theme_options::{self, ThemePanel};
 use crate::update::{self, Pending, Version};
 
 /// How often an open dashboard looks for a newer program (decision 53).
@@ -414,6 +416,40 @@ impl Loop {
             }
             Action::Reload => self.rescan_plugins(true),
             Action::UpdateRestart => self.update_restart(),
+            Action::CycleCpuView => self.cycle_cpu_view(),
+            Action::OpenThemeOptions => {
+                s.theme_panel = Some(ThemePanel {
+                    theme: THEME_NAMES[s.theme_idx].to_string(),
+                    cursor: 0,
+                    before: s.config.clone(),
+                    changed: Vec::new(),
+                });
+                s.overlay = Overlay::ThemeOptions;
+                s.dirty = true;
+            }
+            Action::PanelMove(dir) => {
+                if let Some(p) = &s.theme_panel {
+                    let last = theme_options::rows(s, p).len().saturating_sub(1);
+                    let cursor = p.cursor.saturating_add_signed(dir as isize).min(last);
+                    if let Some(p) = s.theme_panel.as_mut() {
+                        p.cursor = cursor;
+                    }
+                    s.dirty = true;
+                }
+            }
+            Action::PanelStep(dir) => self.panel_step(dir, false),
+            Action::PanelEnter => self.panel_step(1, true),
+            Action::PanelToggle => self.panel_toggle(),
+            Action::PanelShift(dir) => self.panel_shift(dir),
+            Action::PanelSave => self.panel_save(),
+            Action::PanelCancel => {
+                if let Some(p) = s.theme_panel.take() {
+                    let before = p.before;
+                    self.adopt(before, false);
+                }
+                self.state.overlay = Overlay::Themes;
+                self.state.dirty = true;
+            }
             Action::Key(c) => {
                 if let Some(id) = s.plugin_keys.get(&c).cloned() {
                     let msg = if self.plugins.run_now(&id) {
@@ -532,6 +568,129 @@ impl Loop {
         }
     }
 
+    /// `v`: bar, chart, both, bar... for the current theme, saved at once.
+    fn cycle_cpu_view(&mut self) {
+        let theme = self.state.theme_name().to_string();
+        let next = match self.state.config.theme(&theme).cpu_view {
+            View::Bar => View::Chart,
+            View::Chart => View::Both,
+            View::Both => View::Bar,
+        };
+        let key = format!("theme.{theme}.cpu_view");
+        self.change(Change::Set(key, Value::Str(next.name().into())));
+        let note = if crate::themes::uses_option(&theme, "cpu_view") {
+            ""
+        } else {
+            ", not used by this theme"
+        };
+        self.state
+            .show_toast(&format!("cpu view: {} ({theme}{note})", next.name()));
+    }
+
+    /// Applies one panel change to the settings in memory only: a preview
+    /// until the panel saves.
+    fn panel_preview(&mut self, key: String, value: Value) {
+        let mut new = self.state.config.clone();
+        settings_overlay::apply(&mut new, &Change::Set(key.clone(), value));
+        self.adopt(new, false);
+        if let Some(p) = self.state.theme_panel.as_mut()
+            && !p.changed.contains(&key)
+        {
+            p.changed.push(key);
+        }
+        self.state.dirty = true;
+    }
+
+    fn panel_step(&mut self, dir: i32, enter: bool) {
+        let Some(p) = &self.state.theme_panel else {
+            return;
+        };
+        let rows = theme_options::rows(&self.state, p);
+        let Some(row) = rows.get(p.cursor) else {
+            return;
+        };
+        if enter && matches!(row, theme_options::PanelRow::Save) {
+            self.panel_save();
+            return;
+        }
+        if let Some((key, value)) = theme_options::step(row, &self.state.config, &p.theme, dir) {
+            self.panel_preview(key, value);
+        }
+    }
+
+    fn panel_toggle(&mut self) {
+        let Some(p) = &self.state.theme_panel else {
+            return;
+        };
+        let rows = theme_options::rows(&self.state, p);
+        if let Some(row @ theme_options::PanelRow::Card(_)) = rows.get(p.cursor)
+            && let Some((key, value)) = theme_options::step(row, &self.state.config, &p.theme, 1)
+        {
+            self.panel_preview(key, value);
+        }
+    }
+
+    fn panel_shift(&mut self, dir: i32) {
+        let Some(p) = &self.state.theme_panel else {
+            return;
+        };
+        let rows = theme_options::rows(&self.state, p);
+        let first_card = rows
+            .iter()
+            .position(|r| matches!(r, theme_options::PanelRow::Card(_)))
+            .unwrap_or(0);
+        let cards: Vec<String> = rows
+            .iter()
+            .filter_map(|r| match r {
+                theme_options::PanelRow::Card(id) => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        let Some(index) = p
+            .cursor
+            .checked_sub(first_card)
+            .filter(|i| *i < cards.len())
+        else {
+            return;
+        };
+        let Some(order) = theme_options::moved(&cards, index, dir) else {
+            return;
+        };
+        let key = format!("theme.{}.order", p.theme);
+        let cursor = p.cursor.saturating_add_signed(dir as isize);
+        self.panel_preview(key, Value::List(order));
+        if let Some(p) = self.state.theme_panel.as_mut() {
+            p.cursor = cursor;
+        }
+    }
+
+    /// Saves every key the panel changed, for its theme only, in one write.
+    fn panel_save(&mut self) {
+        let Some(p) = self.state.theme_panel.take() else {
+            return;
+        };
+        let sets: Vec<(String, Value)> = p
+            .changed
+            .iter()
+            .filter_map(|k| Some((k.clone(), self.state.config.get(k)?)))
+            .collect();
+        let theme = p.theme;
+        self.state.overlay = Overlay::Themes;
+        if sets.is_empty() {
+            self.state
+                .show_toast(&format!("{theme} options: nothing changed"));
+            return;
+        }
+        self.change_many(sets);
+        let saved = matches!(self.state.settings_footer, Some(Ok(_)));
+        let note = if saved {
+            "saved"
+        } else {
+            "not saved, see the log"
+        };
+        self.state.show_toast(&format!("{theme} options {note}"));
+    }
+
     /// Looks for a newer program on disk or a ready download, once an hour.
     fn look_for_update(&mut self, now: Instant) {
         let u = &mut self.updates;
@@ -648,7 +807,7 @@ impl Loop {
         let new = &self.state.config;
         if looks_different(&old, new) {
             let idx = app::theme_index(&new.general.theme);
-            if self.state.overlay == Overlay::Themes {
+            if matches!(self.state.overlay, Overlay::Themes | Overlay::ThemeOptions) {
                 // Keep the preview; the file's theme becomes what Esc goes back to.
                 self.state.picker_original = idx;
             } else {
@@ -748,6 +907,113 @@ mod tests {
         assert_eq!(lp.state.theme_name(), "matrix");
         assert_eq!(lp.state.overlay, Overlay::None);
         assert!(!path.exists(), "a cancelled preview writes nothing");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_options_panel_previews_saves_one_theme_and_esc_restores() {
+        use ratatui::crossterm::event::KeyCode;
+        let path = temp_file("panel");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "[theme.matrix]
+density = 0.3
+",
+        )
+        .unwrap();
+        let mut lp = Loop::for_test(Config::default(), Flags::default(), path.clone());
+        press(&mut lp, KeyCode::Char('t'));
+        while lp.state.theme_name() != "synthwave" {
+            press(&mut lp, KeyCode::Down);
+        }
+        press(&mut lp, KeyCode::Char('o'));
+        assert_eq!(lp.state.overlay, Overlay::ThemeOptions);
+        // Esc puts every previewed change back and writes nothing.
+        press(&mut lp, KeyCode::Right);
+        assert_eq!(lp.state.config.theme("synthwave").cpu_view, View::Chart);
+        press(&mut lp, KeyCode::Esc);
+        assert_eq!(lp.state.overlay, Overlay::Themes);
+        assert_eq!(lp.state.config.theme("synthwave").cpu_view, View::Bar);
+        assert_eq!(lp.state.theme_name(), "synthwave", "still previewing");
+        let untouched = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            untouched,
+            "[theme.matrix]
+density = 0.3
+"
+        );
+
+        press(&mut lp, KeyCode::Right);
+        press(&mut lp, KeyCode::Right);
+        assert_eq!(lp.state.config.theme("synthwave").cpu_view, View::Chart);
+        // Rows: 4 options, then the cards cpu, ram, swap...
+        for _ in 0..6 {
+            press(&mut lp, KeyCode::Down);
+        }
+        press(&mut lp, KeyCode::Char(' '));
+        assert!(lp.state.config.theme("synthwave").hidden("swap"));
+        press(&mut lp, KeyCode::Char('['));
+        assert_eq!(
+            lp.state.config.theme("synthwave").order[..3],
+            ["cpu", "swap", "ram"]
+        );
+        assert_eq!(
+            lp.state.theme_panel.as_ref().unwrap().cursor,
+            5,
+            "follows the card"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            untouched,
+            "only a preview"
+        );
+        press(&mut lp, KeyCode::Char('s'));
+        assert_eq!(lp.state.overlay, Overlay::Themes);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let parsed = config::parse_text(&text).unwrap();
+        let o = parsed.config.theme("synthwave");
+        assert_eq!(o.cpu_view, View::Chart);
+        assert_eq!(o.hide, ["swap"]);
+        assert_eq!(o.order[..3], ["cpu", "swap", "ram"]);
+        assert_eq!(parsed.config.theme_matrix.density, 0.3, "{text}");
+        assert!(
+            !text.contains("theme.minimalist") && !text.contains("general"),
+            "{text}"
+        );
+        assert!(
+            lp.state
+                .toast
+                .as_ref()
+                .is_some_and(|(t, _)| t == "synthwave options saved")
+        );
+        // Leaving the picker without Enter keeps the saved theme choice.
+        press(&mut lp, KeyCode::Esc);
+        assert_eq!(lp.state.theme_name(), "matrix");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn v_cycles_the_cpu_view_of_the_current_theme_and_saves() {
+        use ratatui::crossterm::event::KeyCode;
+        let path = temp_file("cycle-view");
+        let mut lp = Loop::for_test(Config::default(), Flags::default(), path.clone());
+        for want in ["chart", "both", "bar"] {
+            press(&mut lp, KeyCode::Char('v'));
+            let text = std::fs::read_to_string(&path).unwrap();
+            let parsed = config::parse_text(&text).unwrap();
+            assert_eq!(parsed.config.theme("matrix").cpu_view.name(), want);
+            assert_eq!(parsed.config.theme("minimalist").cpu_view, View::Bar);
+            let toast = format!("cpu view: {want} (matrix)");
+            assert!(lp.state.toast.as_ref().is_some_and(|(t, _)| *t == toast));
+        }
+        lp.state.overlay = Overlay::Help;
+        press(&mut lp, KeyCode::Char('v'));
+        assert_eq!(
+            lp.state.config.theme("matrix").cpu_view,
+            View::Bar,
+            "ignored"
+        );
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

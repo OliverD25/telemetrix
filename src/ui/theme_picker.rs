@@ -12,7 +12,8 @@ use crate::config::THEME_NAMES;
 use crate::themes::common::{MUTED, fg};
 
 pub const HINT: &str = "↑↓ preview · Enter save · Esc cancel";
-const WIDTH: u16 = 40;
+pub const OPTIONS_HINT: &str = "→ or o: this theme's options";
+pub const WIDTH: u16 = 40;
 
 /// The first name shown when only `room` of `len` names fit: the
 /// selected one always stays in view.
@@ -27,7 +28,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState) {
     let top = area.y + u16::from(state.banner().is_some()) + 1;
     // Never over the status bar in the last row.
     let room = area.bottom().saturating_sub(top + 1);
-    let wanted = u16::try_from(THEME_NAMES.len() + 4).unwrap_or(u16::MAX);
+    let wanted = u16::try_from(THEME_NAMES.len() + 5).unwrap_or(u16::MAX);
     let height = wanted.min(room);
     let w = WIDTH.min(area.width.saturating_sub(2));
     let rect = Rect::new(area.right().saturating_sub(w + 1), top, w, height).intersection(area);
@@ -58,9 +59,10 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState) {
             }
         })
         .collect();
-    if rows > THEME_NAMES.len() + 1 {
+    if rows > THEME_NAMES.len() + 2 {
         lines.push(Line::raw(""));
         lines.push(Line::styled(HINT, fg(MUTED)));
+        lines.push(Line::styled(OPTIONS_HINT, fg(MUTED)));
     }
     frame.render_widget(Paragraph::new(lines), inner);
 }
