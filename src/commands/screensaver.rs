@@ -79,6 +79,15 @@ impl Names {
 /// Held by a dashboard started with `--screensaver`, so the watcher does
 /// not start a second one while it runs.
 pub const DASHBOARD_MUTEX: &str = r"Local\telemetrix-screensaver-dashboard";
+/// Held by every dashboard, so the watcher never replaces the program
+/// while one is open.
+pub const ANY_DASHBOARD_MUTEX: &str = r"Local\telemetrix-dashboard";
+/// The watcher's record of its last update check, next to its copy.
+pub const UPDATE_CHECK_FILE: &str = "update-check.txt";
+/// The first update look waits a little after logon, for the network.
+pub const UPDATE_FIRST_LOOK: Duration = Duration::from_secs(120);
+/// Later looks: each one checks GitHub only when `update.check_interval_h` has passed.
+pub const UPDATE_LOOK: Duration = Duration::from_secs(3600);
 
 /// What the watcher sees at one poll.
 #[derive(Clone, Copy, Debug)]
@@ -495,8 +504,9 @@ mod sys {
     use windows_sys::Win32::System::ProcessStatus::K32EmptyWorkingSet;
     use windows_sys::Win32::System::SystemInformation::GetTickCount;
     use windows_sys::Win32::System::Threading::{
-        CREATE_NEW_CONSOLE, CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, GetCurrentProcess,
-        OpenEventW, OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE, SetEvent, WaitForSingleObject,
+        CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_CONSOLE, CREATE_NO_WINDOW, CreateEventW,
+        CreateMutexW, EVENT_MODIFY_STATE, GetCurrentProcess, OpenEventW, OpenMutexW,
+        SYNCHRONIZATION_SYNCHRONIZE, SetEvent, WaitForSingleObject,
     };
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 
@@ -557,6 +567,77 @@ mod sys {
         let handle = Handle(h);
         // SAFETY: right after the call that set it.
         (unsafe { GetLastError() } != ERROR_ALREADY_EXISTS).then_some(handle)
+    }
+
+    /// Opens the named mutex and keeps it, also when another process has it
+    /// already: the mutex then exists while any holder runs.
+    pub fn hold(name: &str) -> Option<Handle> {
+        let name = wide(name);
+        // SAFETY: a nul-terminated name and no security attributes.
+        let h = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        (!h.is_null()).then(|| Handle(h))
+    }
+
+    pub fn any_dashboard() -> bool {
+        mutex_exists(super::ANY_DASHBOARD_MUTEX) || mutex_exists(DASHBOARD_MUTEX)
+    }
+
+    pub fn task_installed(n: &Names) -> bool {
+        installed_arguments(n).is_some()
+    }
+
+    /// Runs `<exe> screensaver update`, so the watcher copy follows a new
+    /// program. `wait` runs it in this console; otherwise it starts without
+    /// a window, its output goes to `log`, and it is not waited for (the
+    /// watcher must end so its copy can be replaced).
+    pub fn refresh_watcher(
+        exe: &Path,
+        instance: Option<&str>,
+        log: Option<&Path>,
+        wait: bool,
+    ) -> Result<(), String> {
+        let command = || {
+            let mut cmd = Command::new(exe);
+            if let Some(tag) = instance {
+                cmd.args(["--instance", tag]);
+            }
+            cmd.args(["screensaver", "update"]);
+            cmd
+        };
+        if wait {
+            let status = command()
+                .status()
+                .map_err(|e| format!("cannot start {}: {e}", exe.display()))?;
+            return if status.success() {
+                Ok(())
+            } else {
+                Err(format!("screensaver update ended with {status}"))
+            };
+        }
+        let out = || -> Stdio {
+            log.and_then(|p| {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(p)
+                    .ok()
+            })
+            .map_or_else(Stdio::null, Stdio::from)
+        };
+        let spawn = |flags: u32| {
+            command()
+                .stdin(Stdio::null())
+                .stdout(out())
+                .stderr(out())
+                .creation_flags(flags)
+                .spawn()
+        };
+        // Out of the task's job when Windows allows it, so the end of the
+        // watcher's task cannot end the command that restarts it.
+        spawn(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB)
+            .or_else(|_| spawn(CREATE_NO_WINDOW))
+            .map(|_| ())
+            .map_err(|e| format!("cannot start {}: {e}", exe.display()))
     }
 
     fn mutex_exists(name: &str) -> bool {
@@ -1186,6 +1267,7 @@ mod sys {
             }
         ));
         let mut polls: u32 = 0;
+        let mut next_update = std::time::Instant::now() + super::UPDATE_FIRST_LOOK;
         loop {
             let obs = Observation {
                 idle: idle_time().unwrap_or_default(),
@@ -1207,6 +1289,15 @@ mod sys {
                     }
                 }
             }
+            if !dry_run && std::time::Instant::now() >= next_update {
+                next_update = std::time::Instant::now() + super::UPDATE_LOOK;
+                if update_look(n, exe, flags, &mut say) {
+                    return ExitCode::SUCCESS;
+                }
+                // The TLS code of a check is not needed until the next one.
+                // SAFETY: the pseudo handle of this process.
+                unsafe { K32EmptyWorkingSet(GetCurrentProcess()) };
+            }
             polls += 1;
             if polls == 2 {
                 // Start-up pages (argument parsing, the first log line) are
@@ -1217,6 +1308,46 @@ mod sys {
             if stopped(&stop, POLL) {
                 say("asked to end (screensaver uninstall)");
                 return ExitCode::SUCCESS;
+            }
+        }
+    }
+
+    /// One look at updates (decision 53). True when the installed program
+    /// was replaced and a fresh watcher is on its way: this one must end.
+    fn update_look(n: &Names, exe: &Path, flags: &Flags, say: &mut dyn FnMut(&str)) -> bool {
+        use crate::update;
+        let Some(check_file) = std::env::current_exe()
+            .ok()
+            .map(|p| p.with_file_name(super::UPDATE_CHECK_FILE))
+        else {
+            return false;
+        };
+        let (_, cfg, _) = crate::config::load_effective(flags);
+        let input = update::WatchInput {
+            now: update::unix_now(),
+            last_check: update::read_last_check(&check_file),
+            auto: cfg.update.auto,
+            interval_h: cfg.update.check_interval_h,
+            dashboard_running: any_dashboard(),
+            ready: update::ready(exe).is_some(),
+        };
+        let source = update::Source::github();
+        match update::watch_step(&source, exe, &input, &check_file, &any_dashboard, say) {
+            update::WatchOutcome::Nothing => false,
+            update::WatchOutcome::Installed(_) => {
+                say(&format!(
+                    "update: running {} screensaver update to refresh the watcher copy; this watcher ends",
+                    exe.display()
+                ));
+                match refresh_watcher(exe, n.instance.as_deref(), flags.log.as_deref(), false) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        say(&format!(
+                            "update: {e}; run telemetrix screensaver update by hand"
+                        ));
+                        false
+                    }
+                }
             }
         }
     }
@@ -1302,6 +1433,43 @@ mod sys {
             "screensaver watch works on Windows only; on Linux use swayidle or xautolock (see screensaver install)"
         );
         ExitCode::FAILURE
+    }
+}
+
+/// Held by every dashboard while it runs; see `ANY_DASHBOARD_MUTEX`.
+#[cfg(windows)]
+pub fn hold_dashboard() -> Option<sys::Handle> {
+    sys::hold(ANY_DASHBOARD_MUTEX)
+}
+
+#[cfg(not(windows))]
+pub fn hold_dashboard() -> Option<()> {
+    None
+}
+
+/// Whether the screensaver task is installed; always false on Linux.
+pub fn task_installed(instance: Option<&str>) -> bool {
+    #[cfg(windows)]
+    {
+        sys::task_installed(&Names::new(instance))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = instance;
+        false
+    }
+}
+
+/// Runs `<exe> screensaver update` (Windows); see `sys::refresh_watcher`.
+pub fn refresh_watcher(exe: &Path, wait: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        sys::refresh_watcher(exe, None, None, wait)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (exe, wait);
+        Ok(())
     }
 }
 

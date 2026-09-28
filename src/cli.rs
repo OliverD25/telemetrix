@@ -24,6 +24,9 @@ Usage:
                                           run 10 minutes plus <minutes>, exit 1 if private
                                           memory grows more than 0.2 MB per hour
   telemetrix themes                       list theme names
+  telemetrix update [--check] [--dry-run] [--force]
+                                          install the latest release from GitHub
+                                          (--check: only say whether one is newer)
   telemetrix screensaver install [--idle-minutes N] [--dry-run]
                                           open the dashboard full screen after N minutes
                                           without input (Windows; Linux prints a recipe)
@@ -145,6 +148,13 @@ pub enum Command {
     Config(ConfigCmd),
     Plugin(PluginCmd),
     Screensaver(ScreensaverCmd),
+    Update {
+        /// Only print whether a newer release exists.
+        check: bool,
+        dry_run: bool,
+        /// Install the latest release even when it is not newer.
+        force: bool,
+    },
     Help,
     Version,
 }
@@ -158,6 +168,7 @@ pub struct Cli {
 #[derive(Default)]
 struct Switches {
     json: bool,
+    check: bool,
     force: bool,
     plugins: bool,
     memory: bool,
@@ -244,6 +255,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
                 sw.idle_minutes = Some(n);
             }
             Long("dry-run") => sw.dry_run = true,
+            Long("check") => sw.check = true,
             Long("instance") => {
                 let tag = text(parser.value())?;
                 let ok = (1..=20).contains(&tag.len())
@@ -300,6 +312,11 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
     let cmd = match words.as_slice() {
         [] => Command::Tui,
         ["themes"] => Command::Themes,
+        ["update"] => Command::Update {
+            check: sw.check,
+            dry_run: sw.dry_run,
+            force: sw.force,
+        },
         ["selftest"] if sw.memory => Command::Selftest {
             seconds: sw.seconds.unwrap_or(30),
             json: sw.json,

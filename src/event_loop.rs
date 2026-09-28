@@ -21,6 +21,41 @@ use crate::term::TerminalGuard;
 use crate::themes::{self, Theme};
 use crate::ui;
 use crate::ui::settings_overlay::{self, Change};
+use crate::update::{self, Pending, Version};
+
+/// How often an open dashboard looks for a newer program (decision 53).
+const UPDATE_LOOK: Duration = Duration::from_secs(3600);
+
+/// How the dashboard ended.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Exit {
+    Quit,
+    /// `u`: start the new program in this console.
+    Restart,
+}
+
+/// What the dashboard needs to notice a newer program on disk.
+struct UpdateWatch {
+    exe: std::path::PathBuf,
+    /// Size and time of the program file when this dashboard started.
+    started: Option<(u64, SystemTime)>,
+    next_look: Instant,
+    restart: bool,
+    /// Off in tests, which must never run the real `schtasks`.
+    refresh_watcher: bool,
+}
+
+impl UpdateWatch {
+    fn new(exe: &Path) -> Self {
+        Self {
+            exe: exe.to_path_buf(),
+            started: update::stamp(exe),
+            next_look: Instant::now(),
+            restart: false,
+            refresh_watcher: true,
+        }
+    }
+}
 
 pub const HOUSEKEEPING: Duration = Duration::from_secs(2);
 /// `poll` does not wake when a worker sends on the channel, so the wait is
@@ -51,9 +86,11 @@ struct Loop {
     plugins: Manager,
     last_rescan: Instant,
     network: mpsc::Sender<NetworkCmd>,
+    updates: UpdateWatch,
 }
 
-pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags) -> io::Result<()> {
+/// `exe` is this program's file as it was at start; an update replaces it.
+pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags, exe: &Path) -> io::Result<Exit> {
     crate::term::install_signal_handling();
     let path = config::resolve_path(flags.config.as_deref());
     let (tx, rx) = mpsc::channel::<AppEvent>();
@@ -97,13 +134,19 @@ pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags) -> io::Result<()> {
         plugins,
         last_rescan: Instant::now(),
         network,
+        updates: UpdateWatch::new(exe),
     };
     lp.rescan_plugins(false);
     let result = event_loop(&mut lp, &mut guard, &rx);
     let _ = lp.metrics.send(WorkerCmd::Stop);
     let _ = lp.network.send(WorkerCmd::Stop);
     lp.plugins.stop_all();
-    result
+    result?;
+    Ok(if lp.updates.restart {
+        Exit::Restart
+    } else {
+        Exit::Quit
+    })
 }
 
 fn event_loop(
@@ -172,6 +215,7 @@ fn event_loop(
             lp.state.toast = None;
             lp.state.dirty = true;
         }
+        lp.look_for_update(now);
         if now >= next_house {
             lp.housekeeping(guard.terminal.size()?);
             next_house = now + HOUSEKEEPING;
@@ -369,6 +413,7 @@ impl Loop {
                 s.dirty = true;
             }
             Action::Reload => self.rescan_plugins(true),
+            Action::UpdateRestart => self.update_restart(),
             Action::Key(c) => {
                 if let Some(id) = s.plugin_keys.get(&c).cloned() {
                     let msg = if self.plugins.run_now(&id) {
@@ -471,6 +516,58 @@ impl Loop {
                 report.running
             );
             self.state.show_toast(&short);
+        }
+    }
+
+    /// Looks for a newer program on disk or a ready download, once an hour.
+    fn look_for_update(&mut self, now: Instant) {
+        let u = &mut self.updates;
+        if now < u.next_look {
+            return;
+        }
+        u.next_look = now + UPDATE_LOOK;
+        let found = update::pending(&u.exe, u.started, &Version::current());
+        if found != self.state.update {
+            if let Some(p) = &found {
+                let (Pending::Ready(v) | Pending::Installed(v)) = p;
+                self.state.log(&format!(
+                    "update: telemetrix {v} is ready; press u to restart"
+                ));
+            }
+            self.state.update = found;
+            self.state.dirty = true;
+        }
+    }
+
+    /// `u`: installs a ready download if needed, then ends the loop so the
+    /// new program starts in this console.
+    fn update_restart(&mut self) {
+        let exe = self.updates.exe.clone();
+        match self.state.update.clone() {
+            None => {}
+            Some(Pending::Installed(_)) => {
+                self.updates.restart = true;
+                self.quit = true;
+            }
+            Some(Pending::Ready(_)) => match update::install_ready(&exe, &Version::current()) {
+                Ok(v) => {
+                    self.state
+                        .log(&format!("update: installed telemetrix {v}; restarting"));
+                    if self.updates.refresh_watcher
+                        && crate::commands::screensaver::task_installed(None)
+                        && let Err(e) = crate::commands::screensaver::refresh_watcher(&exe, false)
+                    {
+                        self.state.log(&format!("warning: update: {e}"));
+                    }
+                    self.updates.restart = true;
+                    self.quit = true;
+                }
+                Err(e) => {
+                    self.state.log(&format!("warning: update: {e}"));
+                    self.state.show_toast("update failed, see the log (l)");
+                    self.state.update = None;
+                }
+            },
         }
     }
 
@@ -604,6 +701,10 @@ mod tests {
                 plugins: Manager::new(&quiet, &plugin_settings, mpsc::channel().0),
                 last_rescan: Instant::now(),
                 network: mpsc::channel().0,
+                updates: UpdateWatch {
+                    refresh_watcher: false,
+                    ..UpdateWatch::new(Path::new("telemetrix-test-no-such-exe"))
+                },
             }
         }
     }
@@ -902,6 +1003,44 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("days = 1"), "{text}");
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn u_installs_a_ready_update_and_asks_for_a_restart() {
+        let path = temp_file("update-ready");
+        let dir = path.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("telemetrix.exe");
+        std::fs::write(&exe, "running").unwrap();
+        let mut lp = Loop::for_test(Config::default(), Flags::default(), path);
+        lp.updates = UpdateWatch {
+            refresh_watcher: false,
+            ..UpdateWatch::new(&exe)
+        };
+        press(&mut lp, ratatui::crossterm::event::KeyCode::Char('u'));
+        assert!(!lp.quit, "u does nothing without an update");
+
+        let download = dir.join("telemetrix.exe.download");
+        std::fs::write(&download, "new program").unwrap();
+        let d = update::Downloaded {
+            sha256: update::sha256_file(&download).unwrap(),
+            path: download,
+            version: Version::parse("99.0.0").unwrap(),
+            bytes: 11,
+        };
+        update::save_ready(&exe, &d).unwrap();
+        let now = Instant::now();
+        lp.look_for_update(now);
+        assert_eq!(
+            lp.state.update,
+            Some(Pending::Ready(Version::parse("99.0.0").unwrap()))
+        );
+        lp.look_for_update(now + Duration::from_secs(60));
+        assert!(lp.updates.next_look >= now + UPDATE_LOOK, "once an hour");
+        press(&mut lp, ratatui::crossterm::event::KeyCode::Char('u'));
+        assert!(lp.quit && lp.updates.restart);
+        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "new program");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

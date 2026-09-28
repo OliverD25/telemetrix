@@ -373,8 +373,8 @@ With `run_key = "g"`, pressing `g` in the dashboard runs `update()` at once,
 without waiting for the interval. Its trigger is then `"key"`.
 
 - It must be one printable character.
-- Keys that telemetrix uses itself (`q`, `Q`, `t`, `T`, `s`, `l`, `r`, `?`,
-  space, `+`, `=`, `-`) are refused, with a warning in the log.
+- Keys that telemetrix uses itself (`q`, `Q`, `t`, `T`, `s`, `l`, `r`, `u`,
+  `?`, space, `+`, `=`, `-`) are refused, with a warning in the log.
 - When two plugins want the same key, the first one keeps it and the other
   gets a warning.
 

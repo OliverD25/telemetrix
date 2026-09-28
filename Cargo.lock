@@ -1026,6 +1026,7 @@ dependencies = [
  "libc",
  "mlua",
  "ratatui",
+ "ring",
  "serde",
  "serde_json",
  "sysinfo",

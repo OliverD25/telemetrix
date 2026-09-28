@@ -7,6 +7,19 @@ All notable changes to telemetrix. Versions follow
 
 ### Added
 
+- **Updates from GitHub Releases:** `telemetrix update [--check]
+  [--dry-run] [--force]` downloads the program for this platform from the
+  latest release of `OliverD25/telemetrix`, checks its SHA-256 against the
+  release's `SHA256SUMS`, and replaces the installed program (on Windows
+  the old file moves aside to `.old` and is deleted at the next start).
+  The screensaver watcher checks once a day (`[update] auto`,
+  `check_interval_h`) and installs by itself when no dashboard is open;
+  otherwise it keeps a checked download ready. An open dashboard shows
+  `update ready · u restart`, and `u` restarts into the new version in the
+  same window.
+- **Releases** carry the bare programs and a `SHA256SUMS` file next to
+  the archives.
+
 - **nasa theme:** a mission control console. Every value is a row with a
   code, the value, its unit and a NOMINAL, CAUTION or WARNING status, in
   white and amber on black, under a line with the time since start (MET)
@@ -24,6 +37,12 @@ All notable changes to telemetrix. Versions follow
 - **ascii-dashboard theme:** large block-character charts of the CPU and
   RAM history, and horizontal block bars for disks, GPUs and swap that
   fill in eighths of a cell. Static.
+
+### Fixed
+
+- The status bar no longer cuts its key hints in the middle of a word when
+  the theme name is long. It drops hints from the end, then shows the keys
+  alone.
 
 ## 0.2.0 (not released yet)
 

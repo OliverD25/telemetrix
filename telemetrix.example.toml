@@ -52,6 +52,10 @@ max_plugins = 16            # at most this many plugins run, 1..64
 budget_mb = 14              # whole program, above it the status bar turns amber
 plugin_budget_mb = 1        # Lua memory per plugin, above it one log warning
 
+[update]
+auto = true                 # the screensaver watcher installs new releases by itself
+check_interval_h = 24       # hours between two checks, 1..168
+
 [theme.matrix]
 density = 0.5               # 0.0..1.0
 speed = 1.0                 # 0.1..5.0

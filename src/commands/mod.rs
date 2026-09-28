@@ -3,3 +3,4 @@ pub mod plugin_cmd;
 pub mod screensaver;
 pub mod selftest;
 pub mod snapshot;
+pub mod update_cmd;

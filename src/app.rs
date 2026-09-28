@@ -275,6 +275,8 @@ pub enum Action {
     ToggleHelp,
     TogglePause,
     Reload,
+    /// `u`: restart into the new version when one is ready.
+    UpdateRestart,
     CloseOverlay,
     /// A key while the text input is open.
     Input(InputKey),
@@ -352,6 +354,7 @@ pub fn key_action(key: &KeyEvent, overlay: Overlay, exit_on_any_key: bool) -> Ac
         KeyCode::Char('?') => Action::ToggleHelp,
         KeyCode::Char(' ') => Action::TogglePause,
         KeyCode::Char('r') => Action::Reload,
+        KeyCode::Char('u') => Action::UpdateRestart,
         KeyCode::Char(c) => Action::Key(c),
         _ => Action::Nothing,
     }
@@ -359,7 +362,9 @@ pub fn key_action(key: &KeyEvent, overlay: Overlay, exit_on_any_key: bool) -> Ac
 
 const TOAST_FOR: Duration = Duration::from_secs(2);
 /// Keys the dashboard itself uses; a plugin cannot take them as run keys.
-pub const RESERVED_KEYS: [char; 12] = ['q', 't', 'T', 's', 'l', 'r', '?', ' ', '+', '=', '-', 'Q'];
+pub const RESERVED_KEYS: [char; 13] = [
+    'q', 't', 'T', 's', 'l', 'r', 'u', '?', ' ', '+', '=', '-', 'Q',
+];
 
 pub struct AppState {
     pub config: Config,
@@ -389,6 +394,8 @@ pub struct AppState {
     /// Over the budget, but a speed test runs or ended moments ago: no
     /// warning and no amber until the grace period is over.
     pub memory_paused: bool,
+    /// A newer version waits: the status bar offers `u` to restart into it.
+    pub update: Option<crate::update::Pending>,
     plugins_over_budget: BTreeSet<String>,
     /// While the theme picker is open: the theme that Esc goes back to.
     pub picker_original: usize,
@@ -436,6 +443,7 @@ impl AppState {
             self_memory: None,
             over_budget: false,
             memory_paused: false,
+            update: None,
             plugins_over_budget: BTreeSet::new(),
             picker_original: theme_idx,
             network: None,
@@ -817,6 +825,14 @@ mod tests {
             key_action(&key(KeyCode::Char('+')), none, false),
             Action::FpsStep(1)
         );
+    }
+
+    #[test]
+    fn u_restarts_and_no_plugin_can_take_it() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE);
+        assert_eq!(key_action(&u, Overlay::None, false), Action::UpdateRestart);
+        assert!(RESERVED_KEYS.contains(&'u'));
     }
 
     #[test]

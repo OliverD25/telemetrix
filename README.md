@@ -102,6 +102,7 @@ telemetrix --exit-on-any-key      # screensaver mode: any key quits
 | `space` | pause the animation |
 | `l` | log, with the program's own memory use at the top |
 | `r` | look for new, changed and removed plugins now |
+| `u` | when the status bar says `update ready · u restart`: install the new version if needed and restart into it (see [Updates](#updates)) |
 | `g` | run the speed test now (a plugin's own key) |
 | `?` | help |
 
@@ -150,6 +151,7 @@ These need no terminal window, so scripts and agents can use them.
 | `telemetrix plugin list` | list the plugins that would run, the plugin home, and whether each one is built-in, built-in-edited or yours |
 | `telemetrix plugin install [--force] [name...]` | install or update the built-in plugins now; `--force` also replaces your edits and restores deleted ones (all, or only the named ones) |
 | `telemetrix themes` | list the theme names |
+| `telemetrix update [--check] [--dry-run] [--force]` | install the latest release from GitHub; `--check` only says whether it is newer. See [Updates](#updates) |
 | `telemetrix screensaver install [--idle-minutes N] [--dry-run]` | open the dashboard full screen after N minutes without input (Windows); on Linux print the idle-daemon line. See [As a screensaver](#as-a-screensaver-when-the-pc-is-idle-windows) |
 | `telemetrix screensaver uninstall [--dry-run]` / `status` | remove it / show whether it is installed and running |
 | `telemetrix screensaver update [--dry-run]` | after `cargo install`: copy the new program to the watcher and restart it. See [Updating telemetrix](#updating-telemetrix) |
@@ -483,6 +485,8 @@ no longer matches the program.
 | `plugins.max_plugins` | `16` | 1..64 | yes | at most this many plugins run, 1..64 |
 | `memory.budget_mb` | `14` | 5..1024 | yes | whole program, above it the status bar turns amber |
 | `memory.plugin_budget_mb` | `1` | 1..64 | yes | Lua memory per plugin, above it one log warning |
+| `update.auto` | `true` | true \| false | yes | the screensaver watcher installs new releases by itself |
+| `update.check_interval_h` | `24` | 1..168 | yes | hours between two checks, 1..168 |
 | `theme.matrix.density` | `0.5` | 0.0..1.0 | yes | 0.0..1.0 |
 | `theme.matrix.speed` | `1.0` | 0.1..5.0 | yes | 0.1..5.0 |
 | `theme.matrix.color` | `"green"` | green \| amber \| cyan \| white \| #rrggbb | yes | green \| amber \| cyan \| white \| #rrggbb |
@@ -766,6 +770,10 @@ dashboard uses that file.
 
 ### Updating telemetrix
 
+`telemetrix update` does all of this by itself, and the screensaver
+watcher runs it once a day (see [Updates](#updates)). By hand, with
+`cargo install`:
+
 1. Close every telemetrix dashboard. A running dashboard locks
    `telemetrix.exe`, so the update would fail with "Access is denied".
 2. Install the new version, for example
@@ -803,6 +811,79 @@ Use your own terminal instead of `foot` if you like.
 ```
 xautolock -time 5 -locker "xterm -fullscreen -e telemetrix --exit-on-any-key" &
 ```
+
+## Updates
+
+telemetrix updates itself from the GitHub Releases of
+`OliverD25/telemetrix`, and from nowhere else.
+
+```
+telemetrix update --check      # only say whether a newer release exists
+telemetrix update --dry-run    # show what an update would do
+telemetrix update              # download, check and install it
+```
+
+What `telemetrix update` does:
+
+1. It asks the GitHub API for the latest release. The request has no login.
+   GitHub allows 60 such requests per hour for one address; when it
+   refuses (HTTP 403 or 429), the command says so and stops.
+2. It compares the release version with its own. An older or equal release
+   changes nothing. `--force` installs the release anyway.
+3. It downloads `SHA256SUMS` and the bare program for this platform
+   (`telemetrix-<tag>-windows-x86_64.exe` or `telemetrix-<tag>-linux-x86_64`)
+   into the folder of the installed program, as `telemetrix.exe.download`.
+   Only https is used.
+4. It checks the SHA-256 of the download against the line in `SHA256SUMS`.
+   When they differ, it deletes the download and stops; nothing else
+   changes.
+5. It replaces the program. On Windows a running program cannot be
+   overwritten, but it can be renamed: the current file becomes
+   `telemetrix.exe.old` and the download takes its name. The `.old` file is
+   deleted at the next start. On Linux one rename replaces the file.
+6. If the screensaver is installed, it runs the new program with
+   `screensaver update`, so the watcher copy follows.
+
+Nothing from the download runs except the checked new program.
+
+**What the checksum proves:** the program matches the list that the same
+release publishes, so the download is complete and unchanged on the way.
+It does not prove who built the release: someone who could change the
+release could change both files. The trust is in the GitHub account and
+its release workflow.
+
+### Automatic updates
+
+With the screensaver installed (Windows), the watcher looks every hour
+whether `update.check_interval_h` (24 by default) has passed since its last
+check, and then asks GitHub. It keeps the time of the last check in
+`update-check.txt` next to its copy, and writes every step to `watch.log`.
+
+- No dashboard is open: it downloads, checks and installs the new version,
+  then runs `screensaver update`, which restarts the watcher from a fresh
+  copy.
+- A dashboard is open: it only downloads and checks, and keeps the file as
+  `telemetrix.exe.ready` with its checksum in `telemetrix.exe.ready.json`.
+  It installs it when no dashboard is open any more.
+
+Turn this off with `update.auto = false` (also in the `s` box). On Linux
+there is no watcher; run `telemetrix update` yourself or from a timer.
+
+### In an open dashboard
+
+The dashboard looks once an hour for a ready download or a newer program
+file. Then the status bar shows `update ready · u restart`. Press `u`:
+the dashboard installs a ready download if needed, gives the terminal back
+and starts the new version in the same window with the same arguments.
+
+- On Linux the new version replaces the old process (`exec`).
+- On Windows a program cannot replace itself. In Windows Terminal the
+  shell (for example `powershell -NoExit -Command & telemetrix.exe`) waits
+  for the dashboard; if the dashboard ended at once, the shell would show
+  its prompt and read keys while the new dashboard draws. So the old
+  process starts the new one in the same console, gives back its memory
+  and waits for it. It then ends with the new one's exit code. While it
+  waits it uses almost no memory and no CPU.
 
 ## Questions and bugs
 

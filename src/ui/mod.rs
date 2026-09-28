@@ -22,6 +22,9 @@ pub const TOO_SMALL: &str = "terminal too small (need 40x10)";
 const OVERLAY_BG: Color = Color::Rgb(22, 22, 22);
 const OVERLAY_FG: Color = Color::Rgb(210, 210, 210);
 const STATUS_NAME: &str = " telemetrix ";
+/// After the program name when a newer version waits.
+pub const UPDATE_NOTICE: &str = " · update ready · u restart";
+const UPDATE_NOTICE_SHORT: &str = " · u update";
 /// The key hints after the program name, in the order they are dropped from.
 const HINTS: [(&str, &str); 5] = [
     ("t", "themes"),
@@ -124,7 +127,13 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &AppState) {
     let right_w = u16::try_from(memory.chars().count() + rest.chars().count()).unwrap_or(u16::MAX);
     let [left_area, right_area] =
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(right_w)]).areas(area);
-    let room = usize::from(left_area.width).saturating_sub(STATUS_NAME.len());
+    let free = usize::from(left_area.width).saturating_sub(STATUS_NAME.len());
+    let notice = match state.update {
+        None => "",
+        Some(_) if UPDATE_NOTICE.chars().count() <= free => UPDATE_NOTICE,
+        Some(_) => UPDATE_NOTICE_SHORT,
+    };
+    let room = free.saturating_sub(notice.chars().count());
     let base = Style::new()
         .bg(Color::Rgb(38, 38, 38))
         .fg(Color::Rgb(190, 190, 190));
@@ -136,6 +145,7 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &AppState) {
                 .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         ),
+        Span::styled(notice, Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
         Span::raw(hint_text(room)),
     ]);
     frame.render_widget(Paragraph::new(left).style(base), left_area);
@@ -543,6 +553,31 @@ mod tests {
         let buf = render(&s, 100, 30);
         let status: String = (0..100).map(|x| buf[(x, 29)].symbol()).collect();
         assert!(status.contains("s settings · l log"), "{status}");
+    }
+
+    #[test]
+    fn a_ready_update_shows_in_the_status_bar() {
+        let mut s = state("ascii-dashboard");
+        s.update = Some(crate::update::Pending::Ready(
+            crate::update::Version::parse("0.4.0").unwrap(),
+        ));
+        for w in [120, 100] {
+            let buf = render(&s, w, 30);
+            let status: String = (0..w).map(|x| buf[(x, 29)].symbol()).collect();
+            assert!(
+                status.starts_with(" telemetrix  · update ready · u restart"),
+                "{w}: {status}"
+            );
+            assert!(
+                status.ends_with(" ascii-dashboard · 15 fps "),
+                "{w}: {status}"
+            );
+            assert_eq!(cell_color(&buf, "update ready"), Some(ACCENT));
+        }
+        let buf = render(&s, 64, 30);
+        let status: String = (0..64).map(|x| buf[(x, 29)].symbol()).collect();
+        assert!(status.starts_with(" telemetrix  · u update"), "{status}");
+        assert!(status.ends_with(" ascii-dashboard · 15 fps "), "{status}");
     }
 
     #[test]

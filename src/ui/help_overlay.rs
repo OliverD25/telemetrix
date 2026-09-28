@@ -7,7 +7,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::AppState;
 use crate::themes::common::fg;
 
-const KEYS: [(&str, &str); 10] = [
+const KEYS: [(&str, &str); 11] = [
     ("q  Esc  Ctrl+C", "quit (Esc closes an open overlay first)"),
     ("t", "themes: Up/Down preview, Enter saves, Esc cancels"),
     ("space", "pause the animation"),
@@ -16,6 +16,10 @@ const KEYS: [(&str, &str); 10] = [
     ("+ / -", "more / fewer frames per second"),
     ("l", "log overlay"),
     ("r", "rescan plugins"),
+    (
+        "u",
+        "restart into a new version (when the status bar says so)",
+    ),
     ("?", "this help"),
     ("--exit-on-any-key", "screensaver mode: any key quits"),
 ];

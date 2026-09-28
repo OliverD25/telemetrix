@@ -383,6 +383,20 @@ pub static SETTINGS: &[Setting] = &[
         "Lua memory per plugin, above it one log warning",
     ),
     setting(
+        "update.auto",
+        Kind::Bool,
+        Value::Bool(true),
+        true,
+        "the screensaver watcher installs new releases by itself",
+    ),
+    setting(
+        "update.check_interval_h",
+        int(1, 168),
+        Value::Int(24),
+        true,
+        "hours between two checks, 1..168",
+    ),
+    setting(
         "theme.matrix.density",
         Kind::Float { min: 0.0, max: 1.0 },
         Value::Float(0.5),
@@ -524,6 +538,13 @@ pub struct Memory {
     pub plugin_budget_mb: u64,
 }
 
+/// Automatic updates from GitHub Releases (decision 53).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Update {
+    pub auto: bool,
+    pub check_interval_h: u64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Gpu {
     pub enabled: bool,
@@ -603,6 +624,7 @@ pub struct Config {
     pub disks: Disks,
     pub plugins: Plugins,
     pub memory: Memory,
+    pub update: Update,
     pub theme_matrix: ThemeMatrix,
     pub theme_minimalist: ThemeMinimalist,
     pub plugin_cfg: BTreeMap<String, PluginConfig>,
@@ -653,6 +675,10 @@ impl Default for Config {
             memory: Memory {
                 budget_mb: 0,
                 plugin_budget_mb: 0,
+            },
+            update: Update {
+                auto: false,
+                check_interval_h: 0,
             },
             plugins: Plugins {
                 enabled: false,
@@ -744,6 +770,8 @@ impl Config {
             "plugins.max_plugins" => Value::Int(p.max_plugins as i64),
             "memory.budget_mb" => Value::Int(self.memory.budget_mb as i64),
             "memory.plugin_budget_mb" => Value::Int(self.memory.plugin_budget_mb as i64),
+            "update.auto" => Value::Bool(self.update.auto),
+            "update.check_interval_h" => Value::Int(self.update.check_interval_h as i64),
             "theme.matrix.density" => Value::Float(self.theme_matrix.density),
             "theme.matrix.speed" => Value::Float(self.theme_matrix.speed),
             "theme.matrix.color" => Value::Str(self.theme_matrix.color.clone().into()),
@@ -817,6 +845,8 @@ impl Config {
             "plugins.max_plugins" => p.max_plugins = clamp_u64(v) as usize,
             "memory.budget_mb" => self.memory.budget_mb = clamp_u64(v),
             "memory.plugin_budget_mb" => self.memory.plugin_budget_mb = clamp_u64(v),
+            "update.auto" => self.update.auto = v.as_bool(),
+            "update.check_interval_h" => self.update.check_interval_h = clamp_u64(v),
             "theme.matrix.density" => self.theme_matrix.density = v.as_f64(),
             "theme.matrix.speed" => self.theme_matrix.speed = v.as_f64(),
             "theme.matrix.color" => self.theme_matrix.color = v.as_str().to_string(),
