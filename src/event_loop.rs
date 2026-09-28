@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime};
 
-use ratatui::crossterm::event::{self, Event, KeyEventKind};
+use ratatui::crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use ratatui::layout::Size;
 
 use crate::app::{self, Action, AppState, InputKey, Overlay, SearchBox, TextInput};
@@ -190,18 +190,7 @@ fn event_loop(
         let deadline = next_deadline(Instant::now(), interval.map(|_| next_frame), next_house);
         if event::poll(deadline.saturating_duration_since(Instant::now()))? {
             match event::read() {
-                Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                    let action = if lp.state.typing() {
-                        app::input_key_action(&key)
-                    } else {
-                        app::key_action(
-                            &key,
-                            lp.state.overlay,
-                            lp.state.config.general.exit_on_any_key,
-                        )
-                    };
-                    lp.act(action);
-                }
+                Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => lp.key(&key),
                 Ok(Event::Resize(..)) => lp.state.dirty = true,
                 Ok(_) => {}
                 Err(_) => return Ok(()),
@@ -312,6 +301,25 @@ impl Loop {
             return None;
         }
         self.themes[self.state.theme_idx].frame_interval(&self.state.config)
+    }
+
+    /// A measurement run (`--selftest-report`) takes no keys. Its hidden
+    /// console still gets the keyboard focus on Windows, so keys typed for
+    /// another window land here, and one `q` ended the run without a report.
+    fn key(&mut self, key: &KeyEvent) {
+        if self.flags.selftest_report.is_some() {
+            return;
+        }
+        let action = if self.state.typing() {
+            app::input_key_action(key)
+        } else {
+            app::key_action(
+                key,
+                self.state.overlay,
+                self.state.config.general.exit_on_any_key,
+            )
+        };
+        self.act(action);
     }
 
     fn act(&mut self, action: Action) {
@@ -1511,6 +1519,33 @@ density = 0.3
         lp.act(app::key_action(&q, lp.state.overlay, false));
         assert!(!lp.quit);
         assert_eq!(lp.state.overlay, Overlay::Themes);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_selftest_run_ignores_keys_so_a_stray_q_cannot_end_it() {
+        use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+        let path = temp_file("selftest-keys");
+        let keys = [
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+        ];
+        let flags = Flags {
+            selftest_report: Some(path.with_file_name("report.json")),
+            ..Flags::default()
+        };
+        let mut lp = Loop::for_test(Config::default(), flags, path.clone());
+        for k in &keys {
+            lp.key(k);
+        }
+        assert!(!lp.quit);
+        assert_eq!(lp.state.overlay, Overlay::None);
+
+        let mut normal = Loop::for_test(Config::default(), Flags::default(), path.clone());
+        normal.key(&keys[0]);
+        assert!(normal.quit, "outside a selftest q still quits");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
