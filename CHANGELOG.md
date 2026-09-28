@@ -3,10 +3,28 @@
 All notable changes to telemetrix. Versions follow
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.3.0 — 2026-09-28
 
 ### Added
 
+- **Five new themes:**
+  - `nasa`: a mission control console. Every value is a row with a code,
+    the value, its unit and a NOMINAL, CAUTION or WARNING status, in white
+    and amber on black, under a line with the time since start (MET) and
+    the UTC time (GMT). Static.
+  - `pip-boy`: a green wrist-computer screen in one hue: ASCII frames,
+    bracketed tabs and `[▮▮▮▯▯]` gauges. Static.
+  - `synthwave`: a neon sunset with a striped sun and a wireframe grid
+    floor that moves toward you, and card frames that fade from purple to
+    orange. Animated at `general.fps`, 10 frames per second at most on very
+    large screens.
+  - `kernel-log`: a scrolling boot log with `[  OK  ]`, `[ WARN ]` and
+    `[FAILED]` records for every change, timestamps like `dmesg`, and a
+    pinned status block with the current values. The log keeps 500
+    records. Static: it redraws only on new data.
+  - `ascii-dashboard`: large block-character charts of the CPU and RAM
+    history, and horizontal block bars for disks, GPUs and swap that fill
+    in eighths of a cell. Static.
 - **Updates from GitHub Releases:** `telemetrix update [--check]
   [--dry-run] [--force]` downloads the program for this platform from the
   latest release of `OliverD25/telemetrix`, checks its SHA-256 against the
@@ -19,24 +37,36 @@ All notable changes to telemetrix. Versions follow
   same window.
 - **Releases** carry the bare programs and a `SHA256SUMS` file next to
   the archives.
+- **Hosts plugin** (off by default): the health result, load, memory,
+  disk, uptime and UPS of your own servers, read by commands you list in
+  the new `[commands]` table of `telemetrix.toml`. Plugins run them with
+  `telemetrix.run(name)` or `telemetrix.run_all(names)`: only names from
+  the user's file, no extra arguments, no shell, with a time limit and an
+  output cap.
+- **Search settings for plugins:** a `kind = "search"` setting and a
+  `search(query)` function give a plugin a pick-from-a-list row in the `s`
+  box. `plugin check <file> --search <text>` runs it without the dashboard.
 
-- **nasa theme:** a mission control console. Every value is a row with a
-  code, the value, its unit and a NOMINAL, CAUTION or WARNING status, in
-  white and amber on black, under a line with the time since start (MET)
-  and the UTC time (GMT). Static.
-- **pip-boy theme:** a green wrist-computer screen in one hue: ASCII
-  frames, bracketed tabs and `[▮▮▮▯▯]` gauges. Static.
-- **synthwave theme:** a neon sunset with a striped sun and a wireframe
-  grid floor that moves toward you, and card frames that fade from purple
-  to orange. Animated at `general.fps`, 10 frames per second at most on
-  very large screens.
-- **kernel-log theme:** a scrolling boot log with `[  OK  ]`, `[ WARN ]`
-  and `[FAILED]` records for every change, timestamps like `dmesg`, and a
-  pinned status block with the current values. The log keeps 500 records.
-  Static: it redraws only on new data.
-- **ascii-dashboard theme:** large block-character charts of the CPU and
-  RAM history, and horizontal block bars for disks, GPUs and swap that
-  fill in eighths of a cell. Static.
+### Changed
+
+- **GPU card:** `gpu.source = "auto"` (the default) reads the counters
+  Task Manager uses on Windows (every GPU, about 1.3 MB of memory) and the
+  amdgpu files on Linux. NVIDIA's NVML library is used only with
+  `gpu.source = "nvml"`; it also gives the power in watts and adds about
+  24 MB. On Windows the card loads `gdi32.dll` at its first reading, so
+  with the card off it costs no memory.
+- **Screensaver:** the watcher runs from a copy of the program, so it
+  never blocks `cargo install`; `telemetrix screensaver update` refreshes
+  that copy. `install` and `update` check that the watcher really runs,
+  and the watcher writes a small log that `status` shows. When Windows
+  redirects AppData for the program that runs `install` (a packaged app),
+  the task uses the folder where the copy really is.
+- The weather city is picked from a search list in the `s` box, which also
+  finds misspelled, old Russian and Cyrillic names; places in the
+  `country` setting (default `UA`) come first.
+- The Disks and Network cards list drives by letter, as Windows Explorer
+  does; on Linux `/` comes first, then the other mount points in order.
+- `u` is a reserved key now; a plugin cannot use it as its run key.
 
 ### Fixed
 
@@ -44,7 +74,7 @@ All notable changes to telemetrix. Versions follow
   the theme name is long. It drops hints from the end, then shows the keys
   alone.
 
-## 0.2.0 (not released yet)
+## 0.2.0 (2026-09-27)
 
 ### Added
 
@@ -58,32 +88,17 @@ All notable changes to telemetrix. Versions follow
 - **Built-in plugins:** the default plugins are built into the program and
   are installed next to the settings file on the first start.
   `telemetrix plugin install` restores or updates them.
-- **GPU card:** name, load, video memory and temperature, one card per
-  GPU. `gpu.source = "auto"` reads the counters Task Manager uses on
-  Windows (every GPU, about 1.3 MB of memory) and the amdgpu files on
-  Linux; `gpu.source = "nvml"` reads NVIDIA's NVML library (loaded at run
-  time, also gives the power in watts, adds about 24 MB). Off by default
-  (`gpu.enabled`). `snapshot --json` lists the GPUs in `system.gpus`.
+- **GPU card** for NVIDIA GPUs: name, load, video memory, temperature and
+  power, read through NVML (loaded at run time, no link-time dependency).
+  Off by default (`gpu.enabled`), because NVML adds about 24 MB of memory.
+  `snapshot --json` lists the GPUs in `system.gpus`.
 - **Three new themes:** `tokyo-night`, `crt-amber` (with scanlines) and
   `cyberpunk`. All three are static, so they use almost no CPU.
 - **Screensaver command:** `telemetrix screensaver install [--idle-minutes N]`
   registers a small watcher as a logon task. It opens the dashboard full
   screen after N minutes without input and closes on any key. `uninstall`
   and `status` go with it, and `--dry-run` shows what would change. On Linux
-  it prints the swayidle or xautolock line instead. The watcher runs from a
-  copy of the program, so it never blocks `cargo install`;
-  `telemetrix screensaver update` refreshes that copy after an update.
-  `install` and `update` check that the watcher really runs, and the
-  watcher writes a small log that `status` shows.
-- **Hosts plugin** (off by default): the health result, load, memory,
-  disk, uptime and UPS of your own servers, read by commands you list in
-  the new `[commands]` table of `telemetrix.toml`. Plugins run them with
-  `telemetrix.run(name)` or `telemetrix.run_all(names)`: only names from
-  the user's file, no extra arguments, no shell, with a time limit and an
-  output cap.
-- **Search settings for plugins:** a `kind = "search"` setting and a
-  `search(query)` function give a plugin a pick-from-a-list row in the `s`
-  box. `plugin check <file> --search <text>` runs it without the dashboard.
+  it prints the swayidle or xautolock line instead.
 - **Memory soak test:** `selftest --memory --soak <minutes>` checks that
   memory does not grow over a long run.
 
@@ -91,12 +106,8 @@ All notable changes to telemetrix. Versions follow
 
 - Crypto prices come from Binance instead of CoinGecko, with 7- and 30-day
   graphs.
-- The weather card shows today, tomorrow and the day after. Temperatures
-  follow `units.temperature`. Its city is picked from a search list in the
-  `s` box, which also finds misspelled, old Russian and Cyrillic names;
-  places in the `country` setting (default `UA`) come first.
-- The Disks and Network cards list drives by letter, as Windows Explorer
-  does; on Linux `/` comes first, then the other mount points in order.
+- The weather card takes a city name typed in the `s` box and shows today,
+  tomorrow and the day after. Temperatures follow `units.temperature`.
 - The default total memory budget is 14 MB (was 13 MB); the core budget
   stays 10 MB.
 - On Windows the program uses the segment heap, so private memory stays flat
