@@ -290,14 +290,15 @@ mod currency {
         assert_eq!(d.title, "Currency · monobank");
         let r = rows(&d);
         assert_eq!(r[0], ("       buy    sell", ""));
-        // The 7 NBU points of the fixture, scaled to 8 levels, and 30 points
-        // resampled to 7 glyphs.
+        // The last 7 NBU points of the fixture, scaled to 8 levels; the last
+        // 30 and all 366 points resampled to 7 glyphs.
         assert_eq!(r[1], ("USD  44.80   45.20", " 7d ▁▁▁▂▄▅█ +0.69%"));
         assert_eq!(r[2], ("", "30d ▃▂▅▂▃▄█ +0.90%"));
-        assert_eq!(r[3].0, "EUR  50.87   51.53");
-        assert_eq!(r[5].0, "GBP  59.94   cross");
-        assert!(r[7].0.starts_with("updated "));
-        assert_eq!(d.metrics.len(), 8);
+        assert_eq!(r[3], ("", " 1y ▁▂▄▅▆▇█ +8.64%"));
+        assert_eq!(r[4].0, "EUR  50.87   51.53");
+        assert_eq!(r[7].0, "GBP  59.94   cross");
+        assert!(r[10].0.starts_with("updated "));
+        assert_eq!(d.metrics.len(), 11);
         let m = &d.metrics;
         assert_eq!(m[0].style, Some(MetricStyle::Header));
         assert_eq!(
@@ -316,9 +317,15 @@ mod currency {
             [Some(MetricStyle::Dim), Some(MetricStyle::Bad)],
             "EUR 7d falls"
         );
+        assert_eq!(
+            value_styles(&m[3]),
+            [Some(MetricStyle::Dim), Some(MetricStyle::Good)],
+            "the year row looks like the 30-day row"
+        );
         assert_eq!(m[1].min_width, None);
         assert_eq!(m[2].min_width, Some(37), "rates, a space and the graph");
-        assert_eq!(m[7].style, Some(MetricStyle::Dim));
+        assert_eq!(m[3].min_width, Some(37));
+        assert_eq!(m[10].style, Some(MetricStyle::Dim));
         assert!(
             d.metrics.iter().all(|m| m.trend.is_none()),
             "no full-width graphs"
@@ -330,19 +337,21 @@ mod currency {
         assert_eq!(lines[1], "│        buy    sell                        │");
         assert_eq!(lines[2], "│ USD  44.80   45.20      7d ▁▁▁▂▄▅█ +0.69% │");
         assert_eq!(lines[3], "│                        30d ▃▂▅▂▃▄█ +0.90% │");
+        assert_eq!(lines[4], "│                         1y ▁▂▄▅▆▇█ +8.64% │");
         // Labels, graphs and changes line up in one right-hand column.
         let d7 = columns_of(&card, " 7d ");
         let d30 = columns_of(&card, "30d ");
-        assert_eq!((d7.len(), d30.len()), (3, 3));
+        let y1 = columns_of(&card, " 1y ");
+        assert_eq!((d7.len(), d30.len(), y1.len()), (3, 3, 3));
         assert!(
-            d7.iter().chain(&d30).all(|&c| c == d30[0]),
-            "{d7:?} {d30:?}"
+            d7.iter().chain(&d30).chain(&y1).all(|&c| c == d7[0]),
+            "{d7:?} {d30:?} {y1:?}"
         );
         let pct: Vec<usize> = card
             .lines()
             .filter_map(|l| l.rfind('%').map(|i| l[..i].chars().count()))
             .collect();
-        assert_eq!(pct.len(), 6);
+        assert_eq!(pct.len(), 9);
         assert!(pct.iter().all(|&c| c == pct[0]), "{pct:?}");
         // The rates sit under the header.
         assert_eq!(
@@ -355,8 +364,10 @@ mod currency {
         );
     }
 
+    /// The 1y, 30d and 7d parts all need the same 37 characters, so they
+    /// leave together; the rates always stay.
     #[test]
-    fn a_narrow_card_drops_the_30_days_then_the_graphs() {
+    fn a_narrow_card_drops_the_graph_rows_and_keeps_the_rates() {
         let h = Harness::new("currency", "", &routes());
         let d = h.run(Trigger::Start);
         let narrow = render_card(&d, 40);
@@ -370,12 +381,13 @@ mod currency {
         assert_eq!(lines[2], "│ USD  44.80   45.20                   │");
         assert_eq!(lines[4], "│ GBP  59.94   cross                   │");
         assert!(
-            !narrow.contains("7d") && !narrow.contains("30d"),
+            !narrow.contains("7d") && !narrow.contains("30d") && !narrow.contains("1y"),
             "{narrow}"
         );
         // Exactly as wide as the rows need: everything is back.
         let wide = render_card(&d, 41);
-        assert_eq!(wide.lines().count(), 10, "{wide}");
+        println!("{wide}");
+        assert_eq!(wide.lines().count(), 13, "{wide}");
         assert!(
             wide.contains("│ USD  44.80   45.20  7d ▁▁▁▂▄▅█ +0.69% │"),
             "{wide}"
@@ -389,7 +401,7 @@ mod currency {
         assert_eq!(d.title, "Currency · privatbank");
         let r = rows(&d);
         assert_eq!(r[1].0, "USD  44.60   45.05");
-        assert_eq!(r[5].0, "GBP  59.46     NBU");
+        assert_eq!(r[7].0, "GBP  59.46     NBU");
         assert!(
             h.log.borrow().is_empty(),
             "no backup note: {:?}",
@@ -496,7 +508,103 @@ mod currency {
         let d = h.run(Trigger::Start);
         assert_eq!(d.error, None);
         assert!(h.log.borrow().is_empty(), "{:?}", h.log.borrow());
-        assert_eq!(d.metrics.len(), 8, "the old keys change nothing");
+        assert_eq!(d.metrics.len(), 11, "the old keys change nothing");
+    }
+
+    #[test]
+    fn show_year_false_hides_only_the_year_rows() {
+        let h = Harness::new("currency", "show_year = false", &routes());
+        let d = h.run(Trigger::Start);
+        assert_eq!(d.error, None);
+        assert_eq!(d.metrics.len(), 8);
+        assert!(d.metrics.iter().all(|m| !m.value.contains("1y")));
+        assert_eq!(rows(&d)[2], ("", "30d ▃▂▅▂▃▄█ +0.90%"));
+        println!("{}", render_card(&d, 45));
+    }
+
+    #[test]
+    fn one_request_per_currency_brings_the_whole_year() {
+        let h = Harness::new("currency", "", &routes());
+        h.run(Trigger::Start);
+        let first: String = h
+            .plugin
+            .lua()
+            .load("return os.date('%Y%m%d', os.time() - 365 * 86400)")
+            .eval()
+            .unwrap();
+        let asked = h.asked.borrow();
+        let nbu: Vec<&String> = asked
+            .iter()
+            .filter(|u| u.contains("NBU_Exchange"))
+            .collect();
+        assert_eq!(nbu.len(), 3);
+        assert!(
+            nbu.iter().all(|u| u.contains(&format!("start={first}&"))),
+            "366 days back: {nbu:?}"
+        );
+        drop(asked);
+        let points: i64 = h
+            .plugin
+            .lua()
+            .load("return #telemetrix.store_get().nbu.USD")
+            .eval()
+            .unwrap();
+        assert_eq!(points, 366, "only the numbers are kept, all of them");
+        let file = h.settings.data_dir.join("plugins").join("currency.json");
+        let bytes = std::fs::metadata(&file).unwrap().len();
+        println!("store: {bytes} bytes");
+        assert!(
+            bytes < 16 * 1024,
+            "{bytes} bytes, far under the 64 KB store limit"
+        );
+    }
+
+    #[test]
+    fn a_31_day_store_from_before_fetches_the_year_at_once() {
+        let h = Harness::new("currency", "", &routes());
+        h.run(Trigger::Start);
+        // What v0.3.1 kept: 31 days, today's date, no history_days.
+        h.age_store(
+            "for c, p in pairs(s.nbu) do local t = {} \
+             for i = #p - 30, #p do t[#t + 1] = p[i] end s.nbu[c] = t end \
+             s.history_days = nil",
+        );
+        h.route("NBU_Exchange", Answer::Status(500));
+        let d = h.run(Trigger::Interval);
+        assert_eq!(h.asked_for("NBU_Exchange"), 6, "asked again the same day");
+        assert_eq!(d.error, None);
+        assert_eq!(
+            rows(&d)[2],
+            ("", "30d ▃▂▅▂▃▄█ +0.90%"),
+            "the old days still show"
+        );
+        assert!(
+            d.metrics.iter().all(|m| !m.value.contains("1y")),
+            "31 days are not a year"
+        );
+        h.route("valcode=usd", Answer::File("nbu_usd.json"));
+        h.route("valcode=eur", Answer::File("nbu_eur.json"));
+        h.route("valcode=gbp", Answer::File("nbu_gbp.json"));
+        let d = h.run(Trigger::Interval);
+        assert_eq!(h.asked_for("NBU_Exchange"), 9, "the failed try is repeated");
+        assert_eq!(rows(&d)[3], ("", " 1y ▁▂▄▅▆▇█ +8.64%"));
+        h.run(Trigger::Interval);
+        assert_eq!(h.asked_for("NBU_Exchange"), 9, "then once a day again");
+    }
+
+    /// Decoding three year answers must fit easily in the plugin's memory.
+    #[test]
+    fn a_year_of_history_fits_in_little_lua_memory() {
+        let h = Harness::new("currency", "", &routes());
+        let lua = h.plugin.lua();
+        lua.set_memory_limit(1 << 20).unwrap();
+        let d = h.run(Trigger::Start);
+        assert_eq!(d.error, None, "the update fits in 1 MiB");
+        lua.gc_collect().unwrap();
+        lua.gc_collect().unwrap();
+        let used = lua.used_memory();
+        println!("Lua memory after an update: {used} bytes");
+        assert!(used < 512 * 1024, "{used}");
     }
 }
 

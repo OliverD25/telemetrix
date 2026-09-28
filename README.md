@@ -402,7 +402,7 @@ cards are not empty after a restart.
 
 | Plugin | Shows | Data source | Free limit | How often telemetrix asks |
 |---|---|---|---|---|
-| Currency | USD, EUR, GBP to hryvnia from one bank (the other as backup), 7- and 30-day graphs | Monobank `api.monobank.ua/bank/currency`; PrivatBank card rate `api.privatbank.ua/p24api/pubinfo`; NBU official rate `bank.gov.ua/NBU_Exchange` | Monobank: 1 request per 5 minutes; the answer is cached on their side. PrivatBank and NBU publish no limit. | Monobank and PrivatBank every 5 minutes (Monobank never sooner, even after a restart). NBU history once a day, one request per currency. |
+| Currency | USD, EUR, GBP to hryvnia from one bank (the other as backup), 7-day, 30-day and 1-year graphs | Monobank `api.monobank.ua/bank/currency`; PrivatBank card rate `api.privatbank.ua/p24api/pubinfo`; NBU official rate `bank.gov.ua/NBU_Exchange` | Monobank: 1 request per 5 minutes; the answer is cached on their side. PrivatBank and NBU publish no limit. | Monobank and PrivatBank every 5 minutes (Monobank never sooner, even after a restart). NBU history once a day, one request per currency for the whole year (about 75 KB). |
 | Crypto | BTC, ETH, SOL in USDT, 7- and 30-day graphs | Binance `api.binance.com/api/v3/ticker/price` and `/klines` | A request weight of 6000 per minute per IP address (Binance's `exchangeInfo`, checked 2026-09-26). An address that keeps asking after HTTP 429 is banned for 2 minutes up to 3 days (HTTP 418). After a 429 the plugin stops asking until the next interval. After a 418 it waits as long as Binance's `Retry-After` header says, or else 10 minutes, doubled for every 418 in a row up to 24 hours; the card keeps its stored prices and shows a red line `paused by Binance until 14:32`. | Prices every minute (one request). Daily history once an hour, one request per coin. |
 | Weather | now, tomorrow and the day after | Open-Meteo `api.open-meteo.com` and its geocoding service | Free for non-commercial use: 600 requests a minute, 5,000 an hour, 10,000 a day (open-meteo.com/en/terms, checked 2026-09-26). The data is licensed CC BY 4.0, which requires attribution. | Every 10 minutes. A search in the `s` box sends at most 6 requests and keeps answers for 10 minutes; a city typed in the file is looked up once per change. |
 | Speed test | download, upload, ping, server | the nearest Ookla speed-test server; Cloudflare `speed.cloudflare.com` as the backup | No published limit. | Every 30 minutes, and when you press `g`. Never at start. The server list once a day. |
@@ -431,18 +431,20 @@ Cloudflare's servers can be farther away, so its numbers are often lower.
 
 Settings you can change in the `s` box:
 
-- **Currency:** the primary bank, `mono` or `privat`. The card shows that
-  bank's buy and sell rates next to each currency code. On the right, a
-  grey column shows the 7-day graph of the official NBU rate on the
-  currency's line and the 30-day graph on the line under it; each change
-  is green when the rate rose and red when it fell. The other
+- **Currency:** the primary bank, `mono` or `privat`, and `show_year`
+  (default on). The card shows that bank's buy and sell rates next to
+  each currency code. On the right, a grey column shows the 7-day graph of
+  the official NBU rate on the currency's line, the 30-day graph under it
+  and, with `show_year`, the 1-year graph under that; each change is green
+  when the rate rose and red when it fell. The other
   bank is only a backup: the card switches to it when the primary bank
   fails and has no rates from the last hour, and the title then says
   `(backup)`. Rates from a failed bank that are less than an hour old stay
   on the card with a red `stale since 14:32 (HTTP 429)` line. Monobank has
   no buy/sell rate for GBP, so the card shows its cross rate; PrivatBank
   has no GBP at all, so the card shows the NBU rate. On a card narrower
-  than 37 characters the graphs are left out and only the rates stay. The list of
+  than 37 characters all graphs are left out (they are all the same
+  width) and only the rates stay. The list of
   currencies (`currencies = ["USD", "EUR", "GBP"]`) is set in the file.
   The v0.2 keys `compact` and `show_month` are no longer used.
 - **Crypto:** the quote currency (default `USDT`). The coins

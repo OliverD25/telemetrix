@@ -1,9 +1,10 @@
 -- Hryvnia exchange rates from one bank at a time: Monobank or PrivatBank
 -- (card rate). Beside each currency, a quiet column with the 7-day graph
--- and, one line lower, the 30-day graph of the official NBU rate.
+-- and, under it, the 30-day and 1-year graphs of the official NBU rate.
 -- Settings in [plugin.currency]:
 --   currencies   = { "USD", "EUR", "GBP" }   (file only)
 --   primary_bank = "mono" or "privat"       (the bank the card shows)
+--   show_year    = true or false            (the 1-year rows)
 -- The other bank is only a backup: it is shown when the primary bank fails
 -- and has no rates from the last hour. Both banks are still asked on every
 -- update, so the backup is ready.
@@ -16,6 +17,10 @@ local NBU_URL = "https://bank.gov.ua/NBU_Exchange/exchange_site?start=%s&end=%s"
   .. "&valcode=%s&sort=exchangedate&order=asc&json"
 local MONO_GAP = 300
 local DAY = 86400
+-- One NBU request per currency and day brings the whole year: about 75 KB.
+local HISTORY_DAYS = 366
+-- Fewer points are a 31-day history from before the year graphs, not a year.
+local YEAR_POINTS = 300
 local UAH = 980
 -- ISO 4217 numbers, as Monobank sends them.
 local ISO = { USD = 840, EUR = 978, GBP = 826, PLN = 985, CHF = 756, CZK = 203, JPY = 392 }
@@ -92,10 +97,12 @@ end
 
 local function refresh_history(store, currencies, now)
   local today = os.date("%Y-%m-%d", now)
-  if store.history_date == today then
+  -- A store from before the year graphs holds 31 days: fetch the year now.
+  if store.history_date == today and store.history_days == HISTORY_DAYS then
     return
   end
-  local first, last = os.date("%Y%m%d", now - 31 * DAY), os.date("%Y%m%d", now)
+  local first = os.date("%Y%m%d", now - (HISTORY_DAYS - 1) * DAY)
+  local last = os.date("%Y%m%d", now)
   local complete = true
   store.nbu = store.nbu or {}
   for _, cur in ipairs(currencies) do
@@ -108,7 +115,7 @@ local function refresh_history(store, currencies, now)
     end
   end
   if complete then
-    store.history_date = today
+    store.history_date, store.history_days = today, HISTORY_DAYS
   end
 end
 
@@ -190,11 +197,12 @@ local function rates_of(cur, rates, points)
   return string.format(" %-14s", "no rate")
 end
 
--- Two rows per currency: the rates and the 7-day graph, then the 30-day graph
--- under it. The row with the rates is `dim` only so that a narrow card drops
--- its graph; its spans set every colour. The 30-day row leaves a card too
--- narrow for the first row's graph.
-local function currency_rows(cur, code_w, rates, points, change_w)
+-- Up to three rows per currency: the rates and the 7-day graph, then the
+-- 30-day and the 1-year graph under it. The row with the rates is `dim` only
+-- so that a narrow card drops its graph; its spans set every colour. The
+-- rows under it leave a card too narrow for the first row's graph; all
+-- graphs have the same width, so they go at the same card width.
+local function currency_rows(cur, code_w, rates, points, change_w, show_year)
   local label = {
     { text = string.format("%-" .. code_w .. "s", cur) },
     { text = rates_of(cur, rates, points), style = "bright" },
@@ -204,19 +212,23 @@ local function currency_rows(cur, code_w, rates, points, change_w)
   end
   local week = period("7d", last_n(points, 7), change_w)
   local full = width(label) + 1 + width(week)
-  return {
+  local rows = {
     { label = label, value = week, style = "dim" },
     { label = "", value = period("30d", last_n(points, 30), change_w), style = "dim", min_width = full },
   }
+  if show_year and #points >= YEAR_POINTS then
+    rows[3] = { label = "", value = period("1y", points, change_w), style = "dim", min_width = full }
+  end
+  return rows
 end
 
 -- The widest change of all graphs, at least 6 characters (`+0.30%`).
-local function change_width(currencies, nbu)
+local function change_width(currencies, nbu, show_year)
   local w = 6
   for _, cur in ipairs(currencies) do
     local points = nbu and nbu[cur]
     if points and #points >= 2 then
-      for _, n in ipairs({ 7, 30 }) do
+      for _, n in ipairs({ 7, 30, show_year and #points or 30 }) do
         w = math.max(w, #string.format("%+.2f%%", change(last_n(points, n))))
       end
     end
@@ -268,6 +280,7 @@ return {
       options = { "mono", "privat" },
       default = "mono",
     },
+    show_year = { kind = "bool", label = "1-year graphs", default = true },
   },
   update = function()
     local s = telemetrix.settings
@@ -302,13 +315,14 @@ return {
     for _, cur in ipairs(currencies) do
       code_w = math.max(code_w, utf8.len(cur) or #cur)
     end
-    local change_w = change_width(currencies, store.nbu)
+    local show_year = s.show_year ~= false
+    local change_w = change_width(currencies, store.nbu, show_year)
     local metrics = {
       { label = string.rep(" ", code_w) .. rates_text("buy", "sell"), value = "", style = "header" },
     }
     for _, cur in ipairs(currencies) do
       local points = store.nbu and store.nbu[cur]
-      for _, row in ipairs(currency_rows(cur, code_w, b.rates, points, change_w)) do
+      for _, row in ipairs(currency_rows(cur, code_w, b.rates, points, change_w, show_year)) do
         metrics[#metrics + 1] = row
       end
     end

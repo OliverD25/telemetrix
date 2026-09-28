@@ -611,7 +611,7 @@ only shows its stored result. With `--run` it really runs.
 | `clock.lua` | local time and date, every second | none | no |
 | `uptime.lua` | computer name and uptime | none | no |
 | `network_ping.lua` | time to connect to a host | `host`, `port` | yes |
-| `currency.lua` | hryvnia rates from one bank (Monobank or PrivatBank, the other as backup), NBU graphs | `primary_bank`; file only: `currencies` | yes |
+| `currency.lua` | hryvnia rates from one bank (Monobank or PrivatBank, the other as backup), NBU graphs for 7 days, 30 days and a year | `primary_bank`, `show_year`; file only: `currencies` | yes |
 | `crypto.lua` | coin prices from Binance, 7- and 30-day graphs | `quote`; file only: `coins` | yes |
 | `weather.lua` | now, tomorrow and the day after (Open-Meteo) | `city` (a search list), `country`; set by the search: `lat`, `lon`, `place`; file only: `label` | yes |
 | `speedtest.lua` | download, upload and ping against the nearest Ookla server (Cloudflare as backup), key `g` | `server`, `streams`, `seconds` | yes, about 700 MB per test at 1 Gbps |
@@ -622,13 +622,16 @@ program, which installs them into the plugin home. The README describes
 each data source and its free limits.
 
 - **currency:** a good example of `style`, spans and `min_width`. The
-  `buy  sell` row is a `header`. Each currency has two rows: the code with
-  its bright rates, and on the right the dim 7-day graph with its change
-  in green or red; under it, the 30-day graph. A stale footer is `bad`. The
-  small graphs are built in Lua from bar characters, so they keep a fixed
-  width and line up; the engine's `trend` graph always fills the whole row.
-  On a card narrower than 37 characters the 30-day rows go (`min_width`)
-  and the first row drops its graph (`dim`), so only the rates stay.
+  `buy  sell` row is a `header`. Each currency has up to three rows: the
+  code with its bright rates, and on the right the dim 7-day graph with
+  its change in green or red; under it, the 30-day graph, then the 1-year
+  graph (`show_year`). All three come from one NBU request per currency and
+  day, which returns the whole year; the store keeps only the 366 numbers.
+  A stale footer is `bad`. The small graphs are built in Lua from bar
+  characters, so they keep a fixed width and line up; the engine's `trend`
+  graph always fills the whole row. On a card narrower than 37 characters
+  the 30-day and 1-year rows go (`min_width`) and the first row drops its
+  graph (`dim`), so only the rates stay.
 - **weather:** Weather data by Open-Meteo.com (CC BY 4.0). The license
   requires attribution, so the card ends with a dim `data: Open-Meteo.com`
   line; keep it when you change the plugin. Temperatures follow
