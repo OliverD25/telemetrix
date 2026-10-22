@@ -768,11 +768,16 @@ each data source and its free limits.
 
   All commands of all hosts run at the same time, each with `timeout`
   seconds (default 30, at most 55), so the card waits at most about a
-  minute. When `ssh` cannot reach a host (exit code 255) or a command hits
-  its time limit, the host shows a red `down 23 min` in its header (the
-  time since the last good reading, or `unreachable` if there was none),
-  its last bars stay under it, dimmed, and a `last seen 14:32` line ends
-  the host. The card never sends alerts. It checks every 5 minutes, and at
+  minute. When `ssh` cannot reach a host (exit code 255) or a command does
+  not start, the host shows a red `down 23 min` in its header (the time
+  since the last good reading, or `unreachable` if there was none), its
+  last bars stay under it, dimmed, and a `last seen 14:32` line ends the
+  host. When the health or stats command hits its time limit, the host
+  answers but too slowly: the header shows an amber `slow, over 30 s`.
+  If only the health check was slow, the fresh bars from stats stay;
+  otherwise the last bars show, dimmed, as for a down host. A health
+  script that often takes more than half the limit needs a higher
+  `timeout`. The card never sends alerts. It checks every 5 minutes, and at
   once when you press `h`.
 - **crypto:** old settings files list CoinGecko names (`"bitcoin"`); they
   still work. After an HTTP 429 from Binance the plugin sends no more

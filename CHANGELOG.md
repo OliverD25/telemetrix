@@ -3,6 +3,18 @@
 All notable changes to telemetrix. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 0.5.1 — 2026-10-23
+
+### Fixed
+
+- **A slow host no longer shows as down.** The Hosts card showed
+  `unreachable` when a health check only ran over its time limit, while
+  ssh itself worked. Now a command stopped at the limit gives an amber
+  `slow, over 30 s` header, with the fresh bars when only the health
+  check was slow. Exit code 255 and commands that do not start still show
+  a red `down`. A health script that takes 25 s needs `timeout = 55` in
+  `[plugin.hosts]`.
+
 ## 0.5.0 — 2026-10-23
 
 ### Added

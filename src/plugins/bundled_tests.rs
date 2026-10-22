@@ -1982,6 +1982,75 @@ mod hosts {
     }
 
     #[test]
+    fn a_slow_health_check_is_amber_and_keeps_the_fresh_bars() {
+        let h = Harness::new("hosts", TWO_HOSTS, &[]);
+        let mut slow = good_answers();
+        slow.insert(
+            "a-health",
+            Err("a-health did not end within 30 s and was stopped"),
+        );
+        fake_run_all(&h, slow);
+        let d = h.run(Trigger::Start);
+        let r = rows(&d);
+        assert_eq!(
+            r[0],
+            row("● server-a", "slow, over 30 s", Some("warn"), None)
+        );
+        assert_eq!(label_spans(&d.metrics[0])[0], ("● ".into(), Some("warn")));
+        assert_eq!(
+            r[1],
+            row("  load", "0.8 of 12 cpu ", None, Some(7.0)),
+            "fresh bars, not dimmed"
+        );
+        assert_eq!(r[4].0, "  ups ");
+        assert_eq!(
+            r[5].0, "  up 5 days",
+            "no problem row without a health answer"
+        );
+        assert_eq!(r[6], row("", "", None, None));
+        println!("{}", render_card(&d, 48));
+    }
+
+    #[test]
+    fn slow_health_and_stats_show_the_last_bars_in_amber() {
+        let h = Harness::new("hosts", TWO_HOSTS, &[]);
+        fake_run_all(&h, good_answers());
+        h.run(Trigger::Start);
+        let mut slow = good_answers();
+        slow.insert(
+            "a-health",
+            Err("a-health did not end within 55 s and was stopped"),
+        );
+        slow.insert(
+            "a-stats",
+            Err("a-stats did not end within 55 s and was stopped"),
+        );
+        fake_run_all(&h, slow);
+        let d = h.run(Trigger::Interval);
+        let r = rows(&d);
+        assert_eq!(
+            r[0],
+            row("● server-a", "slow, over 30 s", Some("warn"), None),
+            "the limit in the text is the plugin's setting"
+        );
+        assert_eq!(
+            r[1],
+            row("  load", "0.8 of 12 cpu ", Some("dim"), Some(7.0))
+        );
+        assert!(r[5].0.starts_with("  last seen "), "{:?}", r[5]);
+    }
+
+    #[test]
+    fn an_error_other_than_the_time_limit_is_down() {
+        let h = Harness::new("hosts", TWO_HOSTS, &[]);
+        let mut broken = good_answers();
+        broken.insert("a-health", Err("cannot start ssh: program not found"));
+        fake_run_all(&h, broken);
+        let r = rows(&h.run(Trigger::Start));
+        assert_eq!(r[0], row("● server-a", "unreachable", Some("bad"), None));
+    }
+
+    #[test]
     fn a_host_never_seen_is_unreachable() {
         let h = Harness::new("hosts", TWO_HOSTS, &[]);
         let mut down = good_answers();

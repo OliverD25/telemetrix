@@ -20,7 +20,9 @@
 --   timeout = 30    seconds for each command, 1..55
 -- All commands of all hosts run at the same time. An ssh that cannot reach
 -- its host ends with exit code 255; then the host shows as down and keeps
--- its last values, dimmed, with the time they were read.
+-- its last values, dimmed, with the time they were read. A health or stats
+-- command stopped at the time limit shows the host as slow, in amber: with
+-- fresh bars when only the health check was slow, else with the last ones.
 --
 -- Each host is a header (a coloured dot, the name, the health summary), bars
 -- for load, memory, disk and UPS charge, the first problem line, and a dim
@@ -261,10 +263,17 @@ local function stored_gauges(list)
   return out
 end
 
--- A command result that means the host did not answer: an error (the
--- time limit) or ssh's exit code 255.
+local TIME_LIMIT_ERROR = "did not end within"
+
+-- A command stopped at the time limit: the host answers, but too slowly.
+local function timed_out(r)
+  return r and r.error and r.error:find(TIME_LIMIT_ERROR, 1, true) ~= nil
+end
+
+-- A command result that means the host did not answer: ssh's exit code 255,
+-- or an error other than the time limit (a program that does not start).
 local function unreachable(r)
-  return r and (r.error or r.code == 255)
+  return r and (r.code == 255 or (r.error ~= nil and not timed_out(r)))
 end
 
 -- The text of a command that failed.
@@ -314,12 +323,19 @@ return {
       if i > 1 then
         metrics[#metrics + 1] = { label = "", value = "" }
       end
-      if unreachable(r.health) or unreachable(r.stats) then
+      local down = unreachable(r.health) or unreachable(r.stats)
+      local slow = not down and (timed_out(r.health) or timed_out(r.stats))
+      local slow_text = "slow, over " .. math.floor(timeout) .. " s"
+      if down or (slow and timed_out(r.stats)) then
         local last = type(store.last[name]) == "table" and store.last[name] or nil
         local seen = last and tonumber(last.time)
         seen = seen and math.floor(seen)
-        local value = seen and ("down " .. duration(now - seen)) or "unreachable"
-        metrics[#metrics + 1] = header(name, "bad", value, "bad")
+        if down then
+          local value = seen and ("down " .. duration(now - seen)) or "unreachable"
+          metrics[#metrics + 1] = header(name, "bad", value, "bad")
+        else
+          metrics[#metrics + 1] = header(name, "warn", slow_text, "warn")
+        end
         if last then
           local gauges = stored_gauges(last.gauges)
           if gauges then
@@ -339,6 +355,8 @@ return {
           end
         end
       else
+        -- Only the health check ran out of time: the stats are fresh.
+        local health = not slow and r.health or nil
         local body, saved, uptime, stats_failed = {}, {}, nil, false
         if r.stats then
           local rows = {}
@@ -369,8 +387,8 @@ return {
 
         local dot, value, style = stats_failed and "warn" or "good", "", nil
         local problem, problem_style
-        if r.health then
-          local hh = parse_health(r.health.stdout or "", r.health.code)
+        if health then
+          local hh = parse_health(health.stdout or "", health.code)
           style, value = health_summary(hh)
           dot = style
           if hh.first_fail then
@@ -378,6 +396,8 @@ return {
           elseif hh.first_warn then
             problem, problem_style = hh.first_warn, "warn"
           end
+        elseif slow then
+          dot, value, style = "warn", slow_text, "warn"
         end
         metrics[#metrics + 1] = header(name, dot, value, style)
         for _, m in ipairs(body) do
