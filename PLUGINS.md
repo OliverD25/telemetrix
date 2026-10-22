@@ -726,26 +726,54 @@ each data source and its free limits.
   ```
 
   The long form `[[plugin.hosts.hosts]]` with `name = ...` lines works too.
+  This plugin is a good example of `gauge` rows, the `warn` style and
+  spans in a label.
 
   - `health`: a check script that prints `[ OK ]`, `[WARN]` and `[FAIL]`
     lines and a line `== summary: 46 ok, 1 warning(s), 0 failure(s) ==`,
-    and exits with 0 (ok), 1 (warnings) or 2 (failures). The card shows
-    `server-a  ok 46 · 1 warn` (green when all is well, red otherwise) and
-    under it, dimmed, the first `[FAIL]` line, else the first `[WARN]` line.
-  - `stats`: the output of the command above. The card shows
-    `load 0.8/12  ram 37%  disk 7%  up 5d`: the 15-minute load average and
-    the number of CPUs, the memory in use (total minus available), the root
-    disk as `df` counts it, and the uptime.
-  - `ups` (optional): `upsc` lines. The card shows
-    `ups on mains 100% · 13 min` (charge and runtime left), in red
-    `on battery` or `low battery`.
+    and exits with 0 (ok), 1 (warnings) or 2 (failures). It makes the
+    header of the host: a dot and the name on the left, the summary on the
+    right, like `ok 46 · 1 warn`. The dot and the summary are green when all
+    is well, amber (`warn`) when there are warnings, and red (`bad`) when
+    there are failures or the script exits with more than 1. A name like
+    `server-a (home)` shows as `server-a` and a dim ` · home`. Under the
+    bars (below) comes the first `[FAIL]` line in red, else the first
+    `[WARN]` line in amber, after a `!`.
+  - `stats`: the output of the command above. The card shows a bar for the
+    15-minute load (a percent of the number of CPUs, with `1.6 of 12 cpu`
+    beside it), for the memory in use (total minus available, in GB), and
+    for the root disk as `df` counts it, with the free space beside it. A
+    footer line in dim shows the uptime and `checked 01:04`, the time of
+    the last check. Without the number of CPUs, the load is a plain
+    `load 1.6`.
+  - `ups` (optional): `upsc` lines. The card shows a bar for the battery
+    charge with `mains · 13 min` beside it (charge and runtime left). The
+    bar is green on mains, amber on mains below 50 %, and red `battery` or
+    `low battery`. This is a `gauge` row with a `style`, because a full
+    battery is good, not an alarm.
+
+  The values beside the bars are padded to one width, so all bars of the
+  card line up (see [A bar in a row](#a-bar-in-a-row)). On a narrow card
+  the values go and the bars stay.
+
+  ```
+  ● server-a · home           ok 46 · 1 warn
+    load ████░░░░░░░░░░  13%  1.6 of 12 cpu
+    ram  ███████░░░░░░░  46%  7.4 of 16 GB
+    disk ██░░░░░░░░░░░░  13%  810 GB free
+    ups  ██████████████ 100%  mains · 13 min
+    ! 1 sources suspect a block: some_sourc…
+    up 31 days                 checked 01:04
+  ```
 
   All commands of all hosts run at the same time, each with `timeout`
   seconds (default 30, at most 55), so the card waits at most about a
   minute. When `ssh` cannot reach a host (exit code 255) or a command hits
-  its time limit, the host shows `unreachable` in red, and its last values
-  stay under it, dimmed, with a `last seen 14:32` line. The card never
-  sends alerts. It checks every 5 minutes, and at once when you press `h`.
+  its time limit, the host shows a red `down 23 min` in its header (the
+  time since the last good reading, or `unreachable` if there was none),
+  its last bars stay under it, dimmed, and a `last seen 14:32` line ends
+  the host. The card never sends alerts. It checks every 5 minutes, and at
+  once when you press `h`.
 - **crypto:** old settings files list CoinGecko names (`"bitcoin"`); they
   still work. After an HTTP 429 from Binance the plugin sends no more
   requests until the next interval, because Binance bans addresses that

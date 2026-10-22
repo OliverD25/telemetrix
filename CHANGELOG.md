@@ -3,6 +3,33 @@
 All notable changes to telemetrix. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- **Bars in plugin rows.** A metric can carry `gauge = <percent>` and gets
+  a bar between its label and its value, drawn in the theme's own gauge
+  glyphs like the CPU and RAM bars. The bar turns amber from 80 % and red
+  from 90 %. A `style` of `good`, `warn` or `bad` sets the colour instead
+  (for values where high is good, like a battery), and `dim` greys the
+  whole row. On a narrow card the value goes first, then the bar. A
+  `gauge` that is not a number, or together with `trend`, makes only that
+  row an error line. See "A bar in a row" in PLUGINS.md.
+- **A `warn` style** for rows and spans: the theme's middle level colour,
+  for a warning that is not a failure.
+
+### Changed
+
+- **The Hosts card is redrawn.** Each host has a header (a coloured dot,
+  the name and the health summary, now amber for warnings and red only
+  for failures), bars for load, memory, disk and UPS charge with the real
+  numbers beside them (`7.4 of 16 GB`, `810 GB free`), the first problem
+  line, and a dim footer with the uptime and the time of the check. A host
+  that does not answer shows `down 23 min` with its last bars dimmed. The
+  store of the last values has a new format; the old one still shows
+  when a host is down. If you changed `hosts.lua`, copy the new one with
+  `telemetrix plugin install --force hosts`.
+
 ## 0.4.0 — 2026-09-28
 
 ### Changed

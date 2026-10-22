@@ -1693,11 +1693,68 @@ mod hosts {
         ])
     }
 
-    fn rows(d: &PluginData) -> Vec<(String, String, Option<&'static str>)> {
+    /// Label, value, style and gauge of a row.
+    type Shape = (String, String, Option<&'static str>, Option<f32>);
+
+    fn row(label: &str, value: &str, style: Option<&'static str>, gauge: Option<f32>) -> Shape {
+        (label.into(), value.into(), style, gauge)
+    }
+
+    fn is_clock(text: &str) -> bool {
+        text.len() == 5
+            && text.bytes().enumerate().all(|(i, b)| {
+                if i == 2 {
+                    b == b':'
+                } else {
+                    b.is_ascii_digit()
+                }
+            })
+    }
+
+    /// The rows as the card shows them. The time of a check varies, so a
+    /// footer's `checked 01:04` is checked and then shown as `checked HH:MM`.
+    fn rows(d: &PluginData) -> Vec<Shape> {
         d.metrics
             .iter()
-            .map(|m| (m.label.clone(), m.value.clone(), m.style.map(|s| s.name())))
+            .map(|m| {
+                let mut value = m.value.clone();
+                if let Some(time) = value.strip_prefix("checked ") {
+                    assert!(is_clock(time), "{value:?}");
+                    value = "checked HH:MM".into();
+                }
+                // One decimal is enough to compare percents.
+                let gauge = m.gauge.map(|g| (g * 10.0).round() / 10.0);
+                (m.label.clone(), value, m.style.map(|s| s.name()), gauge)
+            })
             .collect()
+    }
+
+    /// The pieces of a row's label with their styles.
+    fn label_spans(m: &crate::plugins::MetricItem) -> Vec<(String, Option<&'static str>)> {
+        m.label_spans
+            .iter()
+            .flatten()
+            .map(|s| (s.text.clone(), s.style.map(|s| s.name())))
+            .collect()
+    }
+
+    /// One host with only the given commands answering.
+    fn one_host(parts: &str, answers: &[(&'static str, &str, i64)]) -> PluginData {
+        let h = Harness::new(
+            "hosts",
+            &format!("enabled = true\nhosts = [ {{ name = \"srv\", {parts} }} ]"),
+            &[],
+        );
+        fake_run_all(
+            &h,
+            answers
+                .iter()
+                .map(|(name, out, code)| (*name, Ok((out.to_string(), *code))))
+                .collect(),
+        );
+        let d = h.run(Trigger::Interval);
+        assert_eq!(d.error, None, "{:?}", h.log.borrow());
+        d
     }
 
     #[test]
@@ -1707,10 +1764,11 @@ mod hosts {
         assert_eq!(d.error, None);
         assert_eq!(
             rows(&d),
-            [(
-                "no hosts configured (see PLUGINS.md)".to_string(),
-                String::new(),
-                Some("dim")
+            [row(
+                "no hosts configured (see PLUGINS.md)",
+                "",
+                Some("dim"),
+                None
             )]
         );
         assert!(
@@ -1720,7 +1778,7 @@ mod hosts {
     }
 
     #[test]
-    fn health_stats_and_ups_become_rows() {
+    fn health_stats_and_ups_become_a_header_bars_a_problem_and_a_footer() {
         let h = Harness::new("hosts", TWO_HOSTS, &[]);
         let calls = fake_run_all(&h, good_answers());
         let d = h.run(Trigger::Key);
@@ -1731,35 +1789,54 @@ mod hosts {
             [vec!["a-health", "a-stats", "a-ups", "b-health", "b-stats"]],
             "every command of every host in one parallel call"
         );
-        let s = |t: &str| t.to_string();
+        // All values of bar rows are 14 wide, the widest being the UPS one.
         assert_eq!(
             rows(&d),
             [
-                (s("server-a"), s("ok 46 · 1 warn"), Some("bad")),
-                (
-                    s("1 sources suspect a block: some_source_name"),
-                    s(""),
-                    Some("dim")
+                row("● server-a", "ok 46 · 1 warn", Some("warn"), None),
+                row("  load", "0.8 of 12 cpu ", None, Some(7.0)),
+                row("  ram ", "12 of 31 GB   ", None, Some(37.0)),
+                row("  disk", "933 GB free   ", None, Some(7.0)),
+                row("  ups ", "mains · 13 min", Some("good"), Some(100.0)),
+                row(
+                    "  ! 1 sources suspect a block: some_source_name",
+                    "",
+                    Some("warn"),
+                    None
                 ),
-                (s("load 0.8/12  ram 37%  disk 7%  up 5d"), s(""), None),
-                (s("ups on mains 100% · 13 min"), s(""), None),
-                (s("server-b"), s("ok 30 · 1 warn · 1 fail"), Some("bad")),
-                (
-                    s("service example-web is not running since 19:30 and has rest…"),
-                    s(""),
-                    Some("dim")
+                row("  up 5 days", "checked HH:MM", Some("dim"), None),
+                row("", "", None, None),
+                row("● server-b", "ok 30 · 1 warn · 1 fail", Some("bad"), None),
+                row("  load", "0.8 of 12 cpu ", None, Some(7.0)),
+                row("  ram ", "12 of 31 GB   ", None, Some(37.0)),
+                row("  disk", "933 GB free   ", None, Some(7.0)),
+                row(
+                    "  ! service example-web is not running since 19:30 and has rest…",
+                    "",
+                    Some("bad"),
+                    None
                 ),
-                (s("load 0.8/12  ram 37%  disk 7%  up 5d"), s(""), None),
+                row("  up 5 days", "checked HH:MM", Some("dim"), None),
             ]
         );
+        assert_eq!(
+            label_spans(&d.metrics[0]),
+            [("● ".into(), Some("warn")), ("server-a".into(), None)]
+        );
+        assert_eq!(
+            label_spans(&d.metrics[8]),
+            [("● ".into(), Some("bad")), ("server-b".into(), None)]
+        );
         println!("{}", render_card(&d, 48));
+        // 40 is the narrowest terminal the dashboard draws.
+        println!("{}", render_card(&d, 40));
     }
 
     #[test]
     fn a_clean_host_is_good_and_a_ups_on_battery_is_bad() {
         let h = Harness::new(
             "hosts",
-            "enabled = true\nhosts = [ { name = \"server-a\", health = \"a-health\", ups = \"a-ups\" } ]",
+            "enabled = true\nhosts = [ { name = \"server-a (home)\", health = \"a-health\", ups = \"a-ups\" } ]",
             &[],
         );
         let clean = fixture("health.txt")
@@ -1773,12 +1850,85 @@ mod hosts {
             ]),
         );
         let d = h.run(Trigger::Interval);
-        let s = |t: &str| t.to_string();
         assert_eq!(
             rows(&d),
             [
-                (s("server-a"), s("ok 46"), Some("good")),
-                (s("ups on battery 64% · 7 min"), s(""), Some("bad")),
+                row("● server-a · home", "ok 46", Some("good"), None),
+                row("  ups ", "battery · 7 min", Some("bad"), Some(64.0)),
+                row("", "checked HH:MM", Some("dim"), None),
+            ],
+            "no stats: no uptime in the footer"
+        );
+        assert_eq!(
+            label_spans(&d.metrics[0]),
+            [
+                ("● ".into(), Some("good")),
+                ("server-a".into(), None),
+                (" · home".into(), Some("dim")),
+            ],
+            "a part in brackets becomes a dim place"
+        );
+        println!("{}", render_card(&d, 48));
+    }
+
+    #[test]
+    fn the_ups_row_is_good_warn_or_bad_by_its_state_and_charge() {
+        let ups = |out: &str| {
+            let d = one_host(r#"ups = "u""#, &[("u", out, 0)]);
+            rows(&d)[1].clone()
+        };
+        assert_eq!(
+            ups("battery.charge: 40\nups.status: OL\n"),
+            row("  ups ", "mains", Some("warn"), Some(40.0)),
+            "a weak battery on mains is a warning; no runtime, no minutes"
+        );
+        assert_eq!(
+            ups("battery.charge: 50\nups.status: OL CHRG\n").2,
+            Some("good")
+        );
+        assert_eq!(
+            ups("battery.charge: 20\nbattery.runtime: 180\nups.status: OB LB\n"),
+            row("  ups ", "low battery · 3 min", Some("bad"), Some(20.0))
+        );
+        assert_eq!(
+            ups("battery.charge: 90\nups.status: OB\n").2,
+            Some("bad"),
+            "on battery is bad at any charge"
+        );
+        assert_eq!(
+            ups("battery.runtime: 600\nups.status: OL\n"),
+            row("  ups mains · 10 min", "", Some("good"), None),
+            "without a charge there is no bar"
+        );
+        assert_eq!(ups("ups.status: ALARM\n").0, "  ups ALARM");
+    }
+
+    #[test]
+    fn stats_are_scaled_to_bars_and_units() {
+        let stats = "4\n1.60 1.00 1.60 1/100 5\nMemTotal: 8388608 kB\nMemAvailable: 1048576 kB\n\
+                     4398046511104 1099511627776 3298534883328\n3000.5 100.0\n";
+        let d = one_host(r#"stats = "s""#, &[("s", stats, 0)]);
+        assert_eq!(
+            rows(&d),
+            [
+                row("● srv", "", None, None),
+                row("  load", "1.6 of 4 cpu ", None, Some(40.0)),
+                row("  ram ", "7.0 of 8.0 GB", None, Some(87.5)),
+                row("  disk", "3.0 TB free  ", None, Some(25.0)),
+                row("  up 50 min", "checked HH:MM", Some("dim"), None),
+            ],
+            "one decimal below 10, TB from 1024 GB, values padded to one width"
+        );
+        // No CPU count: no scale for the load, so a plain row. A day is a day.
+        let stats = "1.60 1.00 1.60 1/100 5
+90000.5 1.0
+";
+        let d = one_host(r#"stats = "s""#, &[("s", stats, 0)]);
+        assert_eq!(
+            rows(&d)[1..],
+            [
+                row("  load 1.6", "", None, None),
+                row("  up 1 day", "checked HH:MM", Some("dim"), None),
             ]
         );
     }
@@ -1788,6 +1938,7 @@ mod hosts {
         let h = Harness::new("hosts", TWO_HOSTS, &[]);
         fake_run_all(&h, good_answers());
         h.run(Trigger::Start);
+        h.age_store("s.last['server-a'].time = s.last['server-a'].time - 1380");
         let mut down = good_answers();
         down.insert("a-health", Ok((String::new(), 255)));
         down.insert(
@@ -1798,22 +1949,150 @@ mod hosts {
         fake_run_all(&h, down);
         let d = h.run(Trigger::Interval);
         let r = rows(&d);
-        assert_eq!(r[0], ("server-a".into(), "unreachable".into(), Some("bad")));
+        assert_eq!(r[0], row("● server-a", "down 23 min", Some("bad"), None));
         assert_eq!(
-            r[1..4]
-                .iter()
-                .map(|(l, _, st)| (l.as_str(), *st))
-                .collect::<Vec<_>>(),
+            label_spans(&d.metrics[0]),
+            [("● ".into(), Some("bad")), ("server-a".into(), None)]
+        );
+        assert_eq!(
+            r[1..5],
             [
-                ("1 sources suspect a block: some_source_name", Some("dim")),
-                ("load 0.8/12  ram 37%  disk 7%  up 5d", Some("dim")),
-                ("ups on mains 100% · 13 min", Some("dim")),
+                row("  load", "0.8 of 12 cpu ", Some("dim"), Some(7.0)),
+                row("  ram ", "12 of 31 GB   ", Some("dim"), Some(37.0)),
+                row("  disk", "933 GB free   ", Some("dim"), Some(7.0)),
+                row("  ups ", "mains · 13 min", Some("dim"), Some(100.0)),
+            ],
+            "the last values, in the same order, dimmed; the UPS keeps no style"
+        );
+        assert!(r[5].0.starts_with("  last seen "), "{:?}", r[5]);
+        assert!(is_clock(&r[5].0["  last seen ".len()..]), "{:?}", r[5]);
+        assert_eq!((r[5].1.as_str(), r[5].2), ("", Some("dim")));
+        assert_eq!(r[6], row("", "", None, None));
+        assert_eq!(r[7].0, "● server-b", "the other host is unaffected");
+        assert_eq!(
+            r.len(),
+            6 + 1 + 6,
+            "no problem row and no footer for a down host"
+        );
+        println!("{}", render_card(&d, 48));
+
+        // The last good reading survives more failed checks.
+        let d = h.run(Trigger::Interval);
+        assert_eq!(d.metrics[0].value, "down 23 min");
+    }
+
+    #[test]
+    fn a_host_never_seen_is_unreachable() {
+        let h = Harness::new("hosts", TWO_HOSTS, &[]);
+        let mut down = good_answers();
+        down.insert("a-health", Ok((String::new(), 255)));
+        fake_run_all(&h, down);
+        let d = h.run(Trigger::Start);
+        let r = rows(&d);
+        assert_eq!(r[0], row("● server-a", "unreachable", Some("bad"), None));
+        assert_eq!(
+            r[1],
+            row("", "", None, None),
+            "straight on to the next host"
+        );
+        assert_eq!(r[2].0, "● server-b");
+    }
+
+    #[test]
+    fn an_unreachable_host_with_an_old_store_shows_its_old_text_rows() {
+        let h = Harness::new("hosts", TWO_HOSTS, &[]);
+        // What the first versions saved: ready-made text, no bars.
+        h.age_store(
+            "s = { last = { ['server-a'] = { time = os.time() - 7200, \
+             rows = { 'old problem', 'load 0.8/12  ram 37%' } } } }",
+        );
+        let mut down = good_answers();
+        down.insert("a-health", Ok((String::new(), 255)));
+        fake_run_all(&h, down);
+        let d = h.run(Trigger::Start);
+        let r = rows(&d);
+        assert_eq!(r[0], row("● server-a", "down 2 h", Some("bad"), None));
+        assert_eq!(r[1], row("  old problem", "", Some("dim"), None));
+        assert_eq!(r[2], row("  load 0.8/12  ram 37%", "", Some("dim"), None));
+        assert!(r[3].0.starts_with("  last seen "), "{:?}", r[3]);
+        assert_eq!(r[4], row("", "", None, None));
+        // The next good reading saves the new format over it.
+        fake_run_all(&h, good_answers());
+        h.run(Trigger::Interval);
+        let lua = h.plugin.lua();
+        let saved: bool = lua
+            .load("local s = telemetrix.store_get() return s.last['server-a'].rows == nil and #s.last['server-a'].gauges == 4")
+            .eval()
+            .unwrap();
+        assert!(saved);
+    }
+
+    #[test]
+    fn a_broken_store_never_fails_the_card() {
+        let broken = [
+            "s = { last = 5 }",
+            "s = { last = { ['server-a'] = 'junk' } }",
+            "s = { last = { ['server-a'] = { time = 'x', rows = 7, gauges = 3 } } }",
+            "s = 'text'",
+        ];
+        for fix in broken {
+            let h = Harness::new("hosts", TWO_HOSTS, &[]);
+            h.age_store(fix);
+            let mut down = good_answers();
+            down.insert("a-health", Ok((String::new(), 255)));
+            fake_run_all(&h, down);
+            let d = h.run(Trigger::Start);
+            assert_eq!(d.error, None, "{fix}: {:?}", h.log.borrow());
+            assert_eq!(
+                rows(&d)[0],
+                row("● server-a", "unreachable", Some("bad"), None),
+                "{fix}"
+            );
+        }
+        let h = Harness::new("hosts", TWO_HOSTS, &[]);
+        h.age_store(
+            "s = { last = { ['server-a'] = { time = os.time() - 60, \
+             gauges = { 5, { label = 7 }, { label = '  disk', gauge = 'x', value = 3 } } } } }",
+        );
+        let mut down = good_answers();
+        down.insert("a-health", Ok((String::new(), 255)));
+        fake_run_all(&h, down);
+        let r = rows(&h.run(Trigger::Start));
+        assert_eq!(r[0].1, "down 1 min");
+        assert_eq!(
+            r[1],
+            row("  disk", "3", Some("dim"), None),
+            "only the usable entry is shown"
+        );
+    }
+
+    #[test]
+    fn failed_commands_that_are_not_a_dead_host_show_dim_rows() {
+        let d = one_host(
+            r#"health = "h", stats = "s", ups = "u""#,
+            &[("h", "", 0), ("s", "", 3), ("u", "", 1)],
+        );
+        assert_eq!(
+            rows(&d),
+            [
+                row("● srv", "ok", Some("good"), None),
+                row("  stats: exit 3", "", Some("dim"), None),
+                row("  ups: exit 1", "", Some("dim"), None),
+                row("", "checked HH:MM", Some("dim"), None),
             ]
         );
-        assert!(r[4].0.starts_with("last seen "), "{:?}", r[4]);
-        assert_eq!(r[4].2, Some("dim"));
-        assert_eq!(r[5].0, "server-b", "the other host is unaffected");
-        println!("{}", render_card(&d, 48));
+        let d = one_host(r#"health = "h""#, &[("h", "", 3)]);
+        assert_eq!(
+            rows(&d)[0],
+            row("● srv", "exit 3", Some("bad"), None),
+            "a health command that fails without a summary"
+        );
+        let d = one_host(r#"stats = "s""#, &[("s", "", 3)]);
+        assert_eq!(
+            label_spans(&d.metrics[0])[0],
+            ("● ".into(), Some("warn")),
+            "no health, and stats do not work"
+        );
     }
 
     #[test]
@@ -1825,13 +2104,20 @@ mod hosts {
         );
         fake_run_all(&h, good_answers());
         let d = h.run(Trigger::Start);
-        let s = |t: &str| t.to_string();
         assert_eq!(
             rows(&d),
             [
-                (s("server-a"), s(""), Some("header")),
-                (s("load 0.8/12  ram 37%  disk 7%  up 5d"), s(""), None),
+                row("● server-a", "", None, None),
+                row("  load", "0.8 of 12 cpu", None, Some(7.0)),
+                row("  ram ", "12 of 31 GB  ", None, Some(37.0)),
+                row("  disk", "933 GB free  ", None, Some(7.0)),
+                row("  up 5 days", "checked HH:MM", Some("dim"), None),
             ]
+        );
+        assert_eq!(
+            label_spans(&d.metrics[0])[0],
+            ("● ".into(), Some("good")),
+            "no health command: the dot follows the stats"
         );
     }
 }
