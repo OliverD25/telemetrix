@@ -3,7 +3,7 @@
 All notable changes to telemetrix. Versions follow
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.5.0 — 2026-10-23
 
 ### Added
 
