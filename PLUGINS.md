@@ -128,7 +128,8 @@ the left, then the bar, then the percent, then the value:
   no room for even one cell, it shows the label and the percent.
 - Without a `style`, the bar is in the normal bar colour. From 80 % it takes
   the theme's middle level colour, and from 90 % the warning colour, like a
-  disk that is filling up.
+  disk that is filling up. The levels follow the percent as the row shows
+  it: 79.6 shows as `80%`, so it gets the 80 % colour.
 - A `style` replaces those levels: `"good"` is green, `"warn"` is the middle
   level colour and `"bad"` is red, whatever the percent. Use it when a high
   number is good, like a battery: `style = "good"` keeps 100 % green. With

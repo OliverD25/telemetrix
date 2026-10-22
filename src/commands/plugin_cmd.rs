@@ -196,7 +196,10 @@ fn check(file: &Path, json: bool, run: bool, cfg: &Config) -> ExitCode {
             .max()
             .unwrap_or(0);
         for m in &data.metrics {
-            println!("  {:<width$}  {}", m.label, m.value);
+            match m.gauge {
+                Some(pct) => println!("  {:<width$}  {pct:>3.0}%  {}", m.label, m.value),
+                None => println!("  {:<width$}  {}", m.label, m.value),
+            }
         }
     }
     if !json && !schema.is_empty() {

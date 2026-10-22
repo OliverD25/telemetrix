@@ -987,6 +987,9 @@ pub fn metric_line(m: &crate::plugins::MetricItem, pal: &Palette, w: usize) -> L
 fn gauge_line(m: &crate::plugins::MetricItem, pct: f32, pal: &Palette, w: usize) -> Line<'static> {
     use crate::plugins::MetricStyle;
     let pct = pct.clamp(0.0, 100.0);
+    // The level follows the percent as shown, so "80%" is never drawn in
+    // the colour below 80.
+    let shown = pct.round();
     // The colour of the fill and of the percent text. A plain bar keeps the
     // value colour for its text until a level colour takes over.
     let (fill, pct_color) = match m.style {
@@ -994,8 +997,8 @@ fn gauge_line(m: &crate::plugins::MetricItem, pct: f32, pal: &Palette, w: usize)
         Some(MetricStyle::Good) => (pal.rise, pal.rise),
         Some(MetricStyle::Warn) => (pal.levels[1], pal.levels[1]),
         Some(MetricStyle::Bad) => (pal.warn, pal.warn),
-        _ if pct >= 90.0 => (pal.warn, pal.warn),
-        _ if pct >= 80.0 => (pal.levels[1], pal.levels[1]),
+        _ if shown >= 90.0 => (pal.warn, pal.warn),
+        _ if shown >= 80.0 => (pal.levels[1], pal.levels[1]),
         _ => (pal.bar, pal.value),
     };
     let pct_style = fg(pct_color);
@@ -1393,7 +1396,12 @@ mod tests {
             gauge_colors(&pal, None, 50.0),
             (Some(pal.bar), Some(pal.value))
         );
-        assert_eq!(gauge_colors(&pal, None, 79.9).0, Some(pal.bar));
+        assert_eq!(gauge_colors(&pal, None, 79.4).0, Some(pal.bar));
+        assert_eq!(
+            gauge_colors(&pal, None, 79.6),
+            (amber, amber),
+            "shown as 80%, so drawn as 80%"
+        );
         assert_eq!(gauge_colors(&pal, None, 80.0), (amber, amber));
         assert_eq!(gauge_colors(&pal, None, 85.0), (amber, amber));
         assert_eq!(

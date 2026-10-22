@@ -3,6 +3,16 @@
 All notable changes to telemetrix. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- **A bar's colour matches its percent text.** A bar at 79.6 % showed
+  `80%` in the colour below 80; the colour levels now follow the rounded
+  percent the row shows.
+- **`plugin check` shows the percent of bar rows** in its text output
+  (`  load   13%  1.6 of 12 cpu`), not only their value.
+
 ## 0.5.1 — 2026-10-23
 
 ### Fixed
