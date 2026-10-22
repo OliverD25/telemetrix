@@ -1,9 +1,16 @@
-# Format, lint and test on Windows and Linux for every push and pull request.
+# Format, lint and test on Windows and Linux for pull requests and manual
+# runs. Not on pushes: the free Actions minutes are shared by all private
+# repos, and local gates run before every push.
 name: CI
 
 on:
-  push:
   pull_request:
+    paths-ignore: ["**.md", "docs/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
