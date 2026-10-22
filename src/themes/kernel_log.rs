@@ -172,9 +172,10 @@ fn entries(state: &AppState) -> Vec<(String, Level, String)> {
             PluginStatus::Error(msg) => (Level::Fail, format!("plugin {id}: {msg}")),
             PluginStatus::Ok => {
                 let metrics = &card.data.metrics;
-                let bad = metrics
-                    .iter()
-                    .any(|m| m.bad || m.style == Some(MetricStyle::Bad));
+                // A warning row is as loud here as a bad one: this log only has WARN.
+                let bad = metrics.iter().any(|m| {
+                    m.bad || matches!(m.style, Some(MetricStyle::Bad | MetricStyle::Warn))
+                });
                 let parts: Vec<String> = metrics
                     .iter()
                     .map(|m| format!("{} {}", m.label, m.value).trim().to_string())

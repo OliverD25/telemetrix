@@ -33,6 +33,8 @@ pub fn to_json(d: &PluginData) -> Value {
                         "label": m.label,
                         "value": m.value,
                         "trend": m.trend,
+                        // f32 would print as 13.399999618530273.
+                        "gauge": m.gauge.map(|g| (f64::from(g) * 100.0).round() / 100.0),
                         "style": m.style.map(|s| s.name()),
                     })
                 })
@@ -375,6 +377,7 @@ pub fn run_all_once(cfg: &Config, settings_path: &Path) -> Vec<Value> {
 mod tests {
     use super::*;
     use crate::config::Value as V;
+    use crate::plugins::{MetricItem, MetricStyle};
 
     #[test]
     fn install_force_replaces_and_names_must_be_built_in() {
@@ -437,5 +440,29 @@ mod tests {
             (j[0]["default"].as_str(), j[1]["default"].as_i64()),
             (Some("Kyiv"), Some(25))
         );
+    }
+
+    #[test]
+    fn json_has_the_graph_and_the_bar_of_a_row() {
+        let mut plain = MetricItem::text("a", "1");
+        plain.style = Some(MetricStyle::Warn);
+        let mut trend = MetricItem::text("b", "2");
+        trend.trend = Some(vec![1.0, 2.0]);
+        let mut gauge = MetricItem::text("c", "3");
+        gauge.gauge = Some(46.5);
+        let data = PluginData {
+            id: "x".into(),
+            title: "X".into(),
+            metrics: vec![plain, trend, gauge],
+            error: None,
+            lua_bytes: None,
+        };
+        let j = to_json(&data);
+        let m = &j["metrics"];
+        assert_eq!(m[0]["gauge"], Value::Null);
+        assert_eq!(m[0]["style"], "warn");
+        assert_eq!(m[1]["trend"], json!([1.0, 2.0]));
+        assert_eq!(m[2]["gauge"], 46.5);
+        assert_eq!(m[2]["trend"], Value::Null);
     }
 }

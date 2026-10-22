@@ -17,6 +17,8 @@ pub struct MetricItem {
     pub value: String,
     /// Points for a sparkline between the label and the value (2..=400).
     pub trend: Option<Vec<f32>>,
+    /// A percent (0..=100) drawn as a bar between the label and the value.
+    pub gauge: Option<f32>,
     /// The plugin sent something invalid for this row; the value explains it.
     pub bad: bool,
     /// How the row looks, from the metric's optional `style` field.
@@ -37,7 +39,7 @@ pub struct TextSpan {
     pub style: Option<MetricStyle>,
 }
 
-/// `style = "dim" | "header" | "good" | "bad" | "bright"` on a metric or a span.
+/// `style = "dim" | "header" | "good" | "warn" | "bad" | "bright"` on a metric or a span.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MetricStyle {
     /// Quieter than normal rows; dropped value when the row is too narrow.
@@ -46,6 +48,9 @@ pub enum MetricStyle {
     Header,
     /// The value (or, without a value, the label) in the rising colour.
     Good,
+    /// The value (or, without a value, the label) in the theme's middle
+    /// level colour: a warning that is not a failure.
+    Warn,
     /// The value (or, without a value, the label) in the warning colour.
     Bad,
     /// The label and the value in the value colour.
@@ -59,6 +64,7 @@ impl MetricStyle {
             "dim" => Some(Self::Dim),
             "header" => Some(Self::Header),
             "good" => Some(Self::Good),
+            "warn" => Some(Self::Warn),
             "bad" => Some(Self::Bad),
             "bright" => Some(Self::Bright),
             _ => None,
@@ -70,6 +76,7 @@ impl MetricStyle {
             Self::Dim => "dim",
             Self::Header => "header",
             Self::Good => "good",
+            Self::Warn => "warn",
             Self::Bad => "bad",
             Self::Bright => "bright",
         }
@@ -82,6 +89,7 @@ impl MetricItem {
             label: label.into(),
             value: value.into(),
             trend: None,
+            gauge: None,
             bad: false,
             style: None,
             label_spans: None,

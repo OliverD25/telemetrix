@@ -545,6 +545,38 @@ mod tests {
     }
 
     #[test]
+    fn gauge_and_warn_rows_render_in_every_theme() {
+        use crate::plugins::{MetricItem, MetricStyle, PluginCard, PluginData, PluginStatus};
+        for theme in themes::all().iter().map(|t| t.name()) {
+            let mut s = state(theme);
+            let mut gauge = MetricItem::text("gaugerow", "gaugevalue");
+            gauge.gauge = Some(46.0);
+            let mut warn = MetricItem::text("warnrow", "warnvalue");
+            warn.style = Some(MetricStyle::Warn);
+            let data = PluginData {
+                id: "fx".into(),
+                title: "FX".into(),
+                metrics: vec![gauge, warn],
+                error: None,
+                lua_bytes: None,
+            };
+            s.plugins.insert(
+                "fx".into(),
+                PluginCard {
+                    data,
+                    status: PluginStatus::Ok,
+                },
+            );
+            let t = text(&render(&s, 60, 120));
+            assert!(
+                t.contains("gaugerow") && t.contains("gaugevalue") && t.contains("46%"),
+                "{theme}: the gauge row"
+            );
+            assert!(t.contains("warnvalue"), "{theme}: the warn row");
+        }
+    }
+
+    #[test]
     fn the_update_group_renders_in_the_s_box() {
         use crate::ui::update_group::Msg;
         use crate::update::{Release, Version};

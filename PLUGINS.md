@@ -100,6 +100,46 @@ its own lowest and highest number. The value is green when the last number
 is higher than the first one, and red when it is lower. A `trend` that is
 not a list of 2..400 numbers turns only that row into a red error line.
 
+### A bar in a row
+
+Add `gauge`, a percent from 0 to 100, and the row gets a bar. The label is on
+the left, then the bar, then the percent, then the value:
+
+```lua
+-- the values have the same width (14), so the bars line up
+{ label = "  load", value = "1.6 of 12 cpu ", gauge = 13 },
+{ label = "  ram ", value = "7.4 of 16 GB  ", gauge = 46 },
+{ label = "  ups ", value = "mains · 13 min", gauge = 100, style = "good" },
+```
+
+```
+  load ██░░░░░░░░░░░░░░░  13%  1.6 of 12 cpu
+  ram  ████████░░░░░░░░░  46%  7.4 of 16 GB
+  ups  █████████████████ 100%  mains · 13 min
+```
+
+- The bar uses the look of the theme's other bars (its glyphs and ends). It
+  fills the space that the label, the percent and the value leave.
+- A number below 0 or above 100 is cut to 0 or 100. A `gauge` that is not a
+  number, or a row with both `gauge` and `trend`, turns only that row into a
+  red error line.
+- On a narrow card the value goes first. If the bar would be shorter than 6
+  cells, the row shows only the label, the bar and the percent. If there is
+  no room for even one cell, it shows the label and the percent.
+- Without a `style`, the bar is in the normal bar colour. From 80 % it takes
+  the theme's middle level colour, and from 90 % the warning colour, like a
+  disk that is filling up.
+- A `style` replaces those levels: `"good"` is green, `"warn"` is the middle
+  level colour and `"bad"` is red, whatever the percent. Use it when a high
+  number is good, like a battery: `style = "good"` keeps 100 % green. With
+  `"dim"` the whole row is grey, for old values. `"bright"` and `"header"`
+  look like no style.
+- The label and the value keep their own colours, and can be spans.
+  `min_width` works as on other rows.
+- The value is right-aligned like on any row, so values of different length
+  move the bars. Give the values of all bar rows in a card the same width
+  (pad them with spaces on the right) and the bars line up, as above.
+
 ### How a row looks
 
 Add `style` to a metric to change how its row looks:
@@ -109,11 +149,12 @@ Add `style` to a metric to change how its row looks:
 | `"header"` | bold, in the label colour | a column header, like `buy  sell` above the rates |
 | `"dim"` | grey, quieter than the other rows | extra details under a main row |
 | `"good"` | the value in green | a value that is fine |
+| `"warn"` | the value in the theme's middle level colour (amber in some themes) | a warning that is not a failure |
 | `"bad"` | the value in red | a value that needs attention, like old data |
 | `"bright"` | the label and the value in the value colour | text that must stand out |
 
-With `good` or `bad` and an empty value, the label takes the colour, for
-a one-line note like `stale since 14:32 (HTTP 429)`.
+With `good`, `warn` or `bad` and an empty value, the label takes the colour,
+for a one-line note like `stale since 14:32 (HTTP 429)`.
 
 ```lua
 { label = "", value = "     buy      sell", style = "header" },
@@ -124,15 +165,16 @@ a one-line note like `stale since 14:32 (HTTP 429)`.
 - An unknown `style` is ignored, so the row looks normal.
 - A `dim` row that is too narrow for both its label and its value shows
   only the label.
-- A row with a `trend` graph ignores `style`.
+- A row with a `trend` graph ignores `style`. A row with a `gauge` bar uses it
+  for the colours of the bar, see [A bar in a row](#a-bar-in-a-row).
 - The value of a row is right-aligned. Give values the same width (pad them
   with spaces) and they line up as columns.
 
 ### Several colours in one row
 
 `label` and `value` can also be a list of spans, `{ text = "...", style = "..." }`.
-The texts are joined in order. Each span's `style` (one of the names above)
-colours only its own text. A span without a `style`, or with an unknown one,
+The texts are joined in order. Each span's `style` (any name from the table
+above, `warn` too) colours only its own text. A span without a `style`, or with an unknown one,
 has the plain colour of its part: the label colour in a label, the value
 colour in a value. The row's own `style` still decides what happens on a
 narrow card, and colours the parts that are plain text.

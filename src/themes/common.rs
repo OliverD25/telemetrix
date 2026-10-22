@@ -591,35 +591,49 @@ pub fn fit(text: &str, max: usize) -> String {
 
 /// A gauge in the palette's glyphs with the percentage at the right end.
 pub fn bar(pct: f32, width: usize, pal: &Palette, warn: bool) -> Line<'static> {
+    let (open, close) = pal.gauge.ends;
+    let bar_w = width.saturating_sub(6 + open.chars().count() + close.chars().count());
+    let color = if warn { pal.warn } else { pal.bar };
+    let mut spans = gauge_spans(pct, bar_w, pal, color, pal.bar_empty);
+    spans.push(Span::styled(
+        format!(" {pct:>4.0}%"),
+        fg(if warn { pal.warn } else { pal.value }),
+    ));
+    Line::from(spans)
+}
+
+/// The ends, the filled part and the empty part of a gauge that is `cells`
+/// wide inside its ends.
+fn gauge_spans(
+    pct: f32,
+    cells: usize,
+    pal: &Palette,
+    fill_color: Color,
+    empty_color: Color,
+) -> Vec<Span<'static>> {
     let g = pal.gauge;
     let (open, close) = g.ends;
-    let bar_w = width.saturating_sub(6 + open.chars().count() + close.chars().count());
-    let fill = (pct / 100.0).clamp(0.0, 1.0) * bar_w as f32;
+    let fill = (pct / 100.0).clamp(0.0, 1.0) * cells as f32;
     let (filled, part) = if g.eighths {
         let eighths = (fill * 8.0).round() as usize;
         (eighths / 8, eighths % 8)
     } else {
         (fill.round() as usize, 0)
     };
-    let color = if warn { pal.warn } else { pal.bar };
     let mut body: String = std::iter::repeat_n(g.full, filled).collect();
     if part > 0 {
         body.push(EIGHTHS[part - 1]);
     }
-    let rest = bar_w.saturating_sub(filled + usize::from(part > 0));
-    Line::from(vec![
+    let rest = cells.saturating_sub(filled + usize::from(part > 0));
+    vec![
         Span::styled(open, fg(pal.border)),
-        Span::styled(body, fg(color)),
+        Span::styled(body, fg(fill_color)),
         Span::styled(
             std::iter::repeat_n(g.empty, rest).collect::<String>(),
-            fg(pal.bar_empty),
+            fg(empty_color),
         ),
         Span::styled(close, fg(pal.border)),
-        Span::styled(
-            format!(" {pct:>4.0}%"),
-            fg(if warn { pal.warn } else { pal.value }),
-        ),
-    ])
+    ]
 }
 
 /// Left blocks from one eighth to seven eighths of a cell.
@@ -917,14 +931,17 @@ pub fn metric_line(m: &crate::plugins::MetricItem, pal: &Palette, w: usize) -> L
     if let Some(points) = &m.trend {
         return trend_line(&m.label, points, &m.value, w, pal);
     }
+    if let Some(pct) = m.gauge {
+        return gauge_line(m, pct, pal, w);
+    }
     let (label_style, value_style) = match m.style {
         None => (fg(pal.label), fg(pal.value)),
         // Without a value, the label carries the colour (a footer like "stale since 14:32").
-        Some(MetricStyle::Good | MetricStyle::Bad) => {
-            let color = if m.style == Some(MetricStyle::Good) {
-                pal.rise
-            } else {
-                pal.warn
+        Some(MetricStyle::Good | MetricStyle::Warn | MetricStyle::Bad) => {
+            let color = match m.style {
+                Some(MetricStyle::Good) => pal.rise,
+                Some(MetricStyle::Warn) => pal.levels[1],
+                _ => pal.warn,
             };
             let label = if m.value.is_empty() {
                 fg(color)
@@ -964,6 +981,77 @@ pub fn metric_line(m: &crate::plugins::MetricItem, pal: &Palette, w: usize) -> L
     styled_kv(label, value, w)
 }
 
+/// `label ████░░░░  46%  value`: the bar fills what the label, the percent
+/// and the value leave. A bar of fewer than 6 cells costs the value its
+/// place; without room for even one cell only the percent stays.
+fn gauge_line(m: &crate::plugins::MetricItem, pct: f32, pal: &Palette, w: usize) -> Line<'static> {
+    use crate::plugins::MetricStyle;
+    let pct = pct.clamp(0.0, 100.0);
+    // The colour of the fill and of the percent text. A plain bar keeps the
+    // value colour for its text until a level colour takes over.
+    let (fill, pct_color) = match m.style {
+        Some(MetricStyle::Dim) => (pal.muted, pal.muted),
+        Some(MetricStyle::Good) => (pal.rise, pal.rise),
+        Some(MetricStyle::Warn) => (pal.levels[1], pal.levels[1]),
+        Some(MetricStyle::Bad) => (pal.warn, pal.warn),
+        _ if pct >= 90.0 => (pal.warn, pal.warn),
+        _ if pct >= 80.0 => (pal.levels[1], pal.levels[1]),
+        _ => (pal.bar, pal.value),
+    };
+    let pct_style = fg(pct_color);
+    let (label_style, value_style, empty) = if m.style == Some(MetricStyle::Dim) {
+        (fg(pal.muted), fg(pal.muted), pal.muted)
+    } else {
+        (fg(pal.label), fg(pal.value), pal.bar_empty)
+    };
+    let label = pieces(
+        &m.label,
+        m.label_spans.as_deref(),
+        label_style,
+        pal.label,
+        pal,
+    );
+    let text = |s: String| vec![(s, pct_style)];
+    let percent = format!("{pct:>3.0}%");
+
+    let (open, close) = pal.gauge.ends;
+    let ends = open.chars().count() + close.chars().count();
+    let label_w: usize = label.iter().map(|(t, _)| t.chars().count()).sum();
+    // label, gap, ends, gap, percent
+    let fixed = label_w + 1 + ends + 1 + percent.chars().count();
+    let value_w = m.value.chars().count();
+    let room = |value_w: usize| {
+        let gap = if value_w > 0 { 2 + value_w } else { 0 };
+        w.saturating_sub(fixed + gap)
+    };
+    let mut cells = room(value_w);
+    let mut show_value = value_w > 0;
+    if cells < 6 && show_value {
+        show_value = false;
+        cells = room(0);
+    }
+    if cells < 1 {
+        return styled_kv(label, text(percent), w);
+    }
+    let mut spans: Vec<Span<'static>> =
+        label.into_iter().map(|(t, s)| Span::styled(t, s)).collect();
+    spans.push(Span::raw(" "));
+    spans.extend(gauge_spans(pct, cells, pal, fill, empty));
+    spans.push(Span::styled(format!(" {percent}"), pct_style));
+    if show_value {
+        spans.push(Span::raw("  "));
+        let value = pieces(
+            &m.value,
+            m.value_spans.as_deref(),
+            value_style,
+            pal.value,
+            pal,
+        );
+        spans.extend(value.into_iter().map(|(t, s)| Span::styled(t, s)));
+    }
+    Line::from(spans)
+}
+
 /// A label or a value as styled pieces: the whole text in `whole`, or its
 /// spans, where a span without a style gets the `plain` colour of its part.
 fn pieces(
@@ -985,6 +1073,7 @@ fn pieces(
                 Some(MetricStyle::Dim) => fg(pal.muted),
                 Some(MetricStyle::Header) => fg(pal.label).add_modifier(Modifier::BOLD),
                 Some(MetricStyle::Good) => fg(pal.rise),
+                Some(MetricStyle::Warn) => fg(pal.levels[1]),
                 Some(MetricStyle::Bad) => fg(pal.warn),
                 Some(MetricStyle::Bright) => fg(pal.value),
             };
@@ -1223,6 +1312,222 @@ mod tests {
         };
         assert_eq!(card(25), (2, 3), "wide enough: both rows");
         assert_eq!(card(24), (1, 2), "narrower than min_width: the row goes");
+    }
+
+    fn line_text(line: &Line<'static>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// Fill and percent colours of a 40-wide gauge row.
+    fn gauge_colors(
+        pal: &Palette,
+        style: Option<crate::plugins::MetricStyle>,
+        pct: f32,
+    ) -> (Option<Color>, Option<Color>) {
+        let mut m = crate::plugins::MetricItem::text("x", "");
+        m.gauge = Some(pct);
+        m.style = style;
+        let line = metric_line(&m, pal, 40);
+        let color = |glyph: char| {
+            line.spans
+                .iter()
+                .find(|s| s.content.contains(glyph))
+                .and_then(|s| s.style.fg)
+        };
+        (color('█'), color('%'))
+    }
+
+    #[test]
+    fn a_gauge_row_shows_label_bar_percent_and_value_and_drops_the_value_when_narrow() {
+        let pal = minimalist_palette();
+        let mut m = crate::plugins::MetricItem::text("  load", "1.6 of 12 cpu");
+        m.gauge = Some(13.0);
+        let wide = line_text(&metric_line(&m, &pal, 44));
+        assert_eq!(wide, "  load ██░░░░░░░░░░░░░░░  13%  1.6 of 12 cpu");
+        assert_eq!(wide.chars().count(), 44, "the row fills the width");
+        let narrow = line_text(&metric_line(&m, &pal, 24));
+        assert_eq!(
+            narrow, "  load ██░░░░░░░░░░  13%",
+            "a bar under 6 cells costs the value its place, then the bar takes the room"
+        );
+        let barely = line_text(&metric_line(&m, &pal, 14));
+        assert_eq!(barely, "  load ░░  13%");
+        let none = line_text(&metric_line(&m, &pal, 11));
+        assert_eq!(
+            none, "  load  13%",
+            "no room for one cell: label and percent"
+        );
+        m.value.clear();
+        assert_eq!(
+            line_text(&metric_line(&m, &pal, 20)),
+            "  load █░░░░░░░  13%",
+            "an empty value leaves no gap"
+        );
+        // The bar keeps the shape the theme gives its gauges.
+        let mut boxed = minimalist_palette();
+        boxed.gauge = Gauge {
+            full: '#',
+            empty: '-',
+            ends: ("[", "]"),
+            eighths: true,
+        };
+        m.value = "v".into();
+        m.gauge = Some(50.0);
+        assert_eq!(
+            line_text(&metric_line(&m, &boxed, 30)),
+            "  load [######▌------]  50%  v"
+        );
+    }
+
+    #[test]
+    fn gauge_colours_follow_the_level_and_the_style() {
+        use crate::plugins::MetricStyle::{Bad, Bright, Dim, Good, Header, Warn};
+        let mut pal = minimalist_palette();
+        pal.levels = [
+            Color::Rgb(1, 1, 1),
+            Color::Rgb(255, 176, 0),
+            Color::Rgb(3, 3, 3),
+        ];
+        let amber = Some(pal.levels[1]);
+        assert_eq!(
+            gauge_colors(&pal, None, 50.0),
+            (Some(pal.bar), Some(pal.value))
+        );
+        assert_eq!(gauge_colors(&pal, None, 79.9).0, Some(pal.bar));
+        assert_eq!(gauge_colors(&pal, None, 80.0), (amber, amber));
+        assert_eq!(gauge_colors(&pal, None, 85.0), (amber, amber));
+        assert_eq!(
+            gauge_colors(&pal, None, 90.0),
+            (Some(WARN), Some(WARN)),
+            "90 and more is the warning colour"
+        );
+        assert_eq!(gauge_colors(&pal, None, 95.0), (Some(WARN), Some(WARN)));
+        for style in [Bright, Header] {
+            assert_eq!(gauge_colors(&pal, Some(style), 50.0).0, Some(pal.bar));
+            assert_eq!(gauge_colors(&pal, Some(style), 95.0).0, Some(WARN));
+        }
+        // A style replaces the levels: a full battery is good, not an alarm.
+        assert_eq!(
+            gauge_colors(&pal, Some(Good), 100.0),
+            (Some(RISE), Some(RISE))
+        );
+        assert_eq!(gauge_colors(&pal, Some(Warn), 10.0), (amber, amber));
+        assert_eq!(
+            gauge_colors(&pal, Some(Bad), 10.0),
+            (Some(WARN), Some(WARN))
+        );
+        assert_eq!(
+            gauge_colors(&pal, Some(Dim), 95.0),
+            (Some(MUTED), Some(MUTED))
+        );
+
+        let mut m = crate::plugins::MetricItem::text("lbl", "val");
+        m.gauge = Some(50.0);
+        m.style = Some(Dim);
+        let dim = metric_line(&m, &pal, 40);
+        let fg_of = |line: &Line<'static>, text: &str| {
+            line.spans
+                .iter()
+                .find(|s| s.content.contains(text))
+                .and_then(|s| s.style.fg)
+        };
+        assert_eq!(fg_of(&dim, "lbl"), Some(MUTED));
+        assert_eq!(fg_of(&dim, "░"), Some(MUTED), "the empty part too");
+        assert_eq!(fg_of(&dim, "val"), Some(MUTED));
+        m.style = Some(Good);
+        let good = metric_line(&m, &pal, 40);
+        assert_eq!(
+            fg_of(&good, "lbl"),
+            Some(pal.label),
+            "label and value keep theirs"
+        );
+        assert_eq!(fg_of(&good, "val"), Some(pal.value));
+        assert_eq!(fg_of(&good, "░"), Some(pal.bar_empty));
+    }
+
+    #[test]
+    fn gauge_rows_keep_spans_and_min_width_and_warn_colours_text() {
+        use crate::plugins::{MetricItem, MetricStyle, PluginData, TextSpan};
+        let mut pal = minimalist_palette();
+        pal.levels[1] = Color::Rgb(255, 176, 0);
+        let span = |text: &str, style| TextSpan {
+            text: text.into(),
+            style,
+        };
+        let mut m = MetricItem::text("● host", "ok");
+        m.label_spans = Some(vec![
+            span("● ", Some(MetricStyle::Warn)),
+            span("host", None),
+        ]);
+        m.gauge = Some(20.0);
+        let line = metric_line(&m, &pal, 30);
+        assert_eq!(line.spans[0].style.fg, Some(pal.levels[1]), "a warn span");
+        assert_eq!(line.spans[1].style.fg, Some(pal.label));
+        assert!(line_text(&line).starts_with("● host █"));
+
+        let mut warn = MetricItem::text("n", "v");
+        warn.style = Some(MetricStyle::Warn);
+        let line = metric_line(&warn, &pal, 20);
+        assert_eq!(line.spans.last().unwrap().style.fg, Some(pal.levels[1]));
+        warn.value.clear();
+        let line = metric_line(&warn, &pal, 20);
+        assert_eq!(
+            line.spans[0].style.fg,
+            Some(pal.levels[1]),
+            "no value: the label takes the colour"
+        );
+
+        m.min_width = Some(50);
+        let card = |w: usize| {
+            let data = PluginData {
+                id: "g".into(),
+                title: "G".into(),
+                metrics: vec![m.clone()],
+                error: None,
+                lua_bytes: None,
+            };
+            let card = PluginCard {
+                data,
+                status: PluginStatus::Ok,
+            };
+            plugin_card(&card, &pal, w).lines.len()
+        };
+        assert_eq!((card(49), card(50)), (0, 1), "min_width works on a gauge");
+    }
+
+    #[test]
+    fn the_built_in_bar_looks_as_before() {
+        let pal = minimalist_palette();
+        let line = bar(50.0, 30, &pal, false);
+        assert_eq!(
+            line_text(&line),
+            format!("{}{}   50%", "█".repeat(12), "░".repeat(12))
+        );
+        let colors: Vec<_> = line.spans.iter().map(|s| s.style.fg).collect();
+        assert_eq!(
+            colors,
+            [
+                Some(pal.border),
+                Some(pal.bar),
+                Some(pal.bar_empty),
+                Some(pal.border),
+                Some(pal.value)
+            ]
+        );
+        let hot = bar(50.0, 30, &pal, true);
+        assert_eq!(hot.spans[1].style.fg, Some(WARN));
+        assert_eq!(hot.spans[4].style.fg, Some(WARN));
+        let mut boxed = minimalist_palette();
+        boxed.gauge = Gauge {
+            full: '#',
+            empty: '-',
+            ends: ("[", "]"),
+            eighths: true,
+        };
+        assert_eq!(
+            line_text(&bar(52.0, 20, &boxed, false)),
+            "[######▎-----]   52%"
+        );
     }
 
     #[test]

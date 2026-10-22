@@ -270,7 +270,14 @@ impl CardUpdate {
             if let Ok(Value::String(style)) = item.get::<Value>("style") {
                 metric.style = MetricStyle::parse(&style.to_string_lossy());
             }
-            match item.get::<Value>("trend").map_err(|e| e.to_string())? {
+            let trend = item.get::<Value>("trend").map_err(|e| e.to_string())?;
+            let gauge = item.get::<Value>("gauge").map_err(|e| e.to_string())?;
+            if !trend.is_nil() && !gauge.is_nil() {
+                metric.value = "a row can have trend or gauge, not both".into();
+                metric.bad = true;
+            }
+            match trend {
+                _ if metric.bad => {}
                 Value::Nil => {}
                 Value::Table(points) => match trend_points(&points) {
                     Some(points) => metric.trend = Some(points),
@@ -285,6 +292,18 @@ impl CardUpdate {
                 },
                 _ => {
                     metric.value = "trend must be a list of numbers".into();
+                    metric.bad = true;
+                }
+            }
+            match gauge {
+                _ if metric.bad => {}
+                Value::Nil => {}
+                Value::Integer(n) => metric.gauge = Some((n as f32).clamp(0.0, 100.0)),
+                Value::Number(n) if n.is_finite() => {
+                    metric.gauge = Some((n as f32).clamp(0.0, 100.0));
+                }
+                _ => {
+                    metric.value = "gauge must be a number 0..100".into();
                     metric.bad = true;
                 }
             }
@@ -406,6 +425,72 @@ mod tests {
             .unwrap();
         assert!(CardUpdate::from_value(v).is_err());
         assert!(CardUpdate::from_value(Value::Nil).is_err());
+    }
+
+    #[test]
+    fn a_gauge_is_a_percent_and_bad_input_makes_a_bad_row() {
+        let lua = Lua::new();
+        let v: Value = lua
+            .load(
+                "return { metrics = { \
+                 { label = 'a', value = '', gauge = 46 }, \
+                 { label = 'b', value = '', gauge = 12.5 }, \
+                 { label = 'c', value = '', gauge = -3 }, \
+                 { label = 'd', value = '', gauge = 250.5 }, \
+                 { label = 'e', value = 'x', gauge = '50' }, \
+                 { label = 'f', value = 'x', gauge = 0/0 }, \
+                 { label = 'g', value = 'x', gauge = { 1 } }, \
+                 { label = 'h', value = 'x', gauge = 5, trend = { 1, 2 } }, \
+                 { label = 'i', value = 'x', gauge = 5, trend = 7 }, \
+                 { label = 'j', value = 'x' } } }",
+            )
+            .eval()
+            .unwrap();
+        let card = CardUpdate::from_value(v).unwrap();
+        let m = &card.metrics;
+        let gauges: Vec<Option<f32>> = m.iter().map(|m| m.gauge).collect();
+        assert_eq!(
+            gauges,
+            [
+                Some(46.0),
+                Some(12.5),
+                Some(0.0),
+                Some(100.0),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None
+            ],
+            "numbers are clamped to 0..100"
+        );
+        for i in [4, 5, 6] {
+            assert!(m[i].bad, "{i}");
+            assert_eq!(m[i].value, "gauge must be a number 0..100", "{i}");
+        }
+        for i in [7, 8] {
+            assert!(m[i].bad && m[i].trend.is_none(), "{i}");
+            assert_eq!(m[i].value, "a row can have trend or gauge, not both", "{i}");
+        }
+        assert!(!m[0].bad && !m[9].bad, "the other rows still work");
+    }
+
+    #[test]
+    fn style_warn_is_known() {
+        let lua = Lua::new();
+        let v: Value = lua
+            .load(
+                "return { metrics = { { label = 'x', value = 1, style = 'warn' }, \
+                 { label = { { text = 'a', style = 'warn' } }, value = '' } } }",
+            )
+            .eval()
+            .unwrap();
+        let card = CardUpdate::from_value(v).unwrap();
+        assert_eq!(card.metrics[0].style, Some(MetricStyle::Warn));
+        assert_eq!(MetricStyle::Warn.name(), "warn");
+        let span = card.metrics[1].label_spans.as_ref().unwrap();
+        assert_eq!(span[0].style, Some(MetricStyle::Warn));
     }
 
     #[test]
