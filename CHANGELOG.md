@@ -3,6 +3,17 @@
 All notable changes to telemetrix. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 0.5.3 — 2026-10-23
+
+### Fixed
+
+- **The settings box can no longer lock you out.** Turning on
+  `exit_on_any_key` (screensaver mode) in the `s` box saved it at once,
+  so the next key quit the dashboard and `s` could never open the box
+  again to turn it off. The box now shows it read-only; set it in
+  `telemetrix.toml`, or use `--screensaver` / `--exit-on-any-key`. If
+  your dashboard quits on every key, set `exit_on_any_key = false` there.
+
 ## 0.5.2 — 2026-10-23
 
 ### Fixed
