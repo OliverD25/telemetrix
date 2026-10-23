@@ -304,10 +304,67 @@ pub fn draw_columns(frame: &mut Frame, body: Rect, state: &AppState, pal: &Palet
     );
 }
 
-/// The cards of every column, after the theme's `hide` and `order`.
-/// Without `order` each column holds its groups (system cards left,
-/// plugins right); with it the cards fill the columns one after another.
+/// The cards of every column, after the theme's `hide`, `order` and
+/// `column`. Without `order` each column holds its groups (system cards
+/// left, plugins right); with it the cards fill the columns one after
+/// another. Then every card named in `column` moves to its column.
 pub fn place(
+    cols: &[(Rect, &'static [Group])],
+    opts: &ThemeOptions,
+    pal: &Palette,
+    gap: u16,
+    make: &mut dyn FnMut(Group, usize) -> Vec<Card>,
+) -> Vec<Vec<Card>> {
+    let placed = place_unpinned(cols, opts, pal, gap, make);
+    pin(placed, cols, opts, pal, make)
+}
+
+/// Moves each card named in `column` to the end of its column (1 = left).
+/// A column the layout does not have, or 0, leaves the card where it is.
+/// Pinned cards keep the order they had; one already in its column goes
+/// to the end of it. A card that changes to a column of another width is
+/// made again at that width.
+fn pin(
+    mut placed: Vec<Vec<Card>>,
+    cols: &[(Rect, &'static [Group])],
+    opts: &ThemeOptions,
+    pal: &Palette,
+    make: &mut dyn FnMut(Group, usize) -> Vec<Card>,
+) -> Vec<Vec<Card>> {
+    if opts.column.is_empty() {
+        return placed;
+    }
+    let target = |id: &str| {
+        let n = usize::try_from(*opts.column.get(id)?).ok()?;
+        (1..=cols.len()).contains(&n).then(|| n - 1)
+    };
+    let mut moves = Vec::new();
+    for (from, col) in placed.iter_mut().enumerate() {
+        for card in std::mem::take(col) {
+            match target(&card.id) {
+                Some(to) => moves.push((from, to, card)),
+                None => col.push(card),
+            }
+        }
+    }
+    for (from, to, card) in moves {
+        let w = text_width(cols[to].0, pal);
+        let card = if text_width(cols[from].0, pal) == w {
+            card
+        } else {
+            let all = cols
+                .iter()
+                .flat_map(|(_, groups)| groups.iter().copied())
+                .flat_map(|g| make(g, w))
+                .find(|c| c.id == card.id);
+            all.unwrap_or(card)
+        };
+        placed[to].push(card);
+    }
+    placed
+}
+
+fn place_unpinned(
     cols: &[(Rect, &'static [Group])],
     opts: &ThemeOptions,
     pal: &Palette,
@@ -1555,5 +1612,162 @@ mod tests {
         assert_eq!(text.chars().count(), 30);
         assert!(text.ends_with("554.3 GiB / 1.8 TiB"), "{text}");
         assert!(text.starts_with("Archive S…"), "{text}");
+    }
+
+    fn demo_cards(group: Group, w: usize) -> Vec<Card> {
+        let ids: &[&str] = match group {
+            Group::System => &["cpu", "ram", "swap"],
+            Group::Gpu => &["gpu"],
+            Group::Disks => &["disks", "network"],
+            Group::Plugins => &["clock", "hosts", "weather"],
+        };
+        ids.iter()
+            .map(|id| Card::new(*id, vec![Line::from(format!("w{w}"))]).id(id))
+            .collect()
+    }
+
+    /// The card ids of every column, for a terminal `width` cells wide.
+    fn placed_ids(width: u16, opts: &ThemeOptions) -> Vec<Vec<String>> {
+        let pal = minimalist_palette();
+        let cols = columns(Rect::new(0, 0, width, 40), false);
+        place(&cols, opts, &pal, 0, &mut demo_cards)
+            .into_iter()
+            .map(|cards| cards.into_iter().map(|c| c.id).collect())
+            .collect()
+    }
+
+    fn pinned(pins: &[(&str, i64)]) -> ThemeOptions {
+        ThemeOptions {
+            column: pins.iter().map(|(id, n)| (id.to_string(), *n)).collect(),
+            ..ThemeOptions::default()
+        }
+    }
+
+    fn ids(cols: &[&[&str]]) -> Vec<Vec<String>> {
+        cols.iter()
+            .map(|c| c.iter().map(|s| s.to_string()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn a_pinned_card_goes_to_the_end_of_its_column() {
+        assert_eq!(
+            placed_ids(100, &ThemeOptions::default()),
+            ids(&[
+                &["cpu", "ram", "swap", "gpu"],
+                &["disks", "network"],
+                &["clock", "hosts", "weather"]
+            ])
+        );
+        assert_eq!(
+            placed_ids(100, &pinned(&[("hosts", 2)])),
+            ids(&[
+                &["cpu", "ram", "swap", "gpu"],
+                &["disks", "network", "hosts"],
+                &["clock", "weather"]
+            ])
+        );
+        assert_eq!(
+            placed_ids(100, &pinned(&[("cpu", 3), ("weather", 1)])),
+            ids(&[
+                &["ram", "swap", "gpu", "weather"],
+                &["disks", "network"],
+                &["clock", "hosts", "cpu"]
+            ])
+        );
+    }
+
+    #[test]
+    fn pinned_cards_keep_the_order_they_had() {
+        // `hosts` comes after `clock` in the normal placement, whatever
+        // the order of the keys in the table.
+        for pins in [[("clock", 2), ("hosts", 2)], [("hosts", 2), ("clock", 2)]] {
+            assert_eq!(
+                placed_ids(100, &pinned(&pins)),
+                ids(&[
+                    &["cpu", "ram", "swap", "gpu"],
+                    &["disks", "network", "clock", "hosts"],
+                    &["weather"]
+                ])
+            );
+        }
+    }
+
+    #[test]
+    fn a_card_already_in_its_column_moves_to_the_end_of_it() {
+        assert_eq!(
+            placed_ids(100, &pinned(&[("clock", 3)])),
+            ids(&[
+                &["cpu", "ram", "swap", "gpu"],
+                &["disks", "network"],
+                &["hosts", "weather", "clock"]
+            ])
+        );
+    }
+
+    #[test]
+    fn a_column_the_layout_lacks_leaves_the_card_alone() {
+        let normal = placed_ids(80, &ThemeOptions::default());
+        assert_eq!(
+            normal,
+            ids(&[
+                &["cpu", "ram", "swap", "disks", "network", "gpu"],
+                &["clock", "hosts", "weather"]
+            ])
+        );
+        // Two columns: 2 is the right one, 3 and 0 change nothing, 1 is the left one.
+        assert_eq!(placed_ids(80, &pinned(&[("hosts", 3)])), normal);
+        assert_eq!(placed_ids(80, &pinned(&[("hosts", 0)])), normal);
+        assert_eq!(placed_ids(80, &pinned(&[("hosts", -1)])), normal);
+        assert_eq!(placed_ids(80, &pinned(&[("hosts", 2)])), {
+            ids(&[
+                &["cpu", "ram", "swap", "disks", "network", "gpu"],
+                &["clock", "weather", "hosts"],
+            ])
+        });
+        assert_eq!(
+            placed_ids(80, &pinned(&[("hosts", 1)])),
+            ids(&[
+                &["cpu", "ram", "swap", "disks", "network", "gpu", "hosts"],
+                &["clock", "weather"]
+            ])
+        );
+        // One column: only column 1 exists.
+        let one = placed_ids(50, &ThemeOptions::default());
+        assert_eq!(one.len(), 1);
+        assert_eq!(placed_ids(50, &pinned(&[("hosts", 2)])), one);
+        assert_eq!(placed_ids(50, &pinned(&[("hosts", 3)])), one);
+        let last = placed_ids(50, &pinned(&[("cpu", 1)]));
+        assert_eq!(last[0].last().map(String::as_str), Some("cpu"));
+    }
+
+    #[test]
+    fn pinning_works_with_an_order_and_ignores_hidden_cards() {
+        let mut opts = pinned(&[("hosts", 1), ("nothing", 2), ("swap", 2)]);
+        opts.order = vec!["hosts".into(), "clock".into()];
+        opts.hide = vec!["swap".into()];
+        let cols = placed_ids(100, &opts);
+        assert_eq!(cols[0].last().map(String::as_str), Some("hosts"));
+        let mut all: Vec<&str> = cols.iter().flatten().map(String::as_str).collect();
+        all.sort_unstable();
+        assert_eq!(
+            all,
+            [
+                "clock", "cpu", "disks", "gpu", "hosts", "network", "ram", "weather"
+            ],
+            "every shown card once, the hidden one not at all"
+        );
+    }
+
+    #[test]
+    fn a_moved_card_is_made_again_at_the_width_of_its_new_column() {
+        let pal = minimalist_palette();
+        // At 100 cells the middle column is one cell narrower.
+        let cols = columns(Rect::new(0, 0, 100, 40), false);
+        let widths: Vec<usize> = cols.iter().map(|(r, _)| text_width(*r, &pal)).collect();
+        assert!(widths[0] != widths[1], "{widths:?}");
+        let placed = place(&cols, &pinned(&[("cpu", 2)]), &pal, 0, &mut demo_cards);
+        let cpu = placed[1].iter().find(|c| c.id == "cpu").unwrap();
+        assert_eq!(cpu.lines[0].to_string(), format!("w{}", widths[1]));
     }
 }

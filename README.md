@@ -283,6 +283,7 @@ ram_view = "bar"            # bar | chart | both
 chart_height = "tall"       # small | medium | tall
 hide = ["swap", "clock"]    # cards not shown
 order = ["crypto", "cpu"]   # these cards first, in this order
+column = { hosts = 2 }      # pin cards to a column, 1 = left
 accent = "cyan"             # default, a colour name or #rrggbb
 ```
 
@@ -304,6 +305,19 @@ accent = "cyan"             # default, a colour name or #rrggbb
   follow in their usual order. The cards then fill the columns one after
   another. With an empty `order` the system cards stay on the left and the
   plugins on the right.
+- **`column`:** pins cards to a column after the normal placement. It is
+  a table of card id and column number, 1 for the left column:
+  `column = { hosts = 2 }` puts the `hosts` card at the end of the middle
+  column of the 3-column layout. A pinned card leaves the column it was in
+  and goes to the end of the one you named. Several pinned cards keep the
+  order they had. A card that is already in that column moves to its end.
+  A number that is 0, or larger than the number of columns the terminal
+  shows right now, leaves the card where it is. On a 2-column terminal
+  `hosts = 2` puts it in the right column, and `hosts = 3` changes
+  nothing. An id that names no card gets one warning, like in `hide`. A
+  value that is not a whole number is ignored with a warning. The default
+  is an empty table. Set it in the file; the `s` and `t` boxes do not
+  show it.
 - **`accent`:** the main colour of the theme: the card titles and gauges,
   the phosphor colour of crt-amber and pip-boy, the codes of nasa and the
   titles of kernel-log. matrix keeps its `color` key for this.
@@ -311,7 +325,8 @@ accent = "cyan"             # default, a colour name or #rrggbb
 nasa draws its tables either way; a `chart` view adds the chart under its
 rows. kernel-log shows no bars or charts, so the views and the chart
 height do nothing there, and the options boxes say "(not used by this
-theme)". `hide`, `order` and `accent` work in every theme.
+theme)". `hide`, `order` and `accent` work in every theme. `column` works in every
+theme with cards; kernel-log is one list, so it ignores `column`.
 
 Three ways to change them:
 
@@ -615,6 +630,7 @@ no longer matches the program.
 | `theme.<name>.chart_height` | `"medium"` | small \| medium \| tall | yes; also in the `t` options panel | small \| medium \| tall: the most rows a chart takes |
 | `theme.<name>.hide` | `[]` | list of card ids | cards on/off; also in the `t` options panel | cards not shown: cpu, ram, swap, gpu, disks, network or a plugin id |
 | `theme.<name>.order` | `[]` | list of card ids | no; in the `t` options panel | cards shown first, in this order; empty = system cards left, plugins right |
+| `theme.<name>.column` | `{}` | table of card id = column number | no, edit the file | pins cards to a column, 1 = left: { hosts = 2 }; a number the layout lacks changes nothing |
 | `theme.<name>.accent` | `"default"` | default \| red \| orange \| amber \| yellow \| green \| cyan \| blue \| purple \| magenta \| pink \| white \| #rrggbb | yes; also in the `t` options panel | the theme's main colour: default, a colour name or #rrggbb |
 
 ## Memory and CPU

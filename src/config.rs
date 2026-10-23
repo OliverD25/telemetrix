@@ -40,12 +40,13 @@ pub const ACCENT_NAMES: &[&str] = &[
 /// The cards that are not plugins, as `hide` and `order` name them.
 pub const SYSTEM_CARDS: [&str; 6] = ["cpu", "ram", "swap", "gpu", "disks", "network"];
 /// The keys every `[theme.<name>]` table has (matrix keeps `color` as its accent).
-pub const THEME_KEYS: [&str; 6] = [
+pub const THEME_KEYS: [&str; 7] = [
     "cpu_view",
     "ram_view",
     "chart_height",
     "hide",
     "order",
+    "column",
     "accent",
 ];
 const FILE_NAME: &str = "telemetrix.toml";
@@ -79,6 +80,8 @@ pub enum Kind {
     Accent,
     /// Card ids: [`SYSTEM_CARDS`] or plugin ids.
     CardList,
+    /// A table of card ids and column numbers: `{ hosts = 2 }`.
+    CardMap,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -88,6 +91,7 @@ pub enum Value {
     Float(f64),
     Bool(bool),
     List(Vec<String>),
+    Map(BTreeMap<String, i64>),
 }
 
 impl Value {
@@ -126,6 +130,13 @@ impl Value {
             Value::Bool(b) => toml_edit::Value::from(*b),
             Value::List(items) => {
                 toml_edit::Value::Array(items.iter().map(String::as_str).collect())
+            }
+            Value::Map(entries) => {
+                let mut table = toml_edit::InlineTable::new();
+                for (id, n) in entries {
+                    table.insert(id, toml_edit::Value::from(*n));
+                }
+                toml_edit::Value::InlineTable(table)
             }
         }
     }
@@ -197,7 +208,7 @@ pub static SETTINGS: LazyLock<Vec<Setting>> = LazyLock::new(|| {
                 path,
                 kind,
                 default,
-                tui_editable: true,
+                tui_editable: key != "column",
                 help,
                 theme_option: true,
             });
@@ -231,6 +242,11 @@ fn theme_option(theme: &str, key: &str) -> (Kind, Value, &'static str) {
             Kind::CardList,
             Value::List(Vec::new()),
             "cards shown first, in this order; empty = system cards left, plugins right",
+        ),
+        "column" => (
+            Kind::CardMap,
+            Value::Map(BTreeMap::new()),
+            "pins cards to a column, 1 = left: { hosts = 2 }; a number the layout lacks changes nothing",
         ),
         _ => (
             Kind::Accent,
@@ -291,6 +307,8 @@ pub struct ThemeOptions {
     pub chart_height: String,
     pub hide: Vec<String>,
     pub order: Vec<String>,
+    /// Card id to the column (1 = left) it is pinned to.
+    pub column: BTreeMap<String, i64>,
     /// `default`, a name from [`ACCENT_NAMES`] or `#rrggbb`.
     pub accent: String,
 }
@@ -303,6 +321,7 @@ impl Default for ThemeOptions {
             chart_height: "medium".into(),
             hide: Vec::new(),
             order: Vec::new(),
+            column: BTreeMap::new(),
             accent: "default".into(),
         }
     }
@@ -332,11 +351,16 @@ pub fn is_card_id(id: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
-/// `(key, id)` for every `hide`/`order` entry that names no card in `known`.
+/// `(key, id)` for every `hide`/`order`/`column` entry that names no card in `known`.
 pub fn unknown_cards(cfg: &Config, known: &BTreeSet<String>) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for (theme, opts) in THEME_NAMES.iter().zip(&cfg.theme_opts) {
-        for (key, list) in [("hide", &opts.hide), ("order", &opts.order)] {
+        let pinned: Vec<String> = opts.column.keys().cloned().collect();
+        for (key, list) in [
+            ("hide", &opts.hide),
+            ("order", &opts.order),
+            ("column", &pinned),
+        ] {
             for id in list {
                 if !SYSTEM_CARDS.contains(&id.as_str()) && !known.contains(id) {
                     out.push((format!("theme.{theme}.{key}"), id.clone()));
@@ -952,6 +976,7 @@ impl Config {
             "chart_height" => Value::Str(o.chart_height.clone().into()),
             "hide" => Value::List(o.hide.clone()),
             "order" => Value::List(o.order.clone()),
+            "column" => Value::Map(o.column.clone()),
             _ => Value::Str(o.accent.clone().into()),
         }
     }
@@ -968,6 +993,12 @@ impl Config {
             "chart_height" => o.chart_height = v.as_str().to_string(),
             "hide" => o.hide = list(v),
             "order" => o.order = list(v),
+            "column" => {
+                o.column = match v {
+                    Value::Map(entries) => entries.clone(),
+                    _ => BTreeMap::new(),
+                }
+            }
             _ => o.accent = v.as_str().to_string(),
         }
     }
@@ -1248,6 +1279,35 @@ pub fn parse_text(text: &str) -> Result<Parsed, Problem> {
             from_file.insert(s.path);
             continue;
         }
+        if matches!(s.kind, Kind::CardMap)
+            && let Some(table) = item.as_table_like()
+        {
+            // One bad entry does not throw away the good ones.
+            let mut good = BTreeMap::new();
+            let mut bad = Vec::new();
+            for (id, v) in table.iter() {
+                match v.as_integer() {
+                    Some(n) if is_card_id(id) => {
+                        good.insert(id.to_string(), n);
+                    }
+                    _ => bad.push(format!("{id} = {}", shown(v))),
+                }
+            }
+            if !bad.is_empty() {
+                problems.push(Problem {
+                    line: line_of(text, item.span()),
+                    message: format!(
+                        "{}: {} {} not a card id with a whole column number, ignored",
+                        s.path,
+                        bad.join(", "),
+                        if bad.len() == 1 { "is" } else { "are" }
+                    ),
+                });
+            }
+            config.assign(s.path, &Value::Map(good));
+            from_file.insert(s.path);
+            continue;
+        }
         match validate(s, item) {
             Ok(v) => {
                 config.assign(s.path, &v);
@@ -1364,6 +1424,7 @@ fn validate(s: &Setting, item: &Item) -> Result<Value, String> {
             .and_then(|a| a.iter().map(|x| x.as_str().map(str::to_string)).collect())
             .map(Value::List)
             .ok_or_else(|| "is not a list of card ids".into()),
+        Kind::CardMap => Err("is not a table of card ids and column numbers".into()),
     }
 }
 
@@ -1595,10 +1656,12 @@ pub fn reference_markdown() -> String {
             Kind::Color => format!(r"{} \| #rrggbb", MATRIX_COLORS.join(r" \| ")),
             Kind::Accent => format!(r"{} \| #rrggbb", ACCENT_NAMES.join(r" \| ")),
             Kind::CardList => "list of card ids".into(),
+            Kind::CardMap => "table of card id = column number".into(),
         };
         let overlay = match (theme_key, s.theme_option, s.tui_editable) {
             (Some("hide"), true, _) => "cards on/off; also in the `t` options panel",
             (Some("order"), true, _) => "no; in the `t` options panel",
+            (Some("column"), true, _) => "no, edit the file",
             (_, true, _) => "yes; also in the `t` options panel",
             (_, false, true) => "yes",
             _ => "no, edit the file",
@@ -1878,6 +1941,68 @@ mod tests {
         c.assign("theme.nasa.accent", &accent);
         assert_eq!(c.get("theme.nasa.accent"), Some(accent));
         assert_eq!(c.theme("nasa").chart_cap(), 10);
+    }
+
+    #[test]
+    fn column_pins_parse_leniently() {
+        let text = "[theme.nasa]
+column = { hosts = 2, \"BAD ID!\" = 1, clock = \"2\", gone = 3, swap = 1.5 }
+                    [theme.synthwave]
+column = 2
+                    [theme.cyberpunk.column]
+weather = 3
+";
+        let parsed = parse_text(text).unwrap();
+        let c = &parsed.config;
+        let pins = |theme| c.theme(theme).column.clone();
+        let want = |list: &[(&str, i64)]| -> BTreeMap<String, i64> {
+            list.iter().map(|(k, n)| (k.to_string(), *n)).collect()
+        };
+        assert_eq!(pins("nasa"), want(&[("gone", 3), ("hosts", 2)]));
+        assert!(pins("synthwave").is_empty(), "not a table: the default");
+        assert_eq!(pins("cyberpunk"), want(&[("weather", 3)]));
+        assert!(pins("matrix").is_empty());
+        let messages: Vec<&str> = parsed.problems.iter().map(|p| p.message.as_str()).collect();
+        assert_eq!(parsed.problems.len(), 2, "{messages:?}");
+        assert!(
+            messages.iter().any(|m| m.starts_with(
+                "theme.nasa.column: BAD ID! = 1, clock = \"2\", swap = 1.5 are not a card id"
+            )),
+            "{messages:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.starts_with("theme.synthwave.column = 2 is not a table")),
+            "{messages:?}"
+        );
+        let known: BTreeSet<String> = ["hosts".to_string()].into();
+        assert_eq!(
+            unknown_cards(c, &known),
+            [
+                ("theme.cyberpunk.column".to_string(), "weather".to_string()),
+                ("theme.nasa.column".to_string(), "gone".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn column_is_written_back_as_an_inline_table() {
+        let dir = std::env::temp_dir().join(format!("telemetrix-column-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("telemetrix.toml");
+        let pins = BTreeMap::from([("hosts".to_string(), 2), ("clock".to_string(), 3)]);
+        set(&path, "theme.nasa.column", &Value::Map(pins.clone())).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("column = { clock = 3, hosts = 2 }"), "{text}");
+        let parsed = parse_text(&text).unwrap();
+        assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
+        assert_eq!(parsed.config.theme("nasa").column, pins);
+        assert_eq!(
+            Config::default().get("theme.nasa.column"),
+            Some(Value::Map(BTreeMap::new()))
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

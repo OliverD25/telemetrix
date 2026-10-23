@@ -60,7 +60,7 @@ pub fn all() -> Vec<Box<dyn Theme>> {
 /// Whether a theme draws anything for one of its `[theme.<name>]` options:
 /// kernel-log shows values as log records, so it has no bars or charts.
 pub fn uses_option(theme: &str, key: &str) -> bool {
-    !(theme == "kernel-log" && matches!(key, "cpu_view" | "ram_view" | "chart_height"))
+    !(theme == "kernel-log" && matches!(key, "cpu_view" | "ram_view" | "chart_height" | "column"))
 }
 
 pub fn index_of(name: &str) -> Option<usize> {

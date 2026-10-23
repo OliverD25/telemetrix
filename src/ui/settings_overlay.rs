@@ -575,7 +575,7 @@ pub fn editable(row: &Row) -> bool {
             s.tui_editable
                 && !matches!(
                     s.kind,
-                    Kind::Path | Kind::Str | Kind::StrList | Kind::CardList
+                    Kind::Path | Kind::Str | Kind::StrList | Kind::CardList | Kind::CardMap
                 )
         }
         Row::PluginEnabled(_)
@@ -674,7 +674,9 @@ pub fn step(row: &Row, cfg: &Config, dir: i32, big: bool) -> Option<Change> {
                     let next = i.map_or(0, |i| cycle(i, ACCENT_NAMES.len(), dir));
                     Value::Str(ACCENT_NAMES[next].into())
                 }
-                Kind::Str | Kind::Path | Kind::StrList | Kind::CardList => return None,
+                Kind::Str | Kind::Path | Kind::StrList | Kind::CardList | Kind::CardMap => {
+                    return None;
+                }
             };
             Some(Change::Set(s.path.to_string(), value))
         }
@@ -1484,13 +1486,14 @@ mod tests {
                     continue;
                 };
                 match rest {
-                    // One row per card instead; the order is set in the `t` box.
+                    // One row per card instead; the order is set in the `t` box and
+                    // `column` only in the file.
                     "hide" => wanted.extend(
                         card_ids(ids.iter().cloned())
                             .iter()
                             .map(|id| format!("{}:{id}", s.path)),
                     ),
-                    "order" => {}
+                    "order" | "column" => {}
                     _ => wanted.push(s.path.to_string()),
                 }
             }

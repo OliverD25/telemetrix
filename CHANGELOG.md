@@ -3,6 +3,18 @@
 All notable changes to telemetrix. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- **Pin a card to a column.** The new theme option `column` takes a table
+  of card id and column number, for example
+  `[theme.ascii-dashboard]` with `column = { hosts = 2 }` to put the
+  `hosts` card in the middle column. The card goes to the end of that
+  column. It works with and without `order`. A column the terminal does
+  not have right now (a 2 or 1 column layout) leaves the card where it is.
+  It is set in the file only. kernel-log ignores it.
+
 ## 0.5.3 — 2026-10-23
 
 ### Fixed
