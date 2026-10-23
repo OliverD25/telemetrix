@@ -1582,10 +1582,8 @@ mod tests {
         );
         assert_eq!(
             set("general.exit_on_any_key", 1),
-            Some(Change::Set(
-                "general.exit_on_any_key".into(),
-                Value::Bool(true)
-            ))
+            None,
+            "any key would quit, the s box included: only the file sets it"
         );
         assert_eq!(
             set("theme.matrix.color", -1),

@@ -373,7 +373,9 @@ static BASE_SETTINGS: &[Setting] = &[
         "general.exit_on_any_key",
         Kind::Bool,
         Value::Bool(false),
-        true,
+        // Not from the s box: the next key, Esc included, would quit, and the
+        // box could never be reached again to turn it off.
+        false,
         "true = screensaver mode: any key quits",
     ),
     setting(

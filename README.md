@@ -134,7 +134,7 @@ the chosen one on the right:
 | Cards | the warning thresholds, the disk and network drive options, the GPU card, the history length |
 | Plugins | the switch for all plugins, then every plugin file with `on`, `off` or `error`. `Right` opens a plugin's own page: `enabled`, `interval` and its own settings, like the weather city or the main bank |
 | Updates | the version, the latest release, `check now`, `install now`, and the automatic update settings (see [From the settings box](#from-the-settings-box)) |
-| System | screensaver mode (`exit_on_any_key`), the log file and its length, the plugin folder, the memory budgets, the plugin limits and the metrics intervals |
+| System | screensaver mode (`exit_on_any_key`, shown only: any key would quit, so set it in the file), the log file and its length, the plugin folder, the memory budgets, the plugin limits and the metrics intervals |
 
 Keys:
 
@@ -573,7 +573,7 @@ no longer matches the program.
 | `schema` | `1` | 1..1 | no, edit the file | format version of this file, do not change |
 | `general.theme` | `"matrix"` | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa \| pip-boy \| synthwave \| kernel-log \| ascii-dashboard | yes | minimalist \| matrix \| tokyo-night \| crt-amber \| cyberpunk \| nasa \| pip-boy \| synthwave \| kernel-log \| ascii-dashboard |
 | `general.fps` | `15` | 1..60 | yes | frames per second for animated themes, 1..60 |
-| `general.exit_on_any_key` | `false` | true \| false | yes | true = screensaver mode: any key quits |
+| `general.exit_on_any_key` | `false` | true \| false | no, edit the file | true = screensaver mode: any key quits |
 | `general.plugins_dir` | `""` | a file or folder path | no, edit the file | empty = the plugins folder next to this file; relative paths start there |
 | `general.log_file` | `""` | a file or folder path | no, edit the file | "" = off, otherwise a file path |
 | `general.log_lines` | `200` | 50..2000 | yes | lines kept for the l overlay, 50..2000 |
