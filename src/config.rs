@@ -1632,6 +1632,7 @@ pub fn resolve_path(flag: Option<&Path>) -> PathBuf {
 /// The settings file the program at `exe` uses: [`resolve_path`] as if it
 /// ran from there. The screensaver watcher runs from a copy in another
 /// folder and must read the dashboard's file.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn resolve_path_for(flag: Option<&Path>, exe: &Path) -> PathBuf {
     let exe_dir = exe.parent().map(Path::to_path_buf);
     resolve_from(flag, |k| std::env::var_os(k), exe_dir, |p| p.is_file())

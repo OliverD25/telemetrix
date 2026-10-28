@@ -1178,6 +1178,8 @@ mod tests {
         lp.events = tx;
         lp.updater = Arc::new(updater);
         lp.act(Action::ToggleSettings);
+        // Opening the box looks at the screensaver watcher first.
+        drain(&mut lp, &rx, |ev| matches!(ev, AppEvent::Watcher(_)));
         (lp, rx)
     }
 

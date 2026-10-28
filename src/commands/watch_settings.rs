@@ -3,6 +3,9 @@
 //! The watcher looks at the file's modified time at every poll and parses
 //! it again only when that changed.
 
+// Only the Windows watcher reads the file while it runs; Linux uses `status_lines`.
+#![cfg_attr(not(windows), allow(dead_code))]
+
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
