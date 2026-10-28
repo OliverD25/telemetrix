@@ -3,6 +3,31 @@
 All notable changes to telemetrix. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 0.5.5 — 2026-10-28
+
+### Added
+
+- **Turn the screensaver off in the settings box.** The `s` box has a new
+  page, Screensaver, between Updates and System. `enabled` switches the
+  dashboard opening on idle on or off, `idle_minutes` sets the minutes
+  (1..100), and a line says whether the watcher runs, is installed but
+  not running, or is not installed (with the command to run in a
+  terminal). The watcher stays installed when the switch is off, so the
+  daily automatic update keeps working; `screensaver uninstall` still
+  removes both. The two keys are in the new `[screensaver]` section of
+  `telemetrix.toml`, and the watcher follows a change within 5 seconds.
+- `screensaver status` shows the switch and the idle minutes, and where
+  the minutes come from.
+
+### Changed
+
+- `screensaver install --idle-minutes N` also saves N as
+  `screensaver.idle_minutes`, and accepts 1..100. Without
+  `--idle-minutes` it uses the value from the settings file. A task
+  installed by an older version keeps its own minutes until the file has
+  the key.
+- On a narrow settings box the page letters are `A C P U Sc Sy`.
+
 ## 0.5.4 — 2026-10-23
 
 ### Added
