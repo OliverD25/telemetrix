@@ -7,7 +7,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::AppState;
 use crate::themes::common::fg;
 
-const KEYS: [(&str, &str); 15] = [
+const KEYS: [(&str, &str); 16] = [
     ("q  Esc  Ctrl+C", "quit (Esc closes an open overlay first)"),
     ("t", "themes: Up/Down preview, Enter saves, Esc cancels"),
     (
@@ -22,6 +22,10 @@ const KEYS: [(&str, &str); 15] = [
     (
         "s, page Updates",
         "Enter: check now, install now (new versions)",
+    ),
+    (
+        "s, page Screensaver",
+        "open on idle on/off, idle minutes, watcher state",
     ),
     ("+ / -", "more / fewer frames per second"),
     ("l", "log overlay"),

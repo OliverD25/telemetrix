@@ -26,6 +26,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use crate::cli::{Flags, ScreensaverCmd};
+use crate::commands::watch_settings::WatchSettings;
 
 pub const TASK_NAME: &str = "telemetrix screensaver";
 /// The file name of the copy the task runs.
@@ -110,11 +111,23 @@ pub enum Decision {
 pub struct IdleWatch {
     limit: Duration,
     armed: bool,
+    /// `screensaver.enabled`; off, it never decides to launch.
+    enabled: bool,
 }
 
 impl IdleWatch {
     pub fn new(limit: Duration) -> Self {
-        Self { limit, armed: true }
+        Self {
+            limit,
+            armed: true,
+            enabled: true,
+        }
+    }
+
+    /// Follows the settings file: the switch and the idle limit.
+    pub fn configure(&mut self, s: WatchSettings) {
+        self.enabled = s.enabled;
+        self.limit = Duration::from_secs(u64::from(s.idle_minutes) * 60);
     }
 
     pub fn step(&mut self, o: Observation) -> Decision {
@@ -122,7 +135,7 @@ impl IdleWatch {
             self.armed = true;
             return Decision::Wait;
         }
-        if !self.armed || o.dashboard_running || o.display_required {
+        if !self.enabled || !self.armed || o.dashboard_running || o.display_required {
             return Decision::Wait;
         }
         self.armed = false;
@@ -432,10 +445,19 @@ pub fn run(cmd: ScreensaverCmd, flags: &Flags) -> ExitCode {
             idle_minutes,
             dry_run,
         } => {
+            let minutes = idle_minutes.unwrap_or_else(|| {
+                crate::config::load_effective(flags)
+                    .1
+                    .screensaver
+                    .idle_minutes
+            });
             if cfg!(windows) {
-                sys::install(n, &exe, config.as_deref(), idle_minutes, dry_run)
+                if let Some(minutes) = idle_minutes {
+                    save_idle_minutes(flags, minutes, dry_run);
+                }
+                sys::install(n, &exe, config.as_deref(), minutes, dry_run)
             } else {
-                print!("{}", linux_recipe(&exe, idle_minutes));
+                print!("{}", linux_recipe(&exe, minutes));
                 ExitCode::SUCCESS
             }
         }
@@ -457,7 +479,7 @@ pub fn run(cmd: ScreensaverCmd, flags: &Flags) -> ExitCode {
                 ExitCode::SUCCESS
             }
         }
-        ScreensaverCmd::Status => sys::status(n),
+        ScreensaverCmd::Status => sys::status(n, flags),
         ScreensaverCmd::Watch {
             idle_minutes,
             dry_run,
@@ -473,6 +495,41 @@ pub fn run(cmd: ScreensaverCmd, flags: &Flags) -> ExitCode {
                 flags,
             )
         }
+    }
+}
+
+/// `install --idle-minutes N` saves N as `screensaver.idle_minutes`, so the
+/// `s` box shows it and the watcher follows the file from then on.
+fn save_idle_minutes(flags: &Flags, minutes: u32, dry_run: bool) {
+    let path = crate::config::resolve_path(flags.config.as_deref());
+    let key = "screensaver.idle_minutes";
+    if dry_run {
+        println!(
+            "--dry-run: would save {key} = {minutes} in {}",
+            path.display()
+        );
+        return;
+    }
+    let value = crate::config::Value::Int(i64::from(minutes));
+    match crate::config::set(&path, key, &value) {
+        Ok(()) => println!("saved {key} = {minutes} in {}", path.display()),
+        Err(e) => eprintln!(
+            "screensaver: cannot save {key} in {}: {e}; the task keeps --idle-minutes {minutes}",
+            path.display()
+        ),
+    }
+}
+
+/// Whether the watcher runs now: one look at its mutex, no process start.
+pub fn watcher_running(instance: Option<&str>) -> bool {
+    #[cfg(windows)]
+    {
+        sys::watcher_running(&Names::new(instance))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = instance;
+        false
     }
 }
 
@@ -515,6 +572,7 @@ mod sys {
         launch_args, task_xml, watch_args,
     };
     use crate::cli::Flags;
+    use crate::commands::watch_settings::{SettingsFile, status_lines};
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -580,6 +638,10 @@ mod sys {
 
     pub fn any_dashboard() -> bool {
         mutex_exists(super::ANY_DASHBOARD_MUTEX) || mutex_exists(DASHBOARD_MUTEX)
+    }
+
+    pub fn watcher_running(n: &Names) -> bool {
+        mutex_exists(&n.watch_mutex)
     }
 
     pub fn task_installed(n: &Names) -> bool {
@@ -1121,7 +1183,7 @@ mod sys {
         )
     }
 
-    pub fn status(n: &Names) -> ExitCode {
+    pub fn status(n: &Names, flags: &Flags) -> ExitCode {
         let args = installed_arguments(n);
         let task = match &args {
             Some(args) => format!("installed (\"{}\"): conhost.exe {args}", n.task),
@@ -1171,6 +1233,18 @@ mod sys {
                 "log:        none (an older install; telemetrix screensaver update adds one)"
             ),
             None => {}
+        }
+        let config = flags
+            .config
+            .clone()
+            .or_else(|| info.as_ref().and_then(|i| i.config.clone()));
+        let exe = info
+            .as_ref()
+            .and_then(|i| i.dashboard.clone())
+            .unwrap_or_else(super::exe_path);
+        let path = crate::config::resolve_path_for(config.as_deref(), &exe);
+        for line in status_lines(&path, info.as_ref().and_then(|i| i.idle_minutes)) {
+            println!("{line}");
         }
         println!("dashboard:  {}", yes_no(mutex_exists(DASHBOARD_MUTEX)));
         match idle_time() {
@@ -1256,19 +1330,31 @@ mod sys {
             say("cannot create the stop event; the watcher ends");
             return ExitCode::FAILURE;
         };
-        let limit = Duration::from_secs(u64::from(idle_minutes) * 60);
-        let mut idle = IdleWatch::new(limit);
-        say(&format!(
-            "watching: the dashboard opens after {idle_minutes} min without input{}",
-            if dry_run {
-                " (--dry-run: it is never opened)"
-            } else {
-                ""
-            }
-        ));
+        let path = crate::config::resolve_path_for(config, exe);
+        let mut settings = SettingsFile::new(path, idle_minutes);
+        let mut idle = IdleWatch::new(Duration::ZERO);
+        idle.configure(settings.current());
+        let now = settings.current();
+        let dry = if dry_run {
+            " (--dry-run: it is never opened)"
+        } else {
+            ""
+        };
+        if now.enabled {
+            say(&format!(
+                "watching: the dashboard opens after {} min without input{dry}",
+                now.idle_minutes
+            ));
+        } else {
+            say("watching: screensaver off: will not open the dashboard; updates still install");
+        }
         let mut polls: u32 = 0;
         let mut next_update = std::time::Instant::now() + super::UPDATE_FIRST_LOOK;
         loop {
+            for line in settings.refresh() {
+                say(&line);
+            }
+            idle.configure(settings.current());
             let obs = Observation {
                 idle: idle_time().unwrap_or_default(),
                 dashboard_running: mutex_exists(DASHBOARD_MUTEX),
@@ -1421,10 +1507,14 @@ mod sys {
         ExitCode::SUCCESS
     }
 
-    pub fn status(_: &Names) -> ExitCode {
+    pub fn status(_: &Names, flags: &Flags) -> ExitCode {
         println!(
             "telemetrix installs no screensaver on Linux: use `telemetrix screensaver install` for the swayidle or xautolock line"
         );
+        let path = crate::config::resolve_path(flags.config.as_deref());
+        for line in crate::commands::watch_settings::status_lines(&path, None) {
+            println!("{line}");
+        }
         ExitCode::SUCCESS
     }
 
@@ -1525,6 +1615,26 @@ mod tests {
         assert_eq!(w.step(video), Decision::Wait);
         // Both gone and still idle: now it opens.
         assert_eq!(w.step(obs(140)), Decision::Launch);
+    }
+
+    #[test]
+    fn the_switch_and_the_minutes_come_from_the_settings() {
+        let mut w = IdleWatch::new(Duration::from_secs(600));
+        let set = |enabled, idle_minutes| WatchSettings {
+            enabled,
+            idle_minutes,
+        };
+        w.configure(set(false, 10));
+        assert_eq!(w.step(obs(601)), Decision::Wait, "off: never opens");
+        assert_eq!(w.step(obs(5000)), Decision::Wait);
+        w.configure(set(true, 2));
+        assert_eq!(w.step(obs(3)), Decision::Wait);
+        assert_eq!(w.step(obs(119)), Decision::Wait);
+        assert_eq!(w.step(obs(120)), Decision::Launch, "2 min from the file");
+        w.configure(set(true, 5));
+        assert_eq!(w.step(obs(10)), Decision::Wait);
+        assert_eq!(w.step(obs(200)), Decision::Wait);
+        assert_eq!(w.step(obs(300)), Decision::Launch);
     }
 
     #[test]

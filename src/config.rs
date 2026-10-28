@@ -627,6 +627,20 @@ static BASE_SETTINGS: &[Setting] = &[
         "hours between two checks, 1..168",
     ),
     setting(
+        "screensaver.enabled",
+        Kind::Bool,
+        Value::Bool(true),
+        true,
+        "open the dashboard when the PC is idle; the watcher keeps installing updates when off",
+    ),
+    setting(
+        "screensaver.idle_minutes",
+        int(1, SCREENSAVER_MAX_MINUTES),
+        Value::Int(10),
+        true,
+        "minutes without input before it opens, 1..100",
+    ),
+    setting(
         "theme.matrix.density",
         Kind::Float { min: 0.0, max: 1.0 },
         Value::Float(0.5),
@@ -769,6 +783,18 @@ pub struct Memory {
     pub plugin_budget_mb: u64,
 }
 
+/// The highest `screensaver.idle_minutes`; also the limit of
+/// `screensaver install --idle-minutes`, which writes that key.
+pub const SCREENSAVER_MAX_MINUTES: i64 = 100;
+
+/// The screensaver watcher's switch and idle limit (decision 57). The
+/// watcher re-reads them while it runs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Screensaver {
+    pub enabled: bool,
+    pub idle_minutes: u32,
+}
+
 /// Automatic updates from GitHub Releases (decision 53).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Update {
@@ -856,6 +882,7 @@ pub struct Config {
     pub plugins: Plugins,
     pub memory: Memory,
     pub update: Update,
+    pub screensaver: Screensaver,
     pub theme_matrix: ThemeMatrix,
     pub theme_minimalist: ThemeMinimalist,
     /// `[theme.<name>]` options, in the order of [`THEME_NAMES`].
@@ -912,6 +939,10 @@ impl Default for Config {
             update: Update {
                 auto: false,
                 check_interval_h: 0,
+            },
+            screensaver: Screensaver {
+                enabled: false,
+                idle_minutes: 0,
             },
             plugins: Plugins {
                 enabled: false,
@@ -1064,6 +1095,8 @@ impl Config {
             "memory.plugin_budget_mb" => Value::Int(self.memory.plugin_budget_mb as i64),
             "update.auto" => Value::Bool(self.update.auto),
             "update.check_interval_h" => Value::Int(self.update.check_interval_h as i64),
+            "screensaver.enabled" => Value::Bool(self.screensaver.enabled),
+            "screensaver.idle_minutes" => Value::Int(i64::from(self.screensaver.idle_minutes)),
             "theme.matrix.density" => Value::Float(self.theme_matrix.density),
             "theme.matrix.speed" => Value::Float(self.theme_matrix.speed),
             "theme.matrix.color" => Value::Str(self.theme_matrix.color.clone().into()),
@@ -1145,6 +1178,10 @@ impl Config {
             "memory.plugin_budget_mb" => self.memory.plugin_budget_mb = clamp_u64(v),
             "update.auto" => self.update.auto = v.as_bool(),
             "update.check_interval_h" => self.update.check_interval_h = clamp_u64(v),
+            "screensaver.enabled" => self.screensaver.enabled = v.as_bool(),
+            "screensaver.idle_minutes" => {
+                self.screensaver.idle_minutes = u32::try_from(clamp_u64(v)).unwrap_or(u32::MAX)
+            }
             "theme.matrix.density" => self.theme_matrix.density = v.as_f64(),
             "theme.matrix.speed" => self.theme_matrix.speed = v.as_f64(),
             "theme.matrix.color" => self.theme_matrix.color = v.as_str().to_string(),
@@ -1592,6 +1629,14 @@ pub fn resolve_path(flag: Option<&Path>) -> PathBuf {
     resolve_from(flag, |k| std::env::var_os(k), exe_dir, |p| p.is_file())
 }
 
+/// The settings file the program at `exe` uses: [`resolve_path`] as if it
+/// ran from there. The screensaver watcher runs from a copy in another
+/// folder and must read the dashboard's file.
+pub fn resolve_path_for(flag: Option<&Path>, exe: &Path) -> PathBuf {
+    let exe_dir = exe.parent().map(Path::to_path_buf);
+    resolve_from(flag, |k| std::env::var_os(k), exe_dir, |p| p.is_file())
+}
+
 fn resolve_from(
     flag: Option<&Path>,
     env: impl Fn(&str) -> Option<OsString>,
@@ -2027,6 +2072,26 @@ weather = 3
             (default.network_interval_s, default.network_timeout_s),
             (60, 5)
         );
+    }
+
+    #[test]
+    fn screensaver_section_has_defaults_and_a_range() {
+        let default = Config::default().screensaver;
+        assert!(default.enabled);
+        assert_eq!(default.idle_minutes, 10);
+        let parsed = parse_text("[screensaver]\nenabled = false\nidle_minutes = 3\n").unwrap();
+        assert!(parsed.problems.is_empty());
+        assert!(!parsed.config.screensaver.enabled);
+        assert_eq!(parsed.config.screensaver.idle_minutes, 3);
+        assert!(parsed.from_file.contains("screensaver.idle_minutes"));
+        for bad in ["idle_minutes = 0", "idle_minutes = 101", "enabled = \"no\""] {
+            let parsed = parse_text(&format!("[screensaver]\n{bad}\n")).unwrap();
+            assert_eq!(parsed.problems.len(), 1, "{bad}");
+            assert_eq!(parsed.config.screensaver, default, "{bad}");
+        }
+        let text = render_default_file();
+        assert!(text.contains("\n[screensaver]\nenabled = true "));
+        assert!(text.contains("\nidle_minutes = 10 "));
     }
 
     #[test]

@@ -118,8 +118,8 @@ the chosen one on the right:
 │   Cards      │   fps                   15                 │
 │   Plugins    │ [options of matrix]                        │
 │   Updates    │   cpu_view              bar                │
-│   System     │   ram_view              bar                │
-│              │   chart_height          medium             │
+│   Screensaver│   ram_view              bar                │
+│   System     │   chart_height          medium             │
 │              │   color                 green              │
 │              │ [cards of matrix]                          │
 │              │   cpu                   on                 │
@@ -134,6 +134,7 @@ the chosen one on the right:
 | Cards | the warning thresholds, the disk and network drive options, the GPU card, the history length |
 | Plugins | the switch for all plugins, then every plugin file with `on`, `off` or `error`. `Right` opens a plugin's own page: `enabled`, `interval` and its own settings, like the weather city or the main bank |
 | Updates | the version, the latest release, `check now`, `install now`, and the automatic update settings (see [From the settings box](#from-the-settings-box)) |
+| Screensaver | `enabled` (open the dashboard when the PC is idle, on or off), `idle_minutes`, and a line that says whether the watcher runs. See [Turn it off or change the minutes](#turn-it-off-or-change-the-minutes) |
 | System | screensaver mode (`exit_on_any_key`, shown only: any key would quit, so set it in the file), the log file and its length, the plugin folder, the memory budgets, the plugin limits and the metrics intervals |
 
 Keys:
@@ -163,12 +164,13 @@ Keys:
 
 A page longer than the box scrolls. On a terminal narrower than 60
 columns or shorter than 11 rows (down to 40×10), the category list becomes
-one line of letters on top, `A C P U S`, followed by the name of the open
+one line of letters on top, `A C P U Sc Sy` (Screensaver and System both
+start with S, so they get two letters), followed by the name of the open
 page:
 
 ```
 ╭ Settings ──────────────────────────╮
-│  A  C  P  U  S  Appearance         │
+│  A  C  P  U  Sc  Sy  Appearance    │
 │  theme             matrix          │
 │  fps               15              │
 │[options of matrix]                 │
@@ -621,6 +623,8 @@ no longer matches the program.
 | `memory.plugin_budget_mb` | `1` | 1..64 | yes | Lua memory per plugin, above it one log warning |
 | `update.auto` | `true` | true \| false | yes | the screensaver watcher installs new releases by itself |
 | `update.check_interval_h` | `24` | 1..168 | yes | hours between two checks, 1..168 |
+| `screensaver.enabled` | `true` | true \| false | yes | open the dashboard when the PC is idle; the watcher keeps installing updates when off |
+| `screensaver.idle_minutes` | `10` | 1..100 | yes | minutes without input before it opens, 1..100 |
 | `theme.matrix.density` | `0.5` | 0.0..1.0 | yes | 0.0..1.0 |
 | `theme.matrix.speed` | `1.0` | 0.1..5.0 | yes | 0.1..5.0 |
 | `theme.matrix.color` | `"green"` | green \| amber \| cyan \| white \| #rrggbb | yes | green \| amber \| cyan \| white \| #rrggbb |
@@ -861,7 +865,8 @@ in a normal console window.
   created and changes nothing.
 - `telemetrix screensaver status` shows whether it is installed, whether
   the watcher and a screensaver dashboard run, the last lines of the
-  watcher's log, and how long the PC has been idle.
+  watcher's log, the switch and the idle minutes from the settings file,
+  and how long the PC has been idle.
 - `install` and `update` start the watcher and check 5 seconds later that
   it still runs. If it does not, they say so, show the last lines of its
   log (`watch.log` next to the copy) and end with exit code 1. They also
@@ -879,6 +884,8 @@ in a normal console window.
   `copy: missing`. Running `update` from a normal terminal moves it back.
 - `telemetrix screensaver uninstall` removes it, ends the watcher and
   deletes the watcher's copy of the program (`--dry-run` works here too).
+  This also ends the daily automatic update. To only stop the dashboard
+  from opening, turn it off in `s` → Screensaver instead.
 - `telemetrix screensaver update` copies a new telemetrix to the watcher
   after an update. See [Updating telemetrix](#updating-telemetrix).
 
@@ -908,6 +915,37 @@ copy still opens the dashboard from the `telemetrix.exe` you ran `install`
 with; `install` writes down its path. If you move telemetrix somewhere
 else, run `install` again. If you ran `install` with `--config <file>`, the
 dashboard uses that file.
+
+#### Turn it off or change the minutes
+
+Press `s` and open the page **Screensaver**:
+
+- `enabled`: `on` opens the dashboard when the PC is idle, `off` stops
+  that. The watcher keeps running when it is off, because it also installs
+  the updates once a day (see [Updates](#updates)).
+- `idle_minutes`: the minutes without input before the dashboard opens,
+  1..100. `Left`/`Right` step by 5.
+- `watcher`: `running`, `installed, not running` (run
+  `telemetrix screensaver update` in a terminal) or `not installed` (run
+  `telemetrix screensaver install` in a terminal). The box itself never
+  installs or removes the task. The line is checked when the box opens.
+
+Both keys live in `[screensaver]` of `telemetrix.toml`. The watcher looks
+at the file every 5 seconds and follows a change at once; it writes
+`screensaver off: will not open the dashboard` or `screensaver on: ...`
+to its log. `install --idle-minutes N` also saves N as
+`screensaver.idle_minutes`; without `--idle-minutes`, `install` uses the
+value from the file. A task installed by a version before 0.5.5 keeps its
+own `--idle-minutes` until the file has `screensaver.idle_minutes`.
+
+`telemetrix screensaver uninstall` removes the watcher and with it the
+daily automatic update too. Use the switch when you only want the
+dashboard to stop opening.
+
+On Linux the page shows the two settings and the line
+`watcher  Windows only`: your idle daemon starts the dashboard there, and
+`telemetrix screensaver install` prints the swayidle or xautolock line
+with your `idle_minutes`.
 
 ### Updating telemetrix
 

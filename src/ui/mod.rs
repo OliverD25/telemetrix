@@ -4,6 +4,7 @@
 pub(crate) mod demo;
 mod help_overlay;
 mod log_overlay;
+pub mod screensaver_page;
 pub mod settings_overlay;
 pub mod theme_options;
 mod theme_picker;
@@ -217,6 +218,7 @@ mod tests {
     use crate::metrics::{DiskMetric, SystemSnapshot};
     use crate::themes;
     use crate::themes::common::{RISE, WARN};
+    use crate::ui::screensaver_page::WatcherState;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
@@ -884,8 +886,38 @@ mod tests {
                 &s,
                 40,
                 10,
-                &[" A  C  P  U  S  Appearance", "theme", "Esc close"],
+                &[" A  C  P  U  Sc  Sy  Appearance", "theme", "Esc close"],
             );
+            s.watcher = WatcherState::NotInstalled;
+            s.settings = nav(4, None, 0);
+            check(
+                &s,
+                100,
+                30,
+                &[
+                    " > Screensaver",
+                    "enabled             < on >",
+                    "idle_minutes          10",
+                    "watcher               not installed",
+                    "run in a terminal     telemetrix screensaver install",
+                ],
+            );
+            check(
+                &s,
+                40,
+                10,
+                &["Sc  Sy  Screensaver", "enabled", "< on >", "watcher"],
+            );
+            s.watcher = WatcherState::Running;
+            check(&s, 100, 30, &["watcher               running"]);
+            s.watcher = WatcherState::Stopped;
+            check(
+                &s,
+                100,
+                30,
+                &["installed, not running", "telemetrix screensaver update"],
+            );
+            s.watcher = WatcherState::Checking;
             s.settings = nav(2, None, 2);
             check(
                 &s,
@@ -905,7 +937,7 @@ mod tests {
                     "Esc back",
                 ],
             );
-            check(&s, 40, 10, &["Plugins › weather", "city"]);
+            check(&s, 40, 10, &["Sy  › weather", "city"]);
             let mut finder = settings_overlay::Finder::new();
             finder.input = crate::app::TextInput::new("", "", "city");
             s.settings.find = Some(finder);
@@ -937,6 +969,13 @@ mod tests {
         println!("--- 40x10\n{}", demo::lines(&render(&s, 40, 10)));
         s.settings = nav(0, None, 3);
         println!("--- 40x10 pane\n{}", demo::lines(&render(&s, 40, 10)));
+        s.watcher = WatcherState::NotInstalled;
+        s.settings = nav(4, None, 0);
+        println!("--- Screensaver\n{}", demo::lines(&render(&s, 100, 30)));
+        println!(
+            "--- Screensaver 40x10\n{}",
+            demo::lines(&render(&s, 40, 10))
+        );
     }
 
     #[test]

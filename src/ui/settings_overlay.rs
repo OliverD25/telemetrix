@@ -1,4 +1,4 @@
-//! The `s` box: five categories on the left, the chosen category's rows on
+//! The `s` box: six categories on the left, the chosen category's rows on
 //! the right, one sub-page per plugin, and `/` to search every row. Every
 //! change is saved at once.
 
@@ -33,14 +33,16 @@ pub enum Category {
     Cards,
     Plugins,
     Updates,
+    Screensaver,
     System,
 }
 
-pub const CATEGORIES: [Category; 5] = [
+pub const CATEGORIES: [Category; 6] = [
     Category::Appearance,
     Category::Cards,
     Category::Plugins,
     Category::Updates,
+    Category::Screensaver,
     Category::System,
 ];
 
@@ -51,7 +53,18 @@ impl Category {
             Category::Cards => "Cards",
             Category::Plugins => "Plugins",
             Category::Updates => "Updates",
+            Category::Screensaver => "Screensaver",
             Category::System => "System",
+        }
+    }
+
+    /// The tab on a narrow box. Screensaver and System both start with S,
+    /// so those two get two letters.
+    pub fn tab(self) -> &'static str {
+        match self {
+            Category::Screensaver => "Sc",
+            Category::System => "Sy",
+            c => &c.name()[..1],
         }
     }
 }
@@ -306,6 +319,7 @@ pub fn page(state: &AppState, category: Category, plugin: Option<&str>) -> Vec<R
             rows.extend(settings_rows(&["update.auto", "update.check_interval_h"]));
             rows
         }
+        Category::Screensaver => super::screensaver_page::rows(state),
         Category::System => system(),
     }
 }
@@ -322,7 +336,7 @@ pub fn current_index(rows: &[Row], cursor: usize) -> Option<usize> {
     sel.get(cursor.min(sel.len().saturating_sub(1))).copied()
 }
 
-/// Every page with the category index and plugin that open it: the five
+/// Every page with the category index and plugin that open it: the six
 /// categories, and a sub-page for each plugin file.
 pub fn pages(state: &AppState) -> Vec<(usize, Option<String>, Vec<Row>)> {
     let mut out = Vec::new();
@@ -948,11 +962,14 @@ fn draw_tabs(frame: &mut Frame, area: Rect, nav: &SettingsNav) {
         } else {
             fg(MUTED)
         };
-        spans.push(Span::styled(format!(" {} ", &c.name()[..1]), style));
+        spans.push(Span::styled(format!(" {} ", c.tab()), style));
     }
     let mut name = nav.category().name().to_string();
     if let Some(id) = &nav.plugin {
-        name = format!("{name} › {id}");
+        // The P tab is lit already, so a tight line keeps only the plugin.
+        let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        let room = usize::from(area.width).saturating_sub(used + 1);
+        name = fit(&format!("{name} › {id}"), &format!("› {id}"), room);
     }
     spans.push(Span::styled(
         format!(" {name}"),
@@ -1254,12 +1271,21 @@ mod tests {
     }
 
     #[test]
-    fn five_categories_hold_their_settings() {
+    fn six_categories_hold_their_settings() {
         let names: Vec<&str> = CATEGORIES.iter().map(|c| c.name()).collect();
         assert_eq!(
             names,
-            ["Appearance", "Cards", "Plugins", "Updates", "System"]
+            [
+                "Appearance",
+                "Cards",
+                "Plugins",
+                "Updates",
+                "Screensaver",
+                "System"
+            ]
         );
+        let tabs: Vec<&str> = CATEGORIES.iter().map(|c| c.tab()).collect();
+        assert_eq!(tabs, ["A", "C", "P", "U", "Sc", "Sy"]);
         let s = state_with("synthwave", &["clock"]);
         let names = |c| labels(&page(&s, c, None)).join(" ");
         assert_eq!(
@@ -1280,6 +1306,7 @@ mod tests {
             names(Category::Updates),
             "version latest check now auto check_interval_h"
         );
+        assert_eq!(names(Category::Screensaver), "enabled idle_minutes watcher");
         assert_eq!(
             names(Category::System),
             "general exit_on_any_key plugins_dir log_file log_lines \
@@ -1556,6 +1583,11 @@ mod tests {
         assert!(paths("weather").contains(&"Plugins › weather".to_string()));
         assert!(paths("weather").contains(&"Appearance › cards of matrix › weather".to_string()));
         assert!(paths("check").contains(&"Updates › check now".to_string()));
+        assert_eq!(
+            paths("screensaver."),
+            ["Screensaver › enabled", "Screensaver › idle_minutes"]
+        );
+        assert_eq!(paths("idle"), ["Screensaver › idle_minutes"]);
         assert!(paths("zzz").is_empty());
         let all = hits(&s, "");
         let rows: usize = pages(&s)

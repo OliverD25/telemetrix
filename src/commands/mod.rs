@@ -4,3 +4,4 @@ pub mod screensaver;
 pub mod selftest;
 pub mod snapshot;
 pub mod update_cmd;
+pub mod watch_settings;

@@ -455,6 +455,8 @@ pub struct AppState {
     pub update: Option<crate::update::Pending>,
     /// The `update` group of the `s` box: the last check and a running job.
     pub update_group: crate::ui::update_group::UpdateGroup,
+    /// The screensaver watcher, as the `s` box saw it when it opened.
+    pub watcher: crate::ui::screensaver_page::WatcherState,
     /// The picker's options panel while it is open.
     pub theme_panel: Option<crate::ui::theme_options::ThemePanel>,
     /// `hide`/`order` entries already reported as naming no card.
@@ -508,6 +510,7 @@ impl AppState {
             memory_paused: false,
             update: None,
             update_group: Default::default(),
+            watcher: Default::default(),
             theme_panel: None,
             warned_cards: BTreeSet::new(),
             plugins_over_budget: BTreeSet::new(),
@@ -624,6 +627,7 @@ impl AppState {
                     b.answer(&query, result);
                 }
             }
+            AppEvent::Watcher(w) => self.watcher = w,
             AppEvent::Update(msg) => {
                 let own = crate::update::Version::current();
                 let out = self.update_group.apply(msg, &own, SystemTime::now());

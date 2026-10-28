@@ -29,6 +29,8 @@ pub enum AppEvent {
     },
     /// A check or an install started from the `s` box.
     Update(crate::ui::update_group::Msg),
+    /// The look at the screensaver watcher that opening the `s` box starts.
+    Watcher(crate::ui::screensaver_page::WatcherState),
 }
 
 /// Messages from the main loop to one worker; `R` is that worker's settings.

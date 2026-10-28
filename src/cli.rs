@@ -29,7 +29,8 @@ Usage:
                                           (--check: only say whether one is newer)
   telemetrix screensaver install [--idle-minutes N] [--dry-run]
                                           open the dashboard full screen after N minutes
-                                          without input (Windows; Linux prints a recipe)
+                                          without input (Windows; Linux prints a recipe);
+                                          N is saved as screensaver.idle_minutes
   telemetrix screensaver uninstall [--dry-run]
                                           remove it again
   telemetrix screensaver update [--dry-run]
@@ -111,7 +112,9 @@ pub enum PluginCmd {
 #[derive(Debug, PartialEq, Eq)]
 pub enum ScreensaverCmd {
     Install {
-        idle_minutes: u32,
+        /// Given: also saved as `screensaver.idle_minutes`. Not given: the
+        /// value from the settings file.
+        idle_minutes: Option<u32>,
         dry_run: bool,
     },
     Uninstall {
@@ -345,9 +348,7 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
         ["config", "show"] => Command::Config(ConfigCmd::Show),
         ["config", "reference"] => Command::Config(ConfigCmd::Reference),
         ["screensaver", "install"] => Command::Screensaver(ScreensaverCmd::Install {
-            idle_minutes: sw
-                .idle_minutes
-                .unwrap_or(crate::commands::screensaver::DEFAULT_IDLE_MINUTES),
+            idle_minutes: sw.idle_minutes,
             dry_run: sw.dry_run,
         }),
         ["screensaver", "uninstall"] => Command::Screensaver(ScreensaverCmd::Uninstall {
@@ -387,6 +388,18 @@ fn command(words: &[String], sw: &Switches) -> Result<Command, String> {
         )
     {
         return Err("--idle-minutes only applies to screensaver install and watch".into());
+    }
+    let max = crate::config::SCREENSAVER_MAX_MINUTES;
+    if let Command::Screensaver(ScreensaverCmd::Install {
+        idle_minutes: Some(n),
+        ..
+    }) = cmd
+        && i64::from(n) > max
+    {
+        // install saves it as screensaver.idle_minutes, which allows no more.
+        return Err(format!(
+            "--idle-minutes of screensaver install must be 1..{max}"
+        ));
     }
     if sw.dry_run
         && !matches!(
@@ -535,6 +548,8 @@ mod tests {
             "needs --idle-minutes"
         );
         assert!(run(&["screensaver", "install", "--idle-minutes", "0"]).is_err());
+        assert!(run(&["screensaver", "install", "--idle-minutes", "101"]).is_err());
+        assert!(run(&["screensaver", "watch", "--idle-minutes", "1440"]).is_ok());
         assert!(run(&["screensaver", "status", "--dry-run"]).is_err());
         assert_eq!(
             run(&["update", "--check", "--dry-run", "--force"])
@@ -563,7 +578,7 @@ mod tests {
         assert_eq!(
             run(&["screensaver", "install"]).unwrap().command,
             Command::Screensaver(ScreensaverCmd::Install {
-                idle_minutes: 10,
+                idle_minutes: None,
                 dry_run: false
             })
         );
@@ -572,7 +587,7 @@ mod tests {
                 .unwrap()
                 .command,
             Command::Screensaver(ScreensaverCmd::Install {
-                idle_minutes: 3,
+                idle_minutes: Some(3),
                 dry_run: true
             })
         );

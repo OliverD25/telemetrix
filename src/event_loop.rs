@@ -21,6 +21,7 @@ use crate::selfmem;
 use crate::term::TerminalGuard;
 use crate::themes::{self, Theme};
 use crate::ui;
+use crate::ui::screensaver_page::WatcherState;
 use crate::ui::settings_overlay::{self, Change, Finder, Focus, RowAction, SettingsNav};
 use crate::ui::theme_options::{self, ThemePanel};
 use crate::ui::update_group::{Job, Msg};
@@ -93,6 +94,8 @@ struct Loop {
     /// Where the background check and install of the `s` box report to.
     events: mpsc::Sender<AppEvent>,
     updater: Arc<dyn Updater>,
+    /// The look at the screensaver watcher; tests replace it.
+    probe_watcher: fn() -> WatcherState,
 }
 
 /// `exe` is this program's file as it was at start; an update replaces it.
@@ -144,6 +147,7 @@ pub fn run(cfg: Config, status: ConfigStatus, flags: &Flags, exe: &Path) -> io::
         updates: UpdateWatch::new(exe),
         events,
         updater: Arc::new(crate::commands::update_cmd::GitHub),
+        probe_watcher: WatcherState::probe,
     };
     lp.rescan_plugins(false);
     let result = event_loop(&mut lp, &mut guard, &rx);
@@ -362,8 +366,9 @@ impl Loop {
                         .collect();
                     s.settings_footer = None;
                     s.settings = Default::default();
+                    self.probe_watcher();
                 }
-                s.toggle_overlay(Overlay::Settings);
+                self.state.toggle_overlay(Overlay::Settings);
             }
             Action::SettingsUp => self.settings_move(-1),
             Action::SettingsDown => self.settings_move(1),
@@ -883,6 +888,21 @@ impl Loop {
         }
     }
 
+    /// Looks at the screensaver watcher in a thread, for the Screensaver
+    /// page; `schtasks` would hold up the frame.
+    fn probe_watcher(&mut self) {
+        self.state.watcher = WatcherState::Checking;
+        let (tx, probe) = (self.events.clone(), self.probe_watcher);
+        let spawned = std::thread::Builder::new()
+            .name("watcher-probe".into())
+            .spawn(move || {
+                let _ = tx.send(AppEvent::Watcher(probe()));
+            });
+        if spawned.is_err() {
+            self.state.watcher = probe();
+        }
+    }
+
     /// Enter on an action row of the `s` box. A check or an install runs in
     /// its own thread and reports with `AppEvent::Update`.
     fn run_row_action(&mut self, action: RowAction) {
@@ -1098,6 +1118,7 @@ mod tests {
                 },
                 events: mpsc::channel().0,
                 updater: Arc::new(FakeUpdater::new("v0.0.1", Ok(()))),
+                probe_watcher: || WatcherState::NotInstalled,
             }
         }
     }
@@ -1784,6 +1805,46 @@ density = 0.3
     }
 
     #[test]
+    fn the_screensaver_page_switches_and_saves_at_once() {
+        use ratatui::crossterm::event::KeyCode;
+        let path = temp_file("screensaver-page");
+        let mut lp = Loop::for_test(Config::default(), Flags::default(), path.clone());
+        let (tx, rx) = mpsc::channel();
+        lp.events = tx;
+        press(&mut lp, KeyCode::Char('s'));
+        assert_eq!(lp.state.watcher, WatcherState::Checking);
+        drain(&mut lp, &rx, |ev| matches!(ev, AppEvent::Watcher(_)));
+        assert_eq!(lp.state.watcher, WatcherState::NotInstalled);
+        for _ in 0..4 {
+            press(&mut lp, KeyCode::Down);
+        }
+        assert_eq!(lp.state.settings.category(), Category::Screensaver);
+        press(&mut lp, KeyCode::Right);
+        assert_eq!(current_key(&lp), "screensaver.enabled");
+        press(&mut lp, KeyCode::Right);
+        assert!(!lp.state.config.screensaver.enabled);
+        let saved = || {
+            let text = std::fs::read_to_string(&path).unwrap();
+            config::parse_text(&text).unwrap().config.screensaver
+        };
+        assert!(!saved().enabled, "saved at once");
+        press(&mut lp, KeyCode::Down);
+        assert_eq!(current_key(&lp), "screensaver.idle_minutes");
+        press(&mut lp, KeyCode::Right);
+        assert_eq!(saved().idle_minutes, 15);
+        press(&mut lp, KeyCode::Left);
+        press(&mut lp, KeyCode::Left);
+        assert_eq!(saved().idle_minutes, 5);
+        press(&mut lp, KeyCode::Down);
+        assert_eq!(current_key(&lp), "watcher");
+        press(&mut lp, KeyCode::Up);
+        press(&mut lp, KeyCode::Up);
+        press(&mut lp, KeyCode::Left);
+        assert!(saved().enabled, "Left switches it back on");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
     fn the_s_box_opens_at_appearance_and_goes_in_and_out() {
         use ratatui::crossterm::event::KeyCode;
         let path = temp_file("nav");
@@ -1804,7 +1865,7 @@ density = 0.3
             Focus::Categories,
             "Left does nothing"
         );
-        for _ in 0..3 {
+        for _ in 0..4 {
             press(&mut lp, KeyCode::Up);
         }
         assert_eq!(lp.state.settings.category(), Category::Cards);

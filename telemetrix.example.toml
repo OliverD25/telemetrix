@@ -56,6 +56,10 @@ plugin_budget_mb = 1        # Lua memory per plugin, above it one log warning
 auto = true                 # the screensaver watcher installs new releases by itself
 check_interval_h = 24       # hours between two checks, 1..168
 
+[screensaver]
+enabled = true              # open the dashboard when the PC is idle; the watcher keeps installing updates when off
+idle_minutes = 10           # minutes without input before it opens, 1..100
+
 [theme.matrix]
 density = 0.5               # 0.0..1.0
 speed = 1.0                 # 0.1..5.0
